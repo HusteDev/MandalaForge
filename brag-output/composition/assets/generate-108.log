@@ -1,0 +1,97 @@
+[API] Generate request:
+  Seed: 108
+  Rings: 4, Divisions: 12
+  Complexity: 0.5
+  Categories: ['art_deco', 'botanical']
+  Ring 0: r=20.0-72.8 (width=52.8)
+  Ring 1: r=72.8-147.8 (width=75.0)
+  Ring 2: r=147.8-224.9 (width=77.1)
+  Ring 3: r=224.9-286.0 (width=61.1)
+[DesignGenerator] Initialized:
+  Seed: 108
+  Rings: 4, Divisions: 12
+  Complexity: 0.5
+  Categories: ['art_deco', 'botanical']
+
+=== GENERATING MANDALA ===
+[PatternGenerator] Initialized:
+  Categories: ['art_deco', 'botanical']
+  Available patterns: 8
+
+Ring 0: inner=20.0, outer=72.8, width=52.8
+  Using 2 variation(s) with extensions: ['0.08', '0.19']
+  Valid pattern candidates: ['smart_petal', 'smart_leaf', 'smart_vine_band', 'smart_sunburst', 'smart_deco_shell', 'smart_fan', 'smart_stepped_band']
+  Selected pattern: smart_leaf (category: botanical)
+
+=== VALIDATING DESIGN ===
+  Extracted 48 shapes from 2 pattern variations
+  Topology: 13 colorable regions, 1 components (0 whiskers pruned, 0 gaps bridged)
+  Design PASSED validation
+  Boundary enabled for ring 0: requires_inner_boundary by smart_leaf
+  Generated 12 cells with 2 variation(s)
+  Actual ring pattern(s): ['smart_leaf']
+  Boundary requirements: {'requires_inner_boundary': True, 'requires_outer_boundary': False, 'requires_radial_boundaries': False}
+[PatternGenerator] Initialized:
+  Categories: ['art_deco', 'botanical']
+  Available patterns: 8
+
+Ring 1: inner=72.8, outer=147.8, width=75.0
+  Using 2 variation(s) with extensions: ['0.04', '0.04']
+  Variety filter: avoiding ['smart_leaf']; candidates: ['smart_scallop_band', 'smart_petal', 'smart_vine_band', 'smart_sunburst', 'smart_deco_shell', 'smart_fan', 'smart_stepped_band']
+  Valid pattern candidates: ['smart_scallop_band', 'smart_petal', 'smart_leaf', 'smart_vine_band', 'smart_sunburst', 'smart_deco_shell', 'smart_fan', 'smart_stepped_band']
+  Selected pattern: smart_petal (category: botanical)
+
+=== VALIDATING DESIGN ===
+  Extracted 108 shapes from 4 pattern variations
+  Topology: 49 colorable regions, 1 components (0 whiskers pruned, 0 gaps bridged)
+  Design PASSED validation
+  Generated 12 cells with 2 variation(s)
+  Actual ring pattern(s): ['smart_petal']
+  Boundary requirements: {'requires_inner_boundary': False, 'requires_outer_boundary': False, 'requires_radial_boundaries': False}
+[PatternGenerator] Initialized:
+  Categories: ['art_deco', 'botanical']
+  Available patterns: 8
+
+Ring 2: inner=147.8, outer=224.9, width=77.1
+  Using 2 variation(s) with extensions: ['0.04', '0.04']
+  Variety filter: avoiding ['smart_petal']; candidates: ['smart_scallop_band', 'smart_leaf', 'smart_vine_band', 'smart_sunburst', 'smart_deco_shell', 'smart_fan', 'smart_stepped_band']
+  Valid pattern candidates: ['smart_scallop_band', 'smart_petal', 'smart_leaf', 'smart_vine_band', 'smart_sunburst', 'smart_deco_shell', 'smart_fan', 'smart_stepped_band']
+  Selected pattern: smart_deco_shell (category: art_deco)
+
+=== VALIDATING DESIGN ===
+  Extracted 132 shapes from 4 pattern variations
+  Topology: 85 colorable regions, 1 components (0 whiskers pruned, 0 gaps bridged)
+  Design PASSED validation
+  Boundary enabled for ring 2: requires_inner_boundary by smart_deco_shell
+  Boundary enabled for ring 2: requires_outer_boundary by smart_deco_shell
+  Generated 12 cells with 2 variation(s)
+  Actual ring pattern(s): ['smart_deco_shell']
+  Boundary requirements: {'requires_inner_boundary': True, 'requires_outer_boundary': True, 'requires_radial_boundaries': False}
+[PatternGenerator] Initialized:
+  Categories: ['art_deco', 'botanical']
+  Available patterns: 8
+
+Ring 3: inner=224.9, outer=286.0, width=61.1
+  Using 2 variation(s) with extensions: ['0.02', '0.06']
+  Variety filter: avoiding ['smart_deco_shell']; candidates: ['smart_scallop_band', 'smart_petal', 'smart_leaf', 'smart_vine_band', 'smart_sunburst', 'smart_fan', 'smart_stepped_band']
+  Valid pattern candidates: ['smart_scallop_band', 'smart_petal', 'smart_leaf', 'smart_vine_band', 'smart_sunburst', 'smart_deco_shell', 'smart_fan', 'smart_stepped_band']
+  Selected pattern: smart_vine_band (category: botanical)
+
+=== VALIDATING DESIGN ===
+  Extracted 132 shapes from 4 pattern variations
+  Topology: 85 colorable regions, 1 components (0 whiskers pruned, 0 gaps bridged)
+  Design PASSED validation
+  Boundary enabled for ring 3: requires_inner_boundary by smart_vine_band
+  Boundary enabled for ring 3: requires_outer_boundary by smart_vine_band
+  Generated 12 cells with 2 variation(s)
+  Actual ring pattern(s): ['smart_vine_band']
+  Boundary requirements: {'requires_inner_boundary': True, 'requires_outer_boundary': True, 'requires_radial_boundaries': False}
+
+=== VALIDATING DESIGN ===
+  Extracted 240 shapes from 8 pattern variations
+  Topology: 145 colorable regions, 1 components (0 whiskers pruned, 0 gaps bridged)
+  Design PASSED validation
+
+=== GENERATION COMPLETE ===
+
+[API] Generated SVG: 34877 characters

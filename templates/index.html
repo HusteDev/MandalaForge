@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coloring Page Generator</title>
+    <link rel="stylesheet" href="https://shared-public.web.app/styles.css">
+    <link rel="stylesheet" href="../static/style.css">
+</head>
+
+<body>
+    <!-- Loading screen - shown while checking authentication -->
+    <div id="loading-screen" style="display: flex; justify-content: center; align-items: center; height: 100vh; background: #f4f4f4; font-family: sans-serif;">
+        <div style="text-align: center;">
+            <div style="font-size: 18px; margin-bottom: 20px;">Verifying authentication...</div>
+            <div style="border: 3px solid #f3f3f3; border-top: 3px solid #039BE5; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 0 auto;"></div>
+        </div>
+    </div>
+
+    <!-- Main content - hidden initially until authenticated -->
+    <div id="main-content" style="display: none;">
+        <!-- Authentication header -->
+        <div style="position: fixed; top: 0; right: 0; padding: 10px; background: rgba(255,255,255,0.9); border-bottom-left-radius: 8px; z-index: 1000;">
+            <span>Welcome, <strong id="user-email">...loading</strong>!</span>
+            <button id="signOutButton" style="margin-left: 10px; padding: 5px 10px; background: #039BE5; color: white; border: none; border-radius: 4px; cursor: pointer;">Sign Out</button>
+        </div>
+
+        <div class="app-container">
+        <div class="controls-container">
+            <div class="sticky-actions">
+                <h1>Kristie's Coloring Page Generator</h1>
+
+                <div class="action-row">
+                    <button id="randomize-btn" class="dice-button" type="button" aria-label="Randomize all settings" title="Randomize all settings">
+                        <svg class="dice-icon" viewBox="0 0 64 40" role="img" aria-hidden="true" focusable="false">
+                            <rect x="3" y="9" width="26" height="26" rx="5" fill="none" stroke="currentColor" stroke-width="4"/>
+                            <circle cx="11" cy="17" r="2.6" fill="currentColor"/>
+                            <circle cx="21" cy="17" r="2.6" fill="currentColor"/>
+                            <circle cx="16" cy="22" r="2.6" fill="currentColor"/>
+                            <circle cx="11" cy="27" r="2.6" fill="currentColor"/>
+                            <circle cx="21" cy="27" r="2.6" fill="currentColor"/>
+                            <rect x="35" y="5" width="26" height="26" rx="5" fill="none" stroke="currentColor" stroke-width="4"/>
+                            <circle cx="43" cy="13" r="2.6" fill="currentColor"/>
+                            <circle cx="53" cy="13" r="2.6" fill="currentColor"/>
+                            <circle cx="43" cy="23" r="2.6" fill="currentColor"/>
+                            <circle cx="53" cy="23" r="2.6" fill="currentColor"/>
+                        </svg>
+                    </button>
+                    <button id="generate-btn" class="generate-action" type="button">Generate</button>
+                </div>
+                <button id="save-btn">Save Design</button>
+                <div id="validation-status" class="validation-status" hidden></div>
+                    <div class="ring-selector" id="ring-selector" aria-label="Select ring to regenerate"></div>
+                <button id="regenerate-ring-btn" disabled>Regenerate Ring</button>
+                <button id="print-btn">Print</button>
+
+                <div class="control-group checkbox-group">
+                    <input type="checkbox" id="include-params-check">
+                    <label for="include-params-check">Include parameters on print</label>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <h3>Size & Structure</h3>
+                <div class="control-group">
+                    <label for="num-rings">Rings: <span id="num-rings-value">4</span> <span id="num-rings-pending" class="pending-label" hidden>not applied</span></label>
+                    <input type="range" id="num-rings" min="2" max="7" step="1" value="4">
+                </div>
+
+                <div class="control-group">
+                    <label for="num-divisions">Divisions: <span id="num-divisions-value">12</span> <span id="num-divisions-pending" class="pending-label" hidden>not applied</span></label>
+                    <input type="range" id="num-divisions" min="6" max="24" step="2" value="12">
+                    <div class="help-text">Number of repeating sections around the center</div>
+                </div>
+
+                <div class="control-group">
+                    <label for="min-pattern-size">Min Pattern Size: <span id="min-pattern-size-value">10px</span> <span id="min-pattern-size-pending" class="pending-label" hidden>not applied</span></label>
+                    <input type="range" id="min-pattern-size" min="5" max="50" step="1" value="10">
+                </div>
+            </div>
+
+            <div class="control-section">
+                <h3>Complexity</h3>
+                <div class="control-group">
+                    <label for="complexity">Detail Level: <span id="complexity-value">0.5</span> <span id="complexity-pending" class="pending-label" hidden>not applied</span></label>
+                    <input type="range" id="complexity" min="0" max="1" step="0.1" value="0.5">
+                    <div class="help-text">Higher = more intricate patterns</div>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <h3>Pattern Categories</h3>
+                <div class="help-text" style="margin-bottom: 10px;">Select at least one category</div>
+
+                <div class="category-checkboxes">
+                    <div class="control-group checkbox-group">
+                        <input type="checkbox" id="cat-botanical" checked>
+                        <label for="cat-botanical">Botanical</label>
+                        <span class="category-desc">Petals, leaves, vines, scallops</span>
+                    </div>
+
+                    <div class="control-group checkbox-group">
+                        <input type="checkbox" id="cat-geometric">
+                        <label for="cat-geometric">Geometric</label>
+                        <span class="category-desc">Triangles, diamonds, stars, chevrons</span>
+                    </div>
+
+                    <div class="control-group checkbox-group">
+                        <input type="checkbox" id="cat-celtic">
+                        <label for="cat-celtic">Celtic</label>
+                        <span class="category-desc">Knots, braids, Greek keys, twists</span>
+                    </div>
+
+                    <div class="control-group checkbox-group">
+                        <input type="checkbox" id="cat-art-deco">
+                        <label for="cat-art-deco">Art Deco</label>
+                        <span class="category-desc">Fans, sunbursts, shells, skylines</span>
+                    </div>
+
+                    <div class="control-group checkbox-group">
+                        <input type="checkbox" id="cat-abstract">
+                        <label for="cat-abstract">Abstract</label>
+                        <span class="category-desc">Waves, ripples, flames, ladders</span>
+                    </div>
+                </div>
+
+                <div id="category-warning" class="warning-text" style="display: none;">
+                    Please select at least one category
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label for="seed">Seed (optional)</label>
+                <input type="text" id="seed" placeholder="e.g., 2025">
+                <div class="help-text">Same seed = same design</div>
+            </div>
+
+            <div class="gallery">
+                <h3>Previous Designs</h3>
+                <div class="gallery-grid" id="gallery-grid"></div>
+            </div>
+        </div>
+        <div class="mandala-container" id="mandala-container">
+            <div class="preview-controls">
+                <div class="zoom-controls">
+                    <button id="zoom-out">-</button>
+                    <span class="zoom-level" id="zoom-level">100%</span>
+                    <button id="zoom-in">+</button>
+                </div>
+                <button id="fit-to-page">Fit to Page</button>
+            </div>
+            <div class="debug-bar" id="debug-bar" hidden>
+                <div class="debug-bar-values" id="debug-bar-values"></div>
+                <button type="button" id="debug-copy" title="Copy these settings">Copy</button>
+            </div>
+            <div class="page-preview" id="page-preview">
+                <div class="paper-sheet" id="paper-sheet">
+                    <div class="mandala-design" id="mandala-design"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="print-root" id="print-root" aria-hidden="true">
+        <section class="print-design-page">
+            <div class="print-design" id="print-design"></div>
+        </section>
+        <section class="print-params-page" id="print-params-page">
+            <h2>Mandala Parameters</h2>
+            <pre id="params-text"></pre>
+        </section>
+    </div>
+
+    <script src="../static/script.js"></script>
+    </div> <!-- End main-content -->
+
+    <!-- Firebase scripts -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-check-compat.js"></script>
+
+    <script>
+        // Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyCezR2TsDi8aPEJBVaThm2g2NzWFs1S-Gc",
+            authDomain: "husted-dev.firebaseapp.com",
+            projectId: "husted-dev",
+            storageBucket: "husted-dev.firebasestorage.app",
+            messagingSenderId: "181324919557",
+            appId: "1:181324919557:web:d84fe89a238848e5847d6c",
+            measurementId: "G-YPKDVB819L"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+
+        // Initialize App Check with reCAPTCHA
+        if (typeof firebase.appCheck !== 'undefined') {
+            try {
+                const appCheck = firebase.appCheck();
+                appCheck.activate('6LfdVcArAAAAACsXiZoOZPrmzpt-ifMbZOAFyhTi', true);
+                console.log('App Check initialized');
+            } catch (error) {
+                console.warn('App Check initialization failed:', error);
+                // Continue without App Check
+            }
+        }
+
+        const signOutButton = document.getElementById('signOutButton');
+        const userEmailSpan = document.getElementById('user-email');
+
+        // Check if running locally (bypass auth for local development)
+        const isLocalhost = window.location.hostname === 'localhost' ||
+                           window.location.hostname === '127.0.0.1';
+
+        // Listen for changes in authentication state
+        firebase.auth().onAuthStateChanged((user) => {
+            const loadingScreen = document.getElementById('loading-screen');
+            const mainContent = document.getElementById('main-content');
+
+            if (user) {
+                // User is signed in - show main content, hide loading
+                console.log("User authenticated:", user.email);
+                userEmailSpan.textContent = user.email;
+
+                loadingScreen.style.display = 'none';
+                mainContent.style.display = 'block';
+            } else if (isLocalhost) {
+                // Local development - bypass auth
+                console.log("Local development mode - bypassing authentication");
+                userEmailSpan.textContent = 'Local Dev';
+
+                loadingScreen.style.display = 'none';
+                mainContent.style.display = 'block';
+            } else {
+                // User is signed out - redirect to login
+                console.log("User is not signed in, redirecting...");
+                window.location.href = '/login.html';
+            }
+        });
+
+        signOutButton.addEventListener('click', () => {
+            firebase.auth().signOut().then(() => {
+                console.log("Sign-out successful.");
+            }).catch((error) => {
+                console.error("Sign-out error", error);
+            });
+        });
+    </script>
+
+</body>
+
+</html>

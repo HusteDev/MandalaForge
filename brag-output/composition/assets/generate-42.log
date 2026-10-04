@@ -1,0 +1,95 @@
+[API] Generate request:
+  Seed: 42
+  Rings: 4, Divisions: 12
+  Complexity: 0.5
+  Categories: ['botanical']
+  Ring 0: r=20.0-99.5 (width=79.5)
+  Ring 1: r=99.5-156.1 (width=56.6)
+  Ring 2: r=156.1-222.0 (width=65.9)
+  Ring 3: r=222.0-286.0 (width=64.0)
+[DesignGenerator] Initialized:
+  Seed: 42
+  Rings: 4, Divisions: 12
+  Complexity: 0.5
+  Categories: ['botanical']
+
+=== GENERATING MANDALA ===
+[PatternGenerator] Initialized:
+  Categories: ['botanical']
+  Available patterns: 4
+
+Ring 0: inner=20.0, outer=99.5, width=79.5
+  Using 1 variation(s) with extensions: ['0.14']
+  Valid pattern candidates: ['smart_scallop_band', 'smart_petal', 'smart_leaf', 'smart_vine_band']
+  Selected pattern: smart_scallop_band (category: botanical)
+
+=== VALIDATING DESIGN ===
+  Extracted 108 shapes from 1 pattern variations
+  Topology: 121 colorable regions, 1 components (0 whiskers pruned, 0 gaps bridged)
+  Design PASSED validation
+  Boundary enabled for ring 0: requires_inner_boundary by smart_scallop_band
+  Boundary enabled for ring 0: requires_outer_boundary by smart_scallop_band
+  Generated 12 cells with 1 variation(s)
+  Actual ring pattern(s): ['smart_scallop_band']
+  Boundary requirements: {'requires_inner_boundary': True, 'requires_outer_boundary': True, 'requires_radial_boundaries': False}
+[PatternGenerator] Initialized:
+  Categories: ['botanical']
+  Available patterns: 4
+
+Ring 1: inner=99.5, outer=156.1, width=56.6
+  Using 1 variation(s) with extensions: ['0.12']
+  Variety filter: avoiding ['smart_scallop_band']; candidates: ['smart_petal', 'smart_leaf', 'smart_vine_band']
+  Valid pattern candidates: ['smart_scallop_band', 'smart_petal', 'smart_leaf', 'smart_vine_band']
+  Selected pattern: smart_petal (category: botanical)
+
+=== VALIDATING DESIGN ===
+  Extracted 168 shapes from 2 pattern variations
+  Topology: 157 colorable regions, 1 components (0 whiskers pruned, 0 gaps bridged)
+  Design PASSED validation
+  Generated 12 cells with 1 variation(s)
+  Actual ring pattern(s): ['smart_petal']
+  Boundary requirements: {'requires_inner_boundary': False, 'requires_outer_boundary': False, 'requires_radial_boundaries': False}
+[PatternGenerator] Initialized:
+  Categories: ['botanical']
+  Available patterns: 4
+
+Ring 2: inner=156.1, outer=222.0, width=65.9
+  Using 1 variation(s) with extensions: ['0.01']
+  Variety filter: avoiding ['smart_petal']; candidates: ['smart_scallop_band', 'smart_leaf', 'smart_vine_band']
+  Valid pattern candidates: ['smart_scallop_band', 'smart_petal', 'smart_leaf', 'smart_vine_band']
+  Selected pattern: smart_leaf (category: botanical)
+
+=== VALIDATING DESIGN ===
+  Extracted 108 shapes from 2 pattern variations
+  Topology: 49 colorable regions, 1 components (0 whiskers pruned, 0 gaps bridged)
+  Design PASSED validation
+  Boundary enabled for ring 2: requires_inner_boundary by smart_leaf
+  Generated 12 cells with 1 variation(s)
+  Actual ring pattern(s): ['smart_leaf']
+  Boundary requirements: {'requires_inner_boundary': True, 'requires_outer_boundary': False, 'requires_radial_boundaries': False}
+[PatternGenerator] Initialized:
+  Categories: ['botanical']
+  Available patterns: 4
+
+Ring 3: inner=222.0, outer=286.0, width=64.0
+  Using 1 variation(s) with extensions: ['0.05']
+  Variety filter: avoiding ['smart_leaf']; candidates: ['smart_scallop_band', 'smart_petal', 'smart_vine_band']
+  Valid pattern candidates: ['smart_scallop_band', 'smart_petal', 'smart_leaf', 'smart_vine_band']
+  Selected pattern: smart_petal (category: botanical)
+
+=== VALIDATING DESIGN ===
+  Extracted 108 shapes from 2 pattern variations
+  Topology: 49 colorable regions, 1 components (0 whiskers pruned, 0 gaps bridged)
+  Design PASSED validation
+  Generated 12 cells with 1 variation(s)
+  Actual ring pattern(s): ['smart_petal']
+  Boundary requirements: {'requires_inner_boundary': False, 'requires_outer_boundary': False, 'requires_radial_boundaries': False}
+
+=== VALIDATING DESIGN ===
+  Extracted 276 shapes from 4 pattern variations
+  Topology: 217 colorable regions, 1 components (0 whiskers pruned, 0 gaps bridged)
+  Design PASSED validation
+
+=== GENERATION COMPLETE ===
+
+[API] Generated SVG: 23843 characters

@@ -1,0 +1,6 @@
+__pycache__/
+.git/
+.venv/
+examples/
+generated_designs/
+test_output/

@@ -1,0 +1,13 @@
+{
+  "defs_svg": "<g id=\"ring-2-var-0\"><path d=\"M 462.0860340679237,306.0 L 528.0052090443194,306.0\" fill=\"none\" stroke=\"black\" stroke-linecap=\"butt\" stroke-linejoin=\"round\" stroke-width=\"2.125\" /><path d=\"M 528.0052090443194,306.0 L 515.2801324081295,291.9236548878727 L 501.5153097709596,280.70403222898665 L 486.95507005966465,272.87982362430427 L 471.94024542096787,268.1531922721457 L 456.7675314292429,265.60196170870046\" fill=\"none\" stroke=\"black\" stroke-linecap=\"butt\" stroke-linejoin=\"round\" stroke-width=\"2.125\" /><path d=\"M 528.0052090443194,306.0 L 515.2801324081295,320.0763451121273 L 501.5153097709596,331.29596777101335 L 486.95507005966465,339.12017637569573 L 471.94024542096787,343.8468077278543 L 456.7675314292429,346.39803829129954\" fill=\"none\" stroke=\"black\" stroke-linecap=\"butt\" stroke-linejoin=\"round\" stroke-width=\"2.125\" /></g>",
+  "ring_index": 2,
+  "ring_seed": 2026,
+  "ring_svg": "<g id=\"ring-2\"><use transform=\"rotate(0.0, 306.0, 306.0)\" xlink:href=\"#ring-2-var-0\" /><use transform=\"rotate(30.0, 306.0, 306.0)\" xlink:href=\"#ring-2-var-0\" /><use transform=\"rotate(60.0, 306.0, 306.0)\" xlink:href=\"#ring-2-var-0\" /><use transform=\"rotate(90.0, 306.0, 306.0)\" xlink:href=\"#ring-2-var-0\" /><use transform=\"rotate(120.0, 306.0, 306.0)\" xlink:href=\"#ring-2-var-0\" /><use transform=\"rotate(150.0, 306.0, 306.0)\" xlink:href=\"#ring-2-var-0\" /><use transform=\"rotate(180.0, 306.0, 306.0)\" xlink:href=\"#ring-2-var-0\" /><use transform=\"rotate(210.0, 306.0, 306.0)\" xlink:href=\"#ring-2-var-0\" /><use transform=\"rotate(240.0, 306.0, 306.0)\" xlink:href=\"#ring-2-var-0\" /><use transform=\"rotate(270.0, 306.0, 306.0)\" xlink:href=\"#ring-2-var-0\" /><use transform=\"rotate(300.0, 306.0, 306.0)\" xlink:href=\"#ring-2-var-0\" /><use transform=\"rotate(330.0, 306.0, 306.0)\" xlink:href=\"#ring-2-var-0\" /></g>",
+  "validation": {
+    "is_valid": true,
+    "issue_count": 0,
+    "issues": [],
+    "tiny_region_count": 0,
+    "unconnected_shape_count": 0
+  }
+}

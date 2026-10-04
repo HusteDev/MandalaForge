@@ -1,0 +1,590 @@
+◇  onion-skin screenshot saved C:\Users\thana\code-repos\HusteDev-Projects\MandalaForge\brag-output\composition\cursor-motion.png
+   26 elements · open it to verify the motion matches your target, then read the keyframes below.
+
+{
+  "project": "composition",
+  "runtime": "all",
+  "compositions": [
+    {
+      "composition": "index.html",
+      "source": "index.html",
+      "tweens": [
+        {
+          "id": ".cursor-set-0",
+          "target": ".cursor",
+          "method": "set",
+          "start": 0,
+          "duration": 0,
+          "end": 0,
+          "shape": "flat",
+          "keyframes": [
+            {
+              "pct": 0,
+              "time": 0,
+              "properties": {
+                "x": 0,
+                "y": 0,
+                "opacity": 1
+              }
+            },
+            {
+              "pct": 100,
+              "time": 0,
+              "properties": {
+                "x": 644,
+                "y": 874,
+                "opacity": 0
+              }
+            }
+          ],
+          "path": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 644,
+              "y": 874
+            }
+          ]
+        },
+        {
+          "id": ".cursor-to-4750-visual",
+          "target": ".cursor",
+          "method": "to",
+          "group": "visual",
+          "start": 4.75,
+          "duration": 0.15,
+          "end": 4.9,
+          "shape": "flat",
+          "keyframes": [
+            {
+              "pct": 0,
+              "time": 4.75,
+              "properties": {
+                "opacity": 1
+              }
+            },
+            {
+              "pct": 100,
+              "time": 4.9,
+              "properties": {
+                "opacity": 1
+              }
+            }
+          ],
+          "path": null
+        },
+        {
+          "id": ".cursor-to-4950-position",
+          "target": ".cursor",
+          "method": "to",
+          "group": "position",
+          "start": 4.95,
+          "duration": 0.68,
+          "end": 5.63,
+          "shape": "flat",
+          "keyframes": [
+            {
+              "pct": 0,
+              "time": 4.95,
+              "properties": {
+                "x": 0,
+                "y": 0
+              }
+            },
+            {
+              "pct": 100,
+              "time": 5.63,
+              "properties": {
+                "x": 329,
+                "y": 681
+              }
+            }
+          ],
+          "path": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 329,
+              "y": 681
+            }
+          ]
+        },
+        {
+          "id": ".cursor-to-7700-visual",
+          "target": ".cursor",
+          "method": "to",
+          "group": "visual",
+          "start": 7.7,
+          "duration": 0.2,
+          "end": 7.9,
+          "shape": "flat",
+          "keyframes": [
+            {
+              "pct": 0,
+              "time": 7.7,
+              "properties": {
+                "opacity": 1
+              }
+            },
+            {
+              "pct": 100,
+              "time": 7.9,
+              "properties": {
+                "opacity": 0
+              }
+            }
+          ],
+          "path": null
+        },
+        {
+          "id": ".cursor-set-9500-position",
+          "target": ".cursor",
+          "method": "set",
+          "group": "position",
+          "start": 9.5,
+          "duration": 0,
+          "end": 9.5,
+          "shape": "flat",
+          "keyframes": [
+            {
+              "pct": 0,
+              "time": 9.5,
+              "properties": {
+                "x": 0,
+                "y": 0
+              }
+            },
+            {
+              "pct": 100,
+              "time": 9.5,
+              "properties": {
+                "x": 329,
+                "y": 681
+              }
+            }
+          ],
+          "path": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 329,
+              "y": 681
+            }
+          ]
+        },
+        {
+          "id": ".cursor-to-9500-visual",
+          "target": ".cursor",
+          "method": "to",
+          "group": "visual",
+          "start": 9.5,
+          "duration": 0.15,
+          "end": 9.65,
+          "shape": "flat",
+          "keyframes": [
+            {
+              "pct": 0,
+              "time": 9.5,
+              "properties": {
+                "opacity": 1
+              }
+            },
+            {
+              "pct": 100,
+              "time": 9.65,
+              "properties": {
+                "opacity": 1
+              }
+            }
+          ],
+          "path": null
+        },
+        {
+          "id": ".cursor-to-9850-position",
+          "target": ".cursor",
+          "method": "to",
+          "group": "position",
+          "start": 9.85,
+          "duration": 0.5,
+          "end": 10.35,
+          "shape": "flat",
+          "keyframes": [
+            {
+              "pct": 0,
+              "time": 9.85,
+              "properties": {
+                "x": 0,
+                "y": 0
+              }
+            },
+            {
+              "pct": 100,
+              "time": 10.35,
+              "properties": {
+                "x": 369,
+                "y": 752
+              }
+            }
+          ],
+          "path": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 369,
+              "y": 752
+            }
+          ]
+        },
+        {
+          "id": ".cursor-to-11480-position",
+          "target": ".cursor",
+          "method": "to",
+          "group": "position",
+          "start": 11.48,
+          "duration": 0.5,
+          "end": 11.98,
+          "shape": "flat",
+          "keyframes": [
+            {
+              "pct": 0,
+              "time": 11.48,
+              "properties": {
+                "x": 0,
+                "y": 0
+              }
+            },
+            {
+              "pct": 100,
+              "time": 11.98,
+              "properties": {
+                "x": 329,
+                "y": 817
+              }
+            }
+          ],
+          "path": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 329,
+              "y": 817
+            }
+          ]
+        },
+        {
+          "id": ".cursor-to-12950-visual",
+          "target": ".cursor",
+          "method": "to",
+          "group": "visual",
+          "start": 12.95,
+          "duration": 0.18,
+          "end": 13.13,
+          "shape": "flat",
+          "keyframes": [
+            {
+              "pct": 0,
+              "time": 12.95,
+              "properties": {
+                "opacity": 1
+              }
+            },
+            {
+              "pct": 100,
+              "time": 13.13,
+              "properties": {
+                "opacity": 0
+              }
+            }
+          ],
+          "path": null
+        },
+        {
+          "id": ".cursor-set-13600-position",
+          "target": ".cursor",
+          "method": "set",
+          "group": "position",
+          "start": 13.6,
+          "duration": 0,
+          "end": 13.6,
+          "shape": "flat",
+          "keyframes": [
+            {
+              "pct": 0,
+              "time": 13.6,
+              "properties": {
+                "x": 0,
+                "y": 0
+              }
+            },
+            {
+              "pct": 100,
+              "time": 13.6,
+              "properties": {
+                "x": 329,
+                "y": 817
+              }
+            }
+          ],
+          "path": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 329,
+              "y": 817
+            }
+          ]
+        },
+        {
+          "id": ".cursor-to-13600-visual",
+          "target": ".cursor",
+          "method": "to",
+          "group": "visual",
+          "start": 13.6,
+          "duration": 0.1,
+          "end": 13.7,
+          "shape": "flat",
+          "keyframes": [
+            {
+              "pct": 0,
+              "time": 13.6,
+              "properties": {
+                "opacity": 1
+              }
+            },
+            {
+              "pct": 100,
+              "time": 13.7,
+              "properties": {
+                "opacity": 1
+              }
+            }
+          ],
+          "path": null
+        },
+        {
+          "id": ".cursor-to-13700-position",
+          "target": ".cursor",
+          "method": "to",
+          "group": "position",
+          "start": 13.7,
+          "duration": 0.5,
+          "end": 14.2,
+          "shape": "flat",
+          "keyframes": [
+            {
+              "pct": 0,
+              "time": 13.7,
+              "properties": {
+                "x": 0,
+                "y": 0
+              }
+            },
+            {
+              "pct": 100,
+              "time": 14.2,
+              "properties": {
+                "x": 329,
+                "y": 880
+              }
+            }
+          ],
+          "path": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 329,
+              "y": 880
+            }
+          ]
+        },
+        {
+          "id": ".workbench, #refine-heading, #refine-sub, .cursor-to-14800-visual",
+          "target": ".workbench, #refine-heading, #refine-sub, .cursor",
+          "method": "to",
+          "group": "visual",
+          "start": 14.8,
+          "duration": 0.2,
+          "end": 15,
+          "shape": "flat",
+          "keyframes": [
+            {
+              "pct": 0,
+              "time": 14.8,
+              "properties": {
+                "opacity": 1
+              }
+            },
+            {
+              "pct": 100,
+              "time": 15,
+              "properties": {
+                "opacity": 0
+              }
+            }
+          ],
+          "path": null
+        }
+      ],
+      "traces": [
+        {
+          "target": ".cursor",
+          "strokes": [
+            {
+              "id": ".cursor-to-4950-position",
+              "start": 4.95,
+              "end": 5.63,
+              "keyframes": [
+                {
+                  "pct": 0,
+                  "time": 4.95,
+                  "properties": {
+                    "x": 0,
+                    "y": 0
+                  }
+                },
+                {
+                  "pct": 100,
+                  "time": 5.63,
+                  "properties": {
+                    "x": 329,
+                    "y": 681
+                  }
+                }
+              ],
+              "points": [
+                {
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "x": 329,
+                  "y": 681
+                }
+              ]
+            },
+            {
+              "id": ".cursor-to-9850-position",
+              "start": 9.85,
+              "end": 10.35,
+              "keyframes": [
+                {
+                  "pct": 0,
+                  "time": 9.85,
+                  "properties": {
+                    "x": 0,
+                    "y": 0
+                  }
+                },
+                {
+                  "pct": 100,
+                  "time": 10.35,
+                  "properties": {
+                    "x": 369,
+                    "y": 752
+                  }
+                }
+              ],
+              "points": [
+                {
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "x": 369,
+                  "y": 752
+                }
+              ]
+            },
+            {
+              "id": ".cursor-to-11480-position",
+              "start": 11.48,
+              "end": 11.98,
+              "keyframes": [
+                {
+                  "pct": 0,
+                  "time": 11.48,
+                  "properties": {
+                    "x": 0,
+                    "y": 0
+                  }
+                },
+                {
+                  "pct": 100,
+                  "time": 11.98,
+                  "properties": {
+                    "x": 329,
+                    "y": 817
+                  }
+                }
+              ],
+              "points": [
+                {
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "x": 329,
+                  "y": 817
+                }
+              ]
+            },
+            {
+              "id": ".cursor-to-13700-position",
+              "start": 13.7,
+              "end": 14.2,
+              "keyframes": [
+                {
+                  "pct": 0,
+                  "time": 13.7,
+                  "properties": {
+                    "x": 0,
+                    "y": 0
+                  }
+                },
+                {
+                  "pct": 100,
+                  "time": 14.2,
+                  "properties": {
+                    "x": 329,
+                    "y": 880
+                  }
+                }
+              ],
+              "points": [
+                {
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "x": 329,
+                  "y": 880
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "cssKeyframes": [],
+      "anime": []
+    }
+  ],
+  "_meta": {
+    "version": "0.8.44",
+    "latestVersion": "0.8.43",
+    "updateAvailable": false
+  }
+}
