@@ -5,35 +5,22 @@ from __future__ import annotations
 import math
 from typing import Dict, List
 
-from motifs.contract import MotifInstance, build_instance
+from motifs.contract import MotifError, MotifInstance, build_instance
 from motifs.geometry import CellPoint, MotifContext, SmartVector, mirror_points, quad_points
-from motifs.slot_fit import fit_slot_box
+from motifs.slot_fit import fit_inside_slot, fit_slot_box
 
 QUAD_STEPS = 8
 
 
-def generate_petal(context: MotifContext) -> MotifInstance:
-    rng = context.rng
-    # Every parameter is drawn before any limit is applied, so tightening the
-    # limits changes what is kept but never what the rng produced.
-    length = rng.uniform(0.75, 1.25)
-    dip = rng.uniform(0.0, 0.25)
-    half_width = context.angular_limits * rng.uniform(0.55, 0.95)
-    waist = rng.uniform(0.35, 0.6)
-    wave = rng.uniform(0.0, context.complexity * 0.06)
-
-    low, high = context.radial_limits
-    angular_bound = context.angular_limits
-    if context.slot:
-        box = fit_slot_box(context, "petal")
-        base_radial = max(low, box.radial_min)
-        tip_radial = min(high, box.radial_max)
-        half_width = min(half_width, box.half_width)
-        angular_bound = min(angular_bound, box.half_width)
-    else:
-        base_radial = max(low, -dip)
-        tip_radial = min(high, length)
-
+def _petal_outline(
+    base_radial: float,
+    tip_radial: float,
+    half_width: float,
+    waist: float,
+    wave: float,
+    angular_bound: float,
+) -> List[CellPoint]:
+    """One closed, mirror-symmetric outline: right side base to tip, then the left side back."""
     base = CellPoint(base_radial, 0.0)
     tip = CellPoint(tip_radial, 0.0)
     widest = CellPoint(base.radial + (tip.radial - base.radial) * waist, half_width)
@@ -65,7 +52,45 @@ def generate_petal(context: MotifContext) -> MotifInstance:
 
     # Mirror tip to base along the left side, dropping the duplicated tip and base.
     left = mirror_points(right)[1:-1][::-1]
-    outline = right + left
+    return right + left
+
+
+def generate_petal(context: MotifContext) -> MotifInstance:
+    rng = context.rng
+    # Every parameter is drawn before any limit is applied, so tightening the
+    # limits changes what is kept but never what the rng produced.
+    length = rng.uniform(0.75, 1.25)
+    dip = rng.uniform(0.0, 0.25)
+    half_width = context.angular_limits * rng.uniform(0.55, 0.95)
+    waist = rng.uniform(0.35, 0.6)
+    wave = rng.uniform(0.0, context.complexity * 0.06)
+
+    low, high = context.radial_limits
+    if context.slot:
+        box = fit_slot_box(context, "petal")
+        base_radial = max(low, box.radial_min)
+        tip_radial = min(high, box.radial_max)
+        if tip_radial <= base_radial:
+            raise MotifError("petal does not fit slot")
+        half_width = min(half_width, box.half_width)
+        angular_bound = min(context.angular_limits, box.half_width)
+        centre = (base_radial + tip_radial) / 2.0
+
+        def build(scale: float) -> List[CellPoint]:
+            return _petal_outline(
+                centre + (base_radial - centre) * scale,
+                centre + (tip_radial - centre) * scale,
+                half_width * scale,
+                waist,
+                wave,
+                angular_bound * scale,
+            )
+
+        outline = fit_inside_slot(context, "petal", build)
+    else:
+        outline = _petal_outline(
+            max(low, -dip), min(high, length), half_width, waist, wave, context.angular_limits
+        )
     return build_instance(context, [SmartVector(outline, closed=True)], slot_outline=outline)
 
 

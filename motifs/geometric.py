@@ -6,21 +6,26 @@ from typing import Dict, List
 
 from motifs.contract import MotifInstance, build_instance
 from motifs.geometry import CellPoint, MotifContext, SmartVector
-from motifs.slot_fit import fit_slot_box
+from motifs.slot_fit import fit_inside_slot, fit_slot_box
 
 
 def generate_diamond(context: MotifContext) -> MotifInstance:
     aspect = context.rng.uniform(0.6, 1.0)
     box = fit_slot_box(context, "diamond")
     mid = box.radial_mid
-    half_height = (box.radial_max - box.radial_min) / 2.0 * aspect
-    width = box.half_width
-    points = [
-        CellPoint(mid - half_height, 0.0),
-        CellPoint(mid, width),
-        CellPoint(mid + half_height, 0.0),
-        CellPoint(mid, -width),
-    ]
+    full_half_height = (box.radial_max - box.radial_min) / 2.0 * aspect
+
+    def build(scale: float) -> List[CellPoint]:
+        half_height = full_half_height * scale
+        width = box.half_width * scale
+        return [
+            CellPoint(mid - half_height, 0.0),
+            CellPoint(mid, width),
+            CellPoint(mid + half_height, 0.0),
+            CellPoint(mid, -width),
+        ]
+
+    points = fit_inside_slot(context, "diamond", build)
     return build_instance(context, [SmartVector(points, closed=True)])
 
 

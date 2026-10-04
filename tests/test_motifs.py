@@ -1,5 +1,7 @@
+import math
 import random
 import pytest
+from shapely.geometry import Polygon
 from motifs import MOTIFS, find_motif, safe_motif, motifs_for_categories
 from motifs.geometry import MotifContext, CellPoint
 from motifs.contract import MotifInstance, MotifError
@@ -58,3 +60,77 @@ def test_safe_band_spans_angular_limits(cell_kwargs):
     inst = safe_motif("botanical")["generator"](make_ctx(cell_kwargs, angular_limits=0.7))
     angs = {round(p.angular, 6) for p in inst.vectors[0].points}
     assert angs == {-0.7, 0.7}
+
+
+def parent_slot(cell_kwargs, seed):
+    parent = find_motif("petal")["generator"](make_ctx(cell_kwargs, seed, complexity=1.0))
+    return parent.declaration.slot
+
+
+def slot_polygon(slot):
+    return Polygon([(p.angular, p.radial) for p in slot])
+
+
+def outline_polygon(inst):
+    return Polygon([(p.angular, p.radial) for p in inst.vectors[0].points])
+
+
+def children_in_real_slots(cell_kwargs, name):
+    """Yield (slot, instance) for every seed whose parent slot is big enough for the child."""
+    for seed in range(25):
+        slot = parent_slot(cell_kwargs, seed)
+        if slot is None:
+            continue
+        ctx = make_ctx(cell_kwargs, seed, complexity=1.0)
+        ctx.slot = slot
+        try:
+            yield slot, find_motif(name)["generator"](ctx)
+        except MotifError as error:
+            assert "does not fit slot" in str(error)
+
+
+@pytest.mark.parametrize("name", ["petal", "diamond"])
+def test_slot_child_is_contained_in_the_slot_polygon(name, cell_kwargs):
+    children = list(children_in_real_slots(cell_kwargs, name))
+    assert len(children) >= 5
+    for slot, inst in children:
+        assert slot_polygon(slot).contains(outline_polygon(inst))
+
+
+def test_petal_in_slot_stays_inside_slot_radial_range(cell_kwargs):
+    children = 0
+    for seed in range(25):
+        slot = parent_slot(cell_kwargs, seed)
+        if slot is None:
+            continue
+        ctx = make_ctx(cell_kwargs, seed, complexity=1.0, radial_limits=(-0.25, 1.25))
+        ctx.slot = slot
+        try:
+            inst = find_motif("petal")["generator"](ctx)
+        except MotifError:
+            continue
+        children += 1
+        radials = [p.radial for p in inst.vectors[0].points]
+        assert min(radials) >= min(p.radial for p in slot)
+        assert max(radials) <= max(p.radial for p in slot)
+        assert max(radials) <= 1.0
+    assert children >= 5
+
+
+@pytest.mark.parametrize("name", ["petal", "diamond"])
+def test_slot_two_pixels_wide_does_not_fit(name, cell_kwargs):
+    ctx = make_ctx(cell_kwargs)
+    half = ctx.px_to_angular(1.0, 0.5)
+    ctx.slot = [CellPoint(0.2, -half), CellPoint(0.2, half), CellPoint(0.8, half), CellPoint(0.8, -half)]
+    with pytest.raises(MotifError, match="does not fit slot"):
+        find_motif(name)["generator"](ctx)
+
+
+def test_petal_outline_is_closed_unique_and_mirror_symmetric(cell_kwargs):
+    inst = find_motif("petal")["generator"](make_ctx(cell_kwargs, 3, complexity=1.0))
+    vector = inst.vectors[0]
+    pts = vector.points
+    assert vector.closed
+    assert all(a != b for a, b in zip(pts, pts[1:] + pts[:1]))
+    for p in pts:
+        assert min(math.hypot(p.radial - q.radial, -p.angular - q.angular) for q in pts) < 1e-9
