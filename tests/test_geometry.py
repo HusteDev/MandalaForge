@@ -1,5 +1,5 @@
 import math
-from motifs.geometry import CellPoint, SmartVector, MotifContext, cell_rotation_deg
+from motifs.geometry import CellPoint, SmartVector, MotifContext, cell_rotation_deg, quad_points
 
 def test_to_cartesian_does_not_clamp_overflow(cell_kwargs):
     ctx = MotifContext(**cell_kwargs)
@@ -20,3 +20,10 @@ def test_polyline_subdivides_arc(cell_kwargs):
 def test_cell_rotation_positions():
     assert cell_rotation_deg(2, 12, "centre") == 60.0
     assert cell_rotation_deg(2, 12, "divider") == 75.0
+
+def test_quad_points_are_not_clamped():
+    pts = quad_points(CellPoint(-0.2, 0.0), CellPoint(0.5, 1.2), CellPoint(1.2, 0.0))
+    assert len(pts) == 9
+    assert pts[0] == CellPoint(-0.2, 0.0) and pts[-1] == CellPoint(1.2, 0.0)
+    assert not all(0.0 <= p.radial <= 1.0 for p in pts)
+    assert pts[1].radial < 0.0  # interior sample below the inner boundary survives

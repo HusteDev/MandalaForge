@@ -20,9 +20,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 PointTuple = Tuple[float, float]
 
-# Normalized slack for deciding a point sits ON a cell boundary.
-BOUNDARY_TOLERANCE = 0.025
-
 # A rendered segment may span at most this much arc before it is subdivided.
 # 4 degrees holds the chord/arc error under ~0.25px at the largest canvas radius.
 MAX_SEGMENT_ARC_DEGREES = 4.0
@@ -191,9 +188,9 @@ def quad_points(
     Sample a quadratic bezier in cell space.
 
     Coarse is fine: `polyline` densifies afterwards, so the author picks the
-    shape and the engine picks the fidelity. Interior samples are clamped into
-    the cell, and kept off the side boundaries so a control point can never
-    manufacture a port the pattern did not intend.
+    shape and the engine picks the fidelity. Samples are returned exactly as
+    computed: nothing is clamped, because the analyzer enforces cell limits and
+    overflow past a boundary is legitimate.
     """
     points = [start]
     for index in range(1, steps):
@@ -201,11 +198,7 @@ def quad_points(
         inverse = 1.0 - t
         radial = inverse * inverse * start.radial + 2 * inverse * t * control.radial + t * t * end.radial
         angular = inverse * inverse * start.angular + 2 * inverse * t * control.angular + t * t * end.angular
-        limit = 1.0 - BOUNDARY_TOLERANCE * 1.5
-        points.append(CellPoint(
-            radial=max(0.0, min(1.0, radial)),
-            angular=max(-limit, min(limit, angular)),
-        ))
+        points.append(CellPoint(radial=radial, angular=angular))
     points.append(end)
     return points
 
