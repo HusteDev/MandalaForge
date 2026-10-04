@@ -157,3 +157,13 @@ def test_footprint_is_convex_hull():
     interior = SmartVector([CellPoint(0.5, 0.0), CellPoint(0.6, 0.1)])
     hull = measure_footprint([closed_box(0.1, 0.9, 0.6), interior])
     assert set(hull) == {CellPoint(0.1, -0.6), CellPoint(0.1, 0.6), CellPoint(0.9, 0.6), CellPoint(0.9, -0.6)}
+
+
+def test_full_cell_box_slot_passes_strict_clearance(cell_kwargs):
+    import motifs.contract as contract
+    ctx = MotifContext(**{**cell_kwargs, "min_white_space": 10.0})
+    box = closed_box(0.0, 1.0, 1.0)
+    inst = build_instance(ctx, [box], slot_outline=box.points)
+    assert inst.declaration.slot is not None
+    assert not hasattr(contract, "SLOT_CLEARANCE_SLACK_PX")
+    assert MotifAnalyzer(ctx).analyze(inst) == []

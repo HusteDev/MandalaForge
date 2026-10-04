@@ -27,12 +27,6 @@ MOTIF_KINDS = ("enclosing", "open")
 # Slots smaller than this (square pixels) are treated as not there.
 MIN_SLOT_AREA_PX = 1.0
 
-# measure_slot insets in a flat pixel rectangle (angular scaled at mid radial) while the
-# analyzer measures in true canvas space, where the wedge is narrower toward its inner
-# edge. A slot that measure_slot produced can therefore sit slightly under the margin;
-# this much shortfall is not an issue.
-SLOT_CLEARANCE_SLACK_PX = 0.5
-
 Segment = Tuple[CellPoint, CellPoint, int]
 
 
@@ -106,16 +100,16 @@ def measure_slot(context: MotifContext, outline: List[CellPoint]) -> Optional[Li
     """
     Interior space a later motif may occupy: `outline` inset by the white-space
     margin plus a stroke width, or None when nothing worth drawing is left.
+
+    The inset is taken in true page space (arc-subdivided outline, unrotated) so the
+    analyzer's pixel clearance check holds exactly, then mapped back to cell space.
     """
     if len(outline) < 3:
         raise MotifError("Slot outline needs at least three points")
-
-    radial_scale = context.ring_depth
-    angular_scale = context.angular_to_px(1.0, 0.5)
-    if radial_scale <= 0 or angular_scale <= 0:
+    if context.ring_depth <= 0 or context.half_angle <= 0:
         return None
 
-    polygon = Polygon([(p.angular * angular_scale, p.radial * radial_scale) for p in outline])
+    polygon = Polygon(context.polyline(SmartVector(list(outline), closed=True)))
     if not polygon.is_valid:
         raise MotifError("Slot outline is not a simple polygon")
 
@@ -127,8 +121,16 @@ def measure_slot(context: MotifContext, outline: List[CellPoint]) -> Optional[Li
     if not isinstance(inset, Polygon) or inset.area < MIN_SLOT_AREA_PX:
         return None
 
-    coords = list(inset.exterior.coords)[:-1]
-    return [CellPoint(radial=y / radial_scale, angular=x / angular_scale) for x, y in coords]
+    center_x, center_y = context.center
+    slot = []
+    for x, y in list(inset.exterior.coords)[:-1]:
+        radius = math.hypot(x - center_x, y - center_y)
+        angle_deg = math.degrees(math.atan2(y - center_y, x - center_x))
+        slot.append(CellPoint(
+            radial=(radius - context.inner_radius) / context.ring_depth,
+            angular=angle_deg / context.half_angle,
+        ))
+    return slot
 
 
 def _default_base_point(points: Sequence[CellPoint]) -> CellPoint:
@@ -306,7 +308,7 @@ class MotifAnalyzer:
             return []
         # Polylines, not chords: a cell-space edge is an arc on the canvas, and a chord sags well off it.
         polygon = Polygon(self.context.polyline(SmartVector(slot, closed=True)))
-        required = self.context.min_white_space - SLOT_CLEARANCE_SLACK_PX
+        required = self.context.min_white_space
         issues = []
         reported: Set[int] = set()
         for start, end, vector_index in segments:
@@ -318,7 +320,7 @@ class MotifAnalyzer:
                 reported.add(vector_index)
                 issues.append(
                     f"Slot is {distance:.1f}px from vector {vector_index}, "
-                    f"needs at least {self.context.min_white_space:.1f}px"
+                    f"needs at least {required:.1f}px"
                 )
         return issues
 
