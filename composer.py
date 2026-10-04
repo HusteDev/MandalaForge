@@ -192,6 +192,18 @@ class Composer:
             self._style = {"categories": chosen, "positions": rng.choice(POSITION_MODES)}
         return self._style
 
+    @style.setter
+    def style(self, value: Dict[str, Any]) -> None:
+        self._style = value
+        self._base_name_memo.clear()
+
+    def _pick(self, candidates: List[Dict], rng: random.Random) -> Dict:
+        """Style biases the pick: motifs in a style category weigh 3, others 1."""
+        ordered = sorted(candidates, key=lambda m: m["name"])
+        favoured = self.style["categories"]
+        weights = [3 if m["category"] in favoured else 1 for m in ordered]
+        return rng.choices(ordered, weights=weights)[0]
+
     def plan(self) -> DesignPlan:
         ring_seeds = self.settings.ring_seeds or {}
         rings = [
@@ -251,7 +263,7 @@ class Composer:
         if candidates:
             offset = 3 * len(tried)
             rng = node_rng(ring.ring_seed, ring.ring_index, seq_pos, offset, position)
-            chosen = rng.choice(candidates)
+            chosen = self._pick(candidates, rng)
             tried.append(chosen["name"])
             new_node = self._compose(
                 chosen, rng, ring.ring_index, ring.ring_seed, seq_pos, position,
@@ -342,7 +354,7 @@ class Composer:
     def _base_candidates(self, ring_index: int, position: str, cell_width: float,
                          ring_depth: float) -> List[Dict]:
         return [
-            m for m in motifs_for_categories(self.style["categories"])
+            m for m in motifs_for_categories(self.settings.categories)
             if "base" in m["roles"]
             and position in m["positions"]
             and (ring_index > 0 or m["spans_cell"])
@@ -360,9 +372,9 @@ class Composer:
         if ring_index > 0:
             candidates = [c for c in candidates if c["name"] not in avoid] or candidates
         if not candidates:
-            safe = safe_motif(self.style["categories"][0])
+            safe = safe_motif(self.settings.categories[0])
             return CellRecipe(safe["name"], safe["category"], is_fallback=True)
-        chosen = rng.choice(candidates)
+        chosen = self._pick(candidates, rng)
         return self._compose(chosen, rng, ring_index, ring_seed, seq_pos, position,
                              cell_width, ring_depth, 0)
 
@@ -403,14 +415,14 @@ class Composer:
         width_fraction *= estimate[0]
         depth_fraction *= estimate[1]
         candidates = [
-            m for m in motifs_for_categories(self.style["categories"])
+            m for m in motifs_for_categories(self.settings.categories)
             if "slot" in m["roles"]
             and self._passes(m, cell_width * width_fraction, ring_depth * depth_fraction)
         ]
         if not candidates:
             return
         child_rng = node_rng(ring_seed, ring_index, seq_pos, offset + depth + 1, position)
-        child_motif = child_rng.choice(candidates)
+        child_motif = self._pick(candidates, child_rng)
         node.slot_child = CellRecipe(child_motif["name"], child_motif["category"])
         self._nest(node.slot_child, child_motif, child_rng, ring_index, ring_seed, seq_pos,
                    position, cell_width, ring_depth, offset, depth + 1, width_fraction,
@@ -420,7 +432,7 @@ class Composer:
 
     def _stem_recipe(self) -> CellRecipe:
         motif = next(
-            (m for m in motifs_for_categories(self.style["categories"]) if "attachment" in m["roles"]),
+            (m for m in motifs_for_categories(self.settings.categories) if "attachment" in m["roles"]),
             None,
         ) or find_motif("stem")
         return CellRecipe(motif["name"], motif["category"], provides_contact=True)

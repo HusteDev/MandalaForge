@@ -75,3 +75,15 @@ def test_force_motif_disables_fallback():
     c = Composer(1, GEOM, ComposerSettings(force_motif={"name": "petal", "position": "centre", "role": "base"}))
     ring = c.plan().rings[1]
     assert c.replace_node(ring, 0, "centre", "test") is False
+
+def test_style_weights_categories_instead_of_filtering_them():
+    # Composer seed 2 gives ring 0 a scallop, so the variety filter leaves ring_band allowed in ring 1.
+    c = Composer(2, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
+    c.style = {"categories": ["botanical"], "positions": "centre"}
+    bases = set()
+    for ring_seed in range(30):
+        for e in c.plan_ring(1, ring_seed).sequence:
+            for node in (e.centre, e.divider):
+                if node is not None:
+                    bases.add(node.motif)
+    assert "ring_band" in bases
