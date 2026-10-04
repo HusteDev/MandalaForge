@@ -49,7 +49,7 @@ def test_declared_slot_is_present_at_default_size(entry, cell_kwargs):
 def test_registry_lookup():
     assert find_motif("petal")["category"] == "botanical"
     assert find_motif("nope") is None
-    assert {e["name"] for e in motifs_for_categories(["geometric"])} == {"diamond"}
+    assert {e["name"] for e in motifs_for_categories(["geometric"])} == {"diamond", "ring_band"}
     assert safe_motif("celtic")["name"] == "celtic_safe_band"
 
 def test_diamond_requires_slot(cell_kwargs):
@@ -89,7 +89,7 @@ def children_in_real_slots(cell_kwargs, name):
             assert "does not fit slot" in str(error)
 
 
-@pytest.mark.parametrize("name", ["petal", "diamond"])
+@pytest.mark.parametrize("name", ["petal", "diamond", "leaf"])
 def test_slot_child_is_contained_in_the_slot_polygon(name, cell_kwargs):
     children = list(children_in_real_slots(cell_kwargs, name))
     assert len(children) >= 5
@@ -117,7 +117,7 @@ def test_petal_in_slot_stays_inside_slot_radial_range(cell_kwargs):
     assert children >= 5
 
 
-@pytest.mark.parametrize("name", ["petal", "diamond"])
+@pytest.mark.parametrize("name", ["petal", "diamond", "leaf"])
 def test_slot_two_pixels_wide_does_not_fit(name, cell_kwargs):
     ctx = make_ctx(cell_kwargs)
     half = ctx.px_to_angular(1.0, 0.5)
@@ -134,3 +134,25 @@ def test_petal_outline_is_closed_unique_and_mirror_symmetric(cell_kwargs):
     assert all(a != b for a, b in zip(pts, pts[1:] + pts[:1]))
     for p in pts:
         assert min(math.hypot(p.radial - q.radial, -p.angular - q.angular) for q in pts) < 1e-9
+
+
+def test_leaf_midrib_touches_outline(cell_kwargs):
+    inst = find_motif("leaf")["generator"](make_ctx(cell_kwargs))
+    assert inst.kind == "enclosing" and len(inst.vectors) == 2
+    outline, midrib = inst.vectors
+    assert midrib.points[0] == CellPoint(0.0, 0.0) and midrib.points[0] in outline.points
+    assert midrib.points[-1] in outline.points
+
+
+def test_ring_band_draws_overlap_in_shared_range(cell_kwargs):
+    gen = find_motif("ring_band")["generator"]
+    for seed in range(20):
+        pts = gen(make_ctx(cell_kwargs, seed)).vectors[0].points
+        rs = sorted({p.radial for p in pts})
+        assert rs[0] <= 0.45 and rs[-1] >= 0.55
+
+
+def test_stem_is_a_pure_reach(cell_kwargs):
+    inst = find_motif("stem")["generator"](make_ctx(cell_kwargs))
+    assert inst.vectors == [] and inst.kind == "open"
+    assert inst.declaration.reach_ends[0].direction == "inward"

@@ -29,6 +29,25 @@ def generate_diamond(context: MotifContext) -> MotifInstance:
     return build_instance(context, [SmartVector(points, closed=True)])
 
 
+def generate_ring_band(context: MotifContext) -> MotifInstance:
+    # Any pair of draws overlaps radially within [0.45, 0.55], so neighbouring cells meet along a shared radial edge.
+    r1 = context.rng.uniform(0.30, 0.45)
+    r2 = context.rng.uniform(0.55, 0.70)
+    limit = context.angular_limits
+    outline = [
+        CellPoint(r1, -limit),
+        CellPoint(r1, 0.0),
+        CellPoint(r1, limit),
+        CellPoint(r2, limit),
+        CellPoint(r2, 0.0),
+        CellPoint(r2, -limit),
+    ]
+    vectors = [SmartVector(outline, closed=True)]
+    if context.complexity >= 0.5:
+        vectors.append(SmartVector([CellPoint(r1, 0.0), CellPoint(r2, 0.0)]))
+    return build_instance(context, vectors)
+
+
 GEOMETRIC_MOTIFS: List[Dict] = [
     {
         "name": "diamond",
@@ -40,6 +59,20 @@ GEOMETRIC_MOTIFS: List[Dict] = [
         "spans_cell": False,
         "min_cell_width_px": 10.0,
         "min_ring_depth_px": 10.0,
+        "max_overflow_inward": 0.0,
+        "max_overflow_outward": 0.0,
+        "slot_estimate": None,
+    },
+    {
+        "name": "ring_band",
+        "category": "geometric",
+        "generator": generate_ring_band,
+        "positions": ["centre", "divider"],
+        "roles": ["base"],
+        "touch": True,
+        "spans_cell": True,
+        "min_cell_width_px": 0.0,
+        "min_ring_depth_px": 0.0,
         "max_overflow_inward": 0.0,
         "max_overflow_outward": 0.0,
         "slot_estimate": None,
