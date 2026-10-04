@@ -139,6 +139,8 @@ CONTACT_OVERFLOW = 0.1
 MAX_NODE_DEPTH = 3
 POSITION_MODES = ("centre", "divider", "both")
 FORCE_ROLES = ("base", "slot", "contact")
+MIN_DIVISIONS = 4
+MAX_DIVISIONS = 24
 
 
 @dataclass
@@ -167,11 +169,17 @@ class Composer:
                 raise ValueError(f"unknown forced position: {force['position']}")
             if force["role"] not in FORCE_ROLES:
                 raise ValueError(f"unknown forced role: {force['role']}")
+        counts = [settings.num_divisions, *(settings.ring_divisions or [])]
+        for count in counts:
+            if isinstance(count, bool) or not isinstance(count, int) or not MIN_DIVISIONS <= count <= MAX_DIVISIONS:
+                raise ValueError(
+                    f"division count must be an integer from {MIN_DIVISIONS} to {MAX_DIVISIONS}, got {count!r}"
+                )
         self.seed = seed
         self.ring_geometry = ring_geometry
         self.settings = settings
         self._style: Optional[Dict[str, Any]] = None
-        self._base_name_memo: Dict[Tuple[int, int], Tuple[str, ...]] = {}
+        self._canonical_names: Dict[int, Tuple[str, ...]] = {}
         self._tried: Dict[Tuple[int, int, int, str], List[str]] = {}
 
     # ------------------------------------------------------------------ public
@@ -195,7 +203,7 @@ class Composer:
     @style.setter
     def style(self, value: Dict[str, Any]) -> None:
         self._style = value
-        self._base_name_memo.clear()
+        self._canonical_names.clear()
 
     def _pick(self, candidates: List[Dict], rng: random.Random) -> Dict:
         """Style biases the pick: motifs in a style category weigh 3, others 1."""
@@ -235,7 +243,10 @@ class Composer:
 
         if not (force and force["role"] == "contact"):
             self._ensure_contact(ring_index, sequence)
-        return RingPlan(ring_index, divisions, centre_share, sequence, ring_seed)
+        plan = RingPlan(ring_index, divisions, centre_share, sequence, ring_seed)
+        if ring_seed == self.seed:
+            self._canonical_names[ring_index] = self._base_names(plan)
+        return plan
 
     def replace_node(self, ring: RingPlan, seq_pos: int, position: str, reason: str) -> bool:
         """Advance one node along the fallback chain in place; False when exhausted."""
@@ -295,7 +306,7 @@ class Composer:
         if self.settings.vary_divisions:
             scale = 0.5 + 0.5 * (self._mid_radius(ring_index) / self._mid_radius(len(self.ring_geometry) - 1))
             raw = round(self.settings.num_divisions * scale * rng.triangular(0.7, 1.3, 1.0))
-            return max(4, min(24, raw))
+            return max(MIN_DIVISIONS, min(MAX_DIVISIONS, raw))
         return self.settings.num_divisions
 
     def _sequence_length(self, divisions: int, rng: random.Random) -> int:
@@ -310,7 +321,15 @@ class Composer:
             mode = force["position"]
         else:
             preferred = self.style["positions"]
-            modes = POSITION_MODES[:2] if ring_index == 0 else POSITION_MODES
+            if ring_index == 0:
+                # Only positions that an enabled spans_cell base supports; safe band when none does.
+                ring_depth = self._ring_metrics(ring_index, divisions)[1]
+                modes = tuple(
+                    m for m in POSITION_MODES[:2]
+                    if self._base_candidates(0, m, cell_width, ring_depth)
+                ) or POSITION_MODES[:2]
+            else:
+                modes = POSITION_MODES
             weights = [0.6 if m == preferred else 0.2 for m in modes]
             mode = rng.choices(modes, weights=weights)[0]
             if mode == "both" and cell_width < BOTH_MIN_CELL_WIDTH_PX:
@@ -329,21 +348,25 @@ class Composer:
             return 1.0
         return centre_share if position == "centre" else 1.0 - centre_share
 
+    @staticmethod
+    def _base_names(plan: RingPlan) -> Tuple[str, ...]:
+        names = {
+            node.motif
+            for entry in plan.sequence
+            for node in (entry.centre, entry.divider)
+            if node is not None
+        }
+        return tuple(sorted(names))
+
     def _inward_base_names(self, ring_index: int) -> Tuple[str, ...]:
-        """Base motif names of the ring just inside, planned with that ring's own seed."""
+        """Base names of the canonical (design-seed) ring just inside, so a ring's plan
+        depends only on the design seed and its own ring seed."""
         if ring_index == 0:
             return ()
         inner = ring_index - 1
-        inner_seed = (self.settings.ring_seeds or {}).get(inner, self.seed)
-        key = (inner, inner_seed)
-        if key not in self._base_name_memo:
-            names = set()
-            for entry in self.plan_ring(inner, inner_seed).sequence:
-                for node in (entry.centre, entry.divider):
-                    if node is not None:
-                        names.add(node.motif)
-            self._base_name_memo[key] = tuple(sorted(names))
-        return self._base_name_memo[key]
+        if inner not in self._canonical_names:
+            self.plan_ring(inner, self.seed)  # records the canonical names as it plans
+        return self._canonical_names[inner]
 
     # ------------------------------------------------------------ node building
 

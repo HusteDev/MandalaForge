@@ -87,3 +87,24 @@ def test_style_weights_categories_instead_of_filtering_them():
                 if node is not None:
                     bases.add(node.motif)
     assert "ring_band" in bases
+
+def test_regenerating_one_ring_does_not_reshuffle_its_neighbours():
+    settings = dict(categories=["botanical", "geometric"])
+    base = Composer(123, GEOM, ComposerSettings(**settings)).plan()
+    for rs in range(1000, 1050):
+        again = Composer(123, GEOM, ComposerSettings(ring_seeds={2: rs}, **settings)).plan()
+        assert again.rings[3] == base.rings[3]
+        assert again.rings[1] == base.rings[1]
+
+def test_innermost_ring_never_falls_back_with_botanical_only():
+    for seed in range(50):
+        p = Composer(seed, GEOM, ComposerSettings(categories=["botanical"])).plan()
+        for e in p.rings[0].sequence:
+            for node in (e.centre, e.divider):
+                assert node is None or not node.is_fallback
+
+def test_explicit_division_counts_are_validated():
+    with pytest.raises(ValueError, match="30"):
+        Composer(1, GEOM, ComposerSettings(ring_divisions=[8, 30]))
+    with pytest.raises(ValueError, match="3"):
+        Composer(1, GEOM, ComposerSettings(num_divisions=3))
