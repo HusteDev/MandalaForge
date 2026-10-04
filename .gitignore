@@ -4,3 +4,4 @@ __pycache__/
 examples/
 generated_designs/
 test_output/
+.pytest_cache/
