@@ -152,6 +152,9 @@ class TopologyValidator:
         exempt_dangle_fn=None,
         center: Optional[Coord] = None,
         divisions: Optional[int] = None,
+        base_mask: Optional[Sequence[bool]] = None,
+        overflow_parts: Optional[Sequence[Tuple[int, LineString]]] = None,
+        ring_ids: Optional[Sequence[int]] = None,
     ) -> TopologyReport:
         """
         Args:
@@ -159,6 +162,12 @@ class TopologyValidator:
             center: mandala centre. When given, the report also lists radii
                 where a full circle crosses no ink - a corridor running all the
                 way around the design.
+            base_mask: optional per-polyline flags marking base motif linework.
+                Base polylines outside the largest connected base group are
+                reported as floating base motifs.
+            overflow_parts / ring_ids: optional (ring, LineString) overflow
+                segments and the ring id of every input polyline. An overflow
+                segment may not cross ink belonging to any other ring.
             exempt_dangle_fn: optional (x, y) -> bool. Dangling endpoints for
                 which this returns True are treated as connected to context
                 outside the analyzed linework (e.g. ring boundaries when
@@ -171,6 +180,7 @@ class TopologyValidator:
                 issues=["No valid linework to analyze"],
                 unconnected_shapes=[],
                 tiny_regions=[],
+                stats={'num_floating_base': 0, 'num_overflow_crossings': 0},
             )
 
         # unary_union nodes the arrangement: every crossing (including
@@ -257,6 +267,13 @@ class TopologyValidator:
                 )
                 tiny.append((region.polygon, ShPoint(x, y)))
 
+        floating_base = self._floating_base(polylines, base_mask)
+        for x, y in floating_base:
+            issues.append(f"Floating base motif near ({x:.1f}, {y:.1f})")
+        crossings = self._overflow_crossings(polylines, overflow_parts, ring_ids)
+        for other_ring, (x, y) in crossings:
+            issues.append(f"Overflow crosses ring {other_ring} near ({x:.1f}, {y:.1f})")
+
         bare = (
             self._bare_bands(lines, center, divisions)
             if center is not None and divisions else []
@@ -308,10 +325,63 @@ class TopologyValidator:
                 'num_free_lanes': len(lanes),
                 'num_bare_bands': len(bare),
                 'num_encircling_regions': len(encircling),
+                'num_floating_base': len(floating_base),
+                'num_overflow_crossings': len(crossings),
                 'widest_lane_px': round(max((h - l for l, h in lanes), default=0.0), 1),
             },
         )
         return report
+
+    @staticmethod
+    def _floating_base(polylines, base_mask) -> List[Coord]:
+        """Centres of base polylines outside the largest connected base group."""
+        if base_mask is None:
+            return []
+        ids = structural_components(polylines)
+        base = [i for i in range(len(ids)) if i < len(base_mask) and base_mask[i]]
+        if not base:
+            return []
+        counts: Dict[int, int] = {}
+        for i in base:
+            counts[ids[i]] = counts.get(ids[i], 0) + 1
+        structure = min(counts, key=lambda c: (-counts[c], c))
+        found = []
+        for i in base:
+            if ids[i] == structure:
+                continue
+            x0, y0, x1, y1 = LineString(polylines[i]).bounds
+            found.append(((x0 + x1) / 2, (y0 + y1) / 2))
+        return found
+
+    @staticmethod
+    def _overflow_crossings(polylines, overflow_parts, ring_ids) -> List[Tuple[int, Coord]]:
+        """(other_ring, point) for each overflow line crossing another ring's ink."""
+        if overflow_parts is None or ring_ids is None:
+            return []
+        found = []
+        for ring, line in overflow_parts:
+            others = [
+                (i, LineString(pts)) for i, pts in enumerate(polylines)
+                if ring_ids[i] != ring and len(set(map(tuple, pts))) >= 2
+            ]
+            if not others:
+                continue
+            tree = STRtree([g for _, g in others])
+            ends = [ShPoint(line.coords[0]), ShPoint(line.coords[-1])]
+            for k in sorted(tree.query(line, predicate='intersects')):
+                other_index, other = others[int(k)]
+                hit = line.intersection(other)
+                if hit.is_empty:
+                    continue
+                parts = list(hit.geoms) if hasattr(hit, 'geoms') else [hit]
+                if all(
+                    part.geom_type == 'Point' and any(e.distance(part) <= 1e-6 for e in ends)
+                    for part in parts
+                ):
+                    continue
+                at = hit.centroid
+                found.append((ring_ids[other_index], (at.x, at.y)))
+        return found
 
     def _encircling_regions(self, regions, center) -> List["RegionInfo"]:
         """
@@ -685,6 +755,43 @@ class TopologyValidator:
 
 
 # ---------------------------------------------------------------- adapters
+
+def structural_components(
+    polylines: Sequence[Sequence[Coord]], touch_tolerance: float = 0.01
+) -> List[int]:
+    """
+    Component id per input polyline, before any noding. Two polylines share a
+    component when they lie within touch_tolerance of each other. Ids are
+    assigned in first-seen order, so the result is deterministic. A polyline
+    with fewer than two distinct points forms its own singleton component.
+    """
+    count = len(polylines)
+    parent = list(range(count))
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    geoms: List[LineString] = []
+    owners: List[int] = []
+    for i, pts in enumerate(polylines):
+        if len(set((float(x), float(y)) for x, y in pts)) >= 2:
+            geoms.append(LineString(pts))
+            owners.append(i)
+
+    if geoms:
+        tree = STRtree(geoms)
+        left, right = tree.query(geoms, predicate='dwithin', distance=touch_tolerance)
+        for a, b in zip(left.tolist(), right.tolist()):
+            ra, rb = find(owners[a]), find(owners[b])
+            if ra != rb:
+                parent[max(ra, rb)] = min(ra, rb)
+
+    ids: Dict[int, int] = {}
+    return [ids.setdefault(find(i), len(ids)) for i in range(count)]
+
 
 def polylines_from_shapes(shapes) -> List[List[Coord]]:
     """Adapt shape_extractor.Shape objects (sampled + rotated) to polylines."""
