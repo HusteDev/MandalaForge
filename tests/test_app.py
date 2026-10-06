@@ -1,0 +1,41 @@
+import json
+import pytest
+from app import app
+
+@pytest.fixture
+def client():
+    app.testing = True
+    return app.test_client()
+
+BASE = {"seed": 42, "num_rings": 3, "num_divisions": 8, "complexity": 0.5,
+        "min_pattern_size": 10, "categories": ["botanical", "geometric"]}
+
+def test_generate_returns_plan_and_summary(client):
+    data = client.post("/generate", json=BASE).get_json()
+    assert data["plan"]["rings"][0]["divisions"] == 8
+    assert "floating_base_count" in data["validation"]
+    assert "pattern_usage" not in data
+
+def test_ring_divisions_wrong_length_is_400(client):
+    r = client.post("/generate", json={**BASE, "ring_divisions": [8, 8]})
+    assert r.status_code == 400 and "ring_divisions" in r.get_json()["error"]
+
+def test_ring_divisions_out_of_range_is_400(client):
+    r = client.post("/generate", json={**BASE, "ring_divisions": [8, 8, 30]})
+    assert r.status_code == 400
+
+def test_regenerate_ring_round_trips_prior_seeds(client):
+    first = client.post("/regenerate-ring", json={**BASE, "ring_index": 1, "ring_seed": 5}).get_json()
+    second = client.post("/regenerate-ring", json={**BASE, "ring_index": 2, "ring_seed": 9,
+                                                   "ring_seeds": first["ring_seeds"]}).get_json()
+    assert second["ring_seeds"] == {"1": 5, "2": 9}
+    assert second["plan"]["rings"][1] == first["plan"]["rings"][1]
+
+def test_regenerate_ring_index_out_of_range_is_400(client):
+    r = client.post("/regenerate-ring", json={**BASE, "ring_index": 7})
+    assert r.status_code == 400
+
+def test_stale_ring_seeds_key_is_dropped(client):
+    r = client.post("/generate", json={**BASE, "ring_seeds": {"7": 3}})
+    assert r.status_code == 200
+    assert r.get_json()["ring_seeds"] == {}
