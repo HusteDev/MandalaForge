@@ -23,6 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const minPatternSizeSlider = document.getElementById('min-pattern-size');
     const seedInput = document.getElementById('seed');
     const includeParamsCheck = document.getElementById('include-params-check');
+    const varyDivisionsCheck = document.getElementById('vary-divisions');
 
     // Category checkboxes
     const catBotanical = document.getElementById('cat-botanical');
@@ -101,7 +102,8 @@ document.addEventListener('DOMContentLoaded', () => {
         num_divisions: parseInt(numDivisionsSlider.value),
         complexity: parseFloat(complexitySlider.value),
         min_pattern_size: parseFloat(minPatternSizeSlider.value),
-        categories: getSelectedCategories()
+        categories: getSelectedCategories(),
+        vary_divisions: varyDivisionsCheck.checked
     });
 
     const getCleanCurrentSvgMarkup = () => {
@@ -162,14 +164,30 @@ document.addEventListener('DOMContentLoaded', () => {
     const debugCopy = document.getElementById('debug-copy');
     let lastDebugText = '';
 
+    // Base motif of a sequence entry: the centre recipe if present, else the divider.
+    const entryRecipe = (entry) => (entry && (entry.centre || entry.divider)) || null;
+
+    // "petal+diamond": the base motif followed by each slot child down the chain.
+    const entryChainSummary = (entry) => {
+        const names = [];
+        let recipe = entryRecipe(entry);
+        while (recipe) {
+            names.push(recipe.motif);
+            recipe = recipe.slot_child;
+        }
+        return names.join('+');
+    };
+
+    // "petal/scallop": the ring's sequence entries joined by '/'.
+    const ringEntriesSummary = (ring) => (ring.sequence || []).map(entryChainSummary).join('/');
+
     // Every value needed to reproduce the design on screen. Without this a
     // report of "this one looks wrong" cannot be turned back into a test case.
     const renderDebugBar = (payload, data) => {
         if (!debugBar || !debugBarValues) return;
-        const rings = (data.pattern_usage || [])
-            .filter(entry => entry.variation_index === 0)
-            .sort((a, b) => a.ring_index - b.ring_index)
-            .map(entry => `R${entry.ring_index + 1}=${entry.name.replace(/^smart_/, '')}`);
+        const rings = ((data.plan && data.plan.rings) || []).map((ring, i) => (
+            `R${i + 1}=${ring.divisions}:${ringEntriesSummary(ring)}`
+        ));
         const parts = [
             `seed=${data.used_seed}`,
             `rings=${payload.num_rings}`,
@@ -178,6 +196,7 @@ document.addEventListener('DOMContentLoaded', () => {
             `complexity=${payload.complexity}`,
             `categories=${(payload.categories || []).join('+')}`,
         ];
+        if (payload.vary_divisions) parts.push('vary=true');
         if (data.validation) {
             parts.push(`valid=${data.validation.is_valid}`);
             if (!data.validation.is_valid) parts.push(`issues=${data.validation.issue_count}`);
@@ -201,7 +220,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    let currentPatternUsage = [];
+    let currentPlan = null;
+    let currentRingSeeds = {};
 
     // The QA pipeline decides whether a design is actually colourable, so show
     // the verdict instead of leaving it in a print-only field.
@@ -241,12 +261,13 @@ document.addEventListener('DOMContentLoaded', () => {
             button.type = 'button';
             button.className = 'ring-select-btn';
             button.dataset.ringIndex = ringIndex;
-            const used = currentPatternUsage.find(entry => entry.ring_index === ringIndex);
-            button.textContent = `Ring ${ringIndex + 1}`;
-            if (used && used.name) {
-                // pattern_usage was returned by the API but never shown; the
-                // name is the most useful thing to know before re-rolling a ring
-                const pretty = used.name.replace(/^smart_/, '').replace(/_/g, ' ');
+            const planRing = currentPlan && currentPlan.rings ? currentPlan.rings[ringIndex] : null;
+            const divisionsSuffix = planRing && planRing.divisions ? ` \u00b7 ${planRing.divisions}` : '';
+            button.textContent = `Ring ${ringIndex + 1}${divisionsSuffix}`;
+            const baseRecipe = planRing ? entryRecipe((planRing.sequence || [])[0]) : null;
+            if (baseRecipe && baseRecipe.motif) {
+                // The motif name is the most useful thing to know before re-rolling a ring
+                const pretty = baseRecipe.motif.replace(/_/g, ' ');
                 button.title = `Ring ${ringIndex + 1}: ${pretty}`;
                 const tag = document.createElement('span');
                 tag.className = 'ring-pattern-name';
@@ -392,6 +413,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const payload = buildGenerationPayload(seedForGeneration);
+        // A fresh design has no per-ring regenerations
+        currentRingSeeds = {};
 
         console.log('Sending payload:', payload);
         resetRingSelection();
@@ -414,7 +437,8 @@ document.addEventListener('DOMContentLoaded', () => {
             mandalaDesign.innerHTML = data.svg;
             activeSeed = data.used_seed;
             currentDesignParams = { ...payload, seed: data.used_seed };
-            currentPatternUsage = data.pattern_usage || [];
+            currentPlan = data.plan || null;
+            currentRingSeeds = data.ring_seeds || {};
             syncPendingParameterIndicators();
             prepareRingSelection();
             let validationText = '';
@@ -435,33 +459,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    const parseSvgFragment = (fragment) => {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(
-            `<svg xmlns="http://www.w3.org/2000/svg">${fragment}</svg>`,
-            'image/svg+xml'
-        );
-
-        if (doc.querySelector('parsererror')) {
-            throw new Error('Invalid SVG fragment returned by server');
-        }
-
-        return Array.from(doc.documentElement.children).map(node => (
-            document.importNode(node, true)
-        ));
-    };
-
     const regenerateSelectedRing = async () => {
         if (selectedRingIndex === null || !currentDesignParams) return;
+        if (!mandalaDesign.querySelector('svg')) return;
 
-        const currentSvg = mandalaDesign.querySelector('svg');
-        if (!currentSvg) return;
-
-        const ringSeed = Math.floor(Math.random() * 1000000);
+        const ringIndex = selectedRingIndex;
         const payload = {
             ...currentDesignParams,
-            ring_index: selectedRingIndex,
-            ring_seed: ringSeed
+            ring_index: ringIndex,
+            ring_seed: Math.floor(Math.random() * 1000000),
+            ring_seeds: currentRingSeeds
         };
 
         regenerateRingBtn.disabled = true;
@@ -479,30 +486,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(data.error || `HTTP error! status: ${response.status}`);
             }
 
-            const defs = currentSvg.querySelector('defs');
-            if (!defs) {
-                throw new Error('Current SVG has no defs section');
-            }
-
-            defs.querySelectorAll(`g[id^="ring-${selectedRingIndex}-var-"]`).forEach(node => {
-                node.remove();
-            });
-
-            parseSvgFragment(data.defs_svg).forEach(node => {
-                defs.appendChild(node);
-            });
-
-            const oldRing = currentSvg.querySelector(`#mandala > g#ring-${selectedRingIndex}`);
-            const newRing = parseSvgFragment(data.ring_svg)[0];
-            if (!oldRing || !newRing) {
-                throw new Error('Could not replace selected ring');
-            }
-
-            oldRing.replaceWith(newRing);
-            currentDesignParams = { ...currentDesignParams };
+            // Rings reach into each other, so the server returns the whole document
+            mandalaDesign.innerHTML = data.svg;
+            currentRingSeeds = data.ring_seeds || {};
+            currentPlan = data.plan || null;
+            prepareRingSelection();
+            selectRingByIndex(ringIndex);
             syncPendingParameterIndicators();
-            renderRingSelector();
-            selectRing(newRing);
 
             if (data.validation) {
                 const validationText = `\nValidation: ${data.validation.is_valid ? 'passed' : 'failed'} (${data.validation.issue_count} issues)`;
@@ -511,6 +501,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     console.warn('Ring validation issues:', data.validation.issues);
                 }
             }
+            renderValidationStatus(data.validation);
+            renderDebugBar(currentDesignParams, { ...data, used_seed: activeSeed });
         } catch (error) {
             console.error('Error regenerating ring:', error);
             regenerateRingBtn.textContent = 'Regenerate Ring Failed';
@@ -545,6 +537,8 @@ document.addEventListener('DOMContentLoaded', () => {
         numDivisionsSlider.value = (Math.floor(Math.random() * 10) + 3) * 2; // 6-24, even
         complexitySlider.value = (Math.random() * 0.8 + 0.2).toFixed(1); // 0.2-1.0
         minPatternSizeSlider.value = Math.floor(Math.random() * 30) + 10; // 10-40
+
+        varyDivisionsCheck.checked = Math.random() < 0.5;
 
         // Update displays
         sliderControls.forEach(updateSliderDisplay);
@@ -607,8 +601,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         num_divisions: parseInt(item.params.num_divisions),
                         complexity: parseFloat(item.params.complexity),
                         min_pattern_size: parseFloat(item.params.min_pattern_size),
-                        categories: item.params.categories || ['botanical']
+                        categories: item.params.categories || ['botanical'],
+                        vary_divisions: !!item.params.vary_divisions
                     };
+                    currentPlan = null;
+                    currentRingSeeds = {};
                     activeSeed = currentDesignParams.seed;
                     syncPendingParameterIndicators();
                 }

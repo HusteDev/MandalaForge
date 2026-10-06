@@ -277,6 +277,16 @@ button:disabled {
     cursor: not-allowed;
 }
 
+.control-group label.checkbox-inline {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    margin-bottom: 0;
+    font-weight: 600;
+    cursor: pointer;
+}
+
 .checkbox-group {
     display: flex;
     align-items: center;
