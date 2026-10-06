@@ -95,6 +95,20 @@ def test_petal_inward_overflow_ends_on_the_boundary_circle():
         for x, y in (inward[0].coords[0], inward[0].coords[-1]):
             assert math.isclose(math.hypot(x - CENTER[0], y - CENTER[1]), 100.0, abs_tol=1e-6)
 
+def test_overflow_run_ends_on_the_drawn_segment_and_the_boundary_circle():
+    # The validator checks overflow runs as ink, so a run's interpolated end must lie on the
+    # segment actually drawn between the two traced coordinates, not on the arc beside it.
+    from placement import PlacedPath, boundary_crossing
+    centre = (0.0, 0.0)
+    inside = (90.0, 0.0)  # radial 0.8 of a ring from radius 50 to 100
+    outside = (110.0 * math.cos(math.radians(30.0)), 110.0 * math.sin(math.radians(30.0)))  # radial 1.2
+    path = PlacedPath(1, 0, "centre", (0,), "base", [inside, outside], [0.8, 1.2], False, 1.0)
+    x, y = boundary_crossing(path, 0, 1, "outward", centre)
+    assert LineString([inside, outside]).distance(Point(x, y)) <= 1e-9
+    assert math.isclose(math.hypot(x, y), 100.0, abs_tol=1e-9)
+    [(side, run)] = path_overflow(path, centre)
+    assert side == "outward" and run.coords[0] == (x, y)
+
 def test_first_hit_from_ring_one_boundary_finds_ring_zero_ink():
     a = build(manual_plan())
     start = (CENTER[0] + 100.0, CENTER[1])

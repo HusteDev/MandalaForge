@@ -39,6 +39,11 @@ Coord = Tuple[float, float]
 # against float noise.
 _NODE_DECIMALS = 4
 
+# A face must fit a pen tip of this radius somewhere, and be at least this large.
+# The generator validates with these, and the engine checks the strokes it adds against them.
+PEN_RADIUS_PX = 2.0
+MIN_REGION_AREA_PX2 = 20.0
+
 
 @dataclass
 class RegionInfo:
@@ -126,8 +131,8 @@ class TopologyValidator:
         self,
         snap_tolerance: float = 2.5,
         whisker_tolerance: float = 1.0,
-        pen_radius: float = 2.0,
-        min_region_area: float = 20.0,
+        pen_radius: float = PEN_RADIUS_PX,
+        min_region_area: float = MIN_REGION_AREA_PX2,
         min_lane_px: float = 4.0,
         ink_radius: float = 0.75,
         sliver_area: float = 0.5,
@@ -331,6 +336,20 @@ class TopologyValidator:
             },
         )
         return report
+
+    def faces(self, polylines: Sequence[Sequence[Coord]]) -> List[RegionInfo]:
+        """
+        The faces `polylines` enclose, noded and judged exactly as `analyze`
+        judges them, without its whisker and gap repair (which only changes
+        faces at dangling ends). Lets the engine test a stroke before adding it.
+        """
+        lines = self._build_lines(polylines)
+        if not lines:
+            return []
+        import shapely as _shapely
+        edges = self._as_line_list(_shapely.set_precision(unary_union(lines), 0.001))
+        polygons = polygonize_full(edges)[0]
+        return self._resolve_faces(list(polygons.geoms))
 
     @staticmethod
     def _floating_base(polylines, base_mask) -> List[Coord]:

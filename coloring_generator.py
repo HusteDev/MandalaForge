@@ -15,7 +15,7 @@ from assembler import Assembler, AssembledDesign
 from composer import Composer, ComposerSettings, DesignPlan
 from motifs.geometry import cell_rotation_deg
 from placement import PlacedPath
-from topology_validator import TopologyReport, TopologyValidator
+from topology_validator import MIN_REGION_AREA_PX2, PEN_RADIUS_PX, TopologyReport, TopologyValidator
 
 
 class DesignGenerator:
@@ -252,8 +252,8 @@ class DesignGenerator:
         validator = TopologyValidator(
             snap_tolerance=2.5,     # gaps under a stroke width render connected
             whisker_tolerance=5.0,  # overshoot stubs up to 5px read as corners
-            pen_radius=2.0,         # a face must fit a 2px pen tip somewhere
-            min_region_area=20.0,
+            pen_radius=PEN_RADIUS_PX,  # a face must fit a 2px pen tip somewhere
+            min_region_area=MIN_REGION_AREA_PX2,
         )
         result = validator.analyze(
             polylines,

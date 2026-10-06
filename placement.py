@@ -67,10 +67,11 @@ def _overflow_side(radial: float) -> Optional[str]:
 def boundary_crossing(path: PlacedPath, inside: int, outside: int, side: str, center: PointTuple) -> PointTuple:
     """
     Where the path between coordinates `inside` and `outside` crosses the ring
-    boundary on `side`. Radius and angle about `center` are both linear in the
-    cell-space parameter between two traced coordinates, so the crossing is
-    interpolated in polar form and lands exactly on the boundary circle, not on
-    the chord.
+    boundary on `side`. The point lies on the drawn segment between the two
+    coordinates, since an overflow run is ink and is checked as ink, and on the
+    boundary circle: radius is linear in the cell-space parameter between two
+    traced coordinates, which gives the circle's radius, and the segment from
+    inside it to outside meets that circle once.
     """
     boundary = 0.0 if side == "inward" else 1.0
     radials = path.radials
@@ -78,11 +79,22 @@ def boundary_crossing(path: PlacedPath, inside: int, outside: int, side: str, ce
     cx, cy = center
     (x0, y0), (x1, y1) = path.coords[inside], path.coords[outside]
     r0, r1 = math.hypot(x0 - cx, y0 - cy), math.hypot(x1 - cx, y1 - cy)
-    a0, a1 = math.atan2(y0 - cy, x0 - cx), math.atan2(y1 - cy, x1 - cx)
-    sweep = (a1 - a0 + math.pi) % (2.0 * math.pi) - math.pi  # shortest turn, safe across +-180 degrees
     radius = r0 + (r1 - r0) * t
-    angle = a0 + sweep * t
-    return (cx + radius * math.cos(angle), cy + radius * math.sin(angle))
+    # |p0 - c + s (p1 - p0)| = radius, a quadratic in s along the segment.
+    dx, dy = x1 - x0, y1 - y0
+    ox, oy = x0 - cx, y0 - cy
+    a = dx * dx + dy * dy
+    b = 2.0 * (ox * dx + oy * dy)
+    c = ox * ox + oy * oy - radius * radius
+    s = t
+    discriminant = b * b - 4.0 * a * c
+    if a > 0.0 and discriminant >= 0.0:
+        root = math.sqrt(discriminant)
+        roots = [r for r in ((-b - root) / (2.0 * a), (-b + root) / (2.0 * a)) if -1e-9 <= r <= 1.0 + 1e-9]
+        if roots:
+            s = min(roots, key=lambda r: abs(r - t))
+    s = max(0.0, min(1.0, s))
+    return (x0 + dx * s, y0 + dy * s)
 
 
 def path_overflow(path: PlacedPath, center: PointTuple) -> List[Tuple[str, LineString]]:

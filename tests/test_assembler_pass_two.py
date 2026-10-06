@@ -315,3 +315,19 @@ def test_final_contact_check_names_a_base_that_floated_after_its_ring_was_resolv
     a.index.remove(reach)
     with pytest.raises(AssemblyError, match=r"ring 1 cell 0 \(centre\).*floats"):
         resolver.check_contact(a)
+
+
+def _slit(spread):
+    # Two lines from one point, `spread` apart 40px along: a reach across their open end closes a face.
+    asm = types.SimpleNamespace(index=InkIndex())
+    asm.index.add(PlacedPath(0, 0, "centre", (0,), "base", [(0.0, 0.0), (40.0, spread / 2)], [0.5, 0.5], False, 1.0))
+    asm.index.add(PlacedPath(0, 1, "centre", (0,), "base", [(0.0, 0.0), (40.0, -spread / 2)], [0.5, 0.5], False, 1.0))
+    return asm
+
+def test_reach_that_would_close_a_slit_too_thin_to_colour_is_refused():
+    assert resolver._closes_uncolourable_face(_slit(3.0), 0, [(40.0, 1.5), (40.0, -1.5)])
+    assert not resolver._closes_uncolourable_face(_slit(40.0), 0, [(40.0, 20.0), (40.0, -20.0)])
+
+def test_wavy_reach_is_refused_when_no_flattening_is_accepted():
+    asm = types.SimpleNamespace(index=InkIndex())
+    assert resolver._wavy_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0), lambda coords: False) is None

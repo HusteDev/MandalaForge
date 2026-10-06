@@ -29,7 +29,7 @@ import assembler
 from motifs.contract import MotifError, ReachEnd
 from motifs.geometry import MotifContext, PointTuple
 from placement import PlacedPath, path_geometry
-from topology_validator import structural_components
+from topology_validator import TopologyValidator, structural_components
 
 if TYPE_CHECKING:
     from assembler import Assembler, PendingReach, PlacedNode, Regenerated
@@ -60,6 +60,14 @@ WAVY_MAX_AMPLITUDE_PX = 3.0
 WAVY_AMPLITUDE_SHARE = 0.1
 # A wave that would cross ink is flattened through these amplitude scales.
 WAVY_FALLBACK_SCALES = (1.0, 0.5, 0.25, 0.0)
+# A reach's midpoint this close to a face's boundary bounds that face (noding snaps to 0.001px).
+FACE_PROBE_PX = 0.01
+# Faces beside a reach are built from ink within this margin of it, the margin growing
+# this many times around a face that runs out of it.
+FACE_WINDOW_PX = 24.0
+FACE_WINDOW_GROWTHS = 3
+# Judges the faces a reach would close with the generator's own thresholds.
+FACE_RULES = TopologyValidator()
 
 
 @dataclass(eq=False)
@@ -386,7 +394,14 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     if math.hypot(end[0] - start[0], end[1] - start[1]) <= ON_INK_PX:
         return None, target  # the start already lies on other ink: a touch, with a vertex on both
 
-    coords = [start, end] if reach_end.style == "straight" else _wavy_clear_of_ink(asm, start, end)
+    leaves_room = lambda coords: not _closes_uncolourable_face(asm, node.ring_index, coords)
+    if reach_end.style == "straight":
+        coords = [start, end] if leaves_room([start, end]) else None
+    else:
+        coords = _wavy_clear_of_ink(asm, start, end, leaves_room)
+    if coords is None:
+        # Any reach here would close off a face too thin or too small to colour: none is drawn.
+        return None, target
     path = PlacedPath(
         node.ring_index, node.cell_index, node.position, node.node_path, "reach",
         coords, [_radial(node.context, point) for point in coords], False, asm.stroke_width,
@@ -397,20 +412,52 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     return path, target
 
 
-def _wavy_clear_of_ink(asm: Assembler, start: PointTuple, end: PointTuple) -> List[PointTuple]:
+def _wavy_clear_of_ink(asm: Assembler, start: PointTuple, end: PointTuple,
+                      accept: Callable[[List[PointTuple]], bool] = lambda coords: True) -> Optional[List[PointTuple]]:
     """
     The wavy reach from `start` to `end`, its wave flattened step by step until
-    it meets ink only at its two ends. The straight segment always qualifies,
-    being the ray up to its first hit.
+    it meets ink only at its two ends and `accept` takes it. The straight
+    segment always meets ink only at its ends, being the ray up to its first
+    hit; None when `accept` refuses even that.
     """
     ends = (Point(start), Point(end))
     for scale in WAVY_FALLBACK_SCALES:
         coords = wavy_coords(start, end, scale)
         line = LineString(coords)
-        if scale == 0.0 or all(_only_at(line.intersection(path_geometry(other)), ends)
-                               for other in asm.index.candidates(line)):
+        if (scale == 0.0 or all(_only_at(line.intersection(path_geometry(other)), ends)
+                                for other in asm.index.candidates(line))) and accept(coords):
             return coords
-    return coords
+    return None
+
+
+def _closes_uncolourable_face(asm: Assembler, ring_index: int, coords: Sequence[PointTuple]) -> bool:
+    """
+    Whether a reach drawn along `coords` would bound a face that is too thin or
+    too small to colour, judged as the validator judges faces. A short reach
+    across a slit between two lines that meet behind it closes the slit off.
+    Only ink of the reach's own ring and the rings inside it counts: those are
+    resolved, while outer rings may still hold overflow that is yet to be pulled back.
+
+    Faces are built from the ink near the reach. A face lying inside that
+    window is exact, since ink outside it cannot cut the face. One that runs
+    out of the window may be cut beyond it into smaller faces, so the window
+    grows to take it in; one already too thin or small only gets more so.
+    """
+    reach = LineString(coords)
+    probe = reach.interpolate(0.5, normalized=True)
+    window = shapely.box(*reach.bounds).buffer(FACE_WINDOW_PX, join_style="mitre")
+    for _ in range(FACE_WINDOW_GROWTHS + 1):
+        local = [path.coords for path in asm.index.candidates(window) if path.ring_index <= ring_index]
+        beside = [face for face in FACE_RULES.faces(local + [list(coords)])
+                  if face.polygon.boundary.distance(probe) <= FACE_PROBE_PX]
+        if any(face.is_uncolorable for face in beside):
+            return True
+        outside = [face.polygon for face in beside if not window.contains(face.polygon)]
+        if not outside:
+            return False
+        grown = shapely.union_all([window, *outside])
+        window = shapely.box(*grown.bounds).buffer(FACE_WINDOW_PX, join_style="mitre")
+    return False
 
 
 def _only_at(hit: BaseGeometry, points: Sequence[Point]) -> bool:
