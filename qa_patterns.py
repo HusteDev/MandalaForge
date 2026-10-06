@@ -1,20 +1,20 @@
 """
-Per-pattern coverage harness.
+Per-motif coverage harness.
 
-`qa_report.py --corpus` only exercises whichever patterns random selection
-happens to pick, so a pattern can ship untested — that is exactly how
-`smart_resonance_ladder` stayed broken (rejected in ~70% of designs) while the
-corpus reported 90/90.
+`qa_report.py --corpus` only exercises whichever motifs random selection happens
+to pick, so a motif can ship untested. This harness forces each registered motif
+in turn, in every position and role it supports, over a matrix of ring-division
+fixtures, and drives the REAL generation pipeline. Forcing disables the fallback
+chain (a rejection is a visible failure, not a silent substitution) and never
+applies to ring 0.
 
-This harness pins each registered pattern in turn and drives the REAL
-generation pipeline over a parameter matrix, so every pattern is proven in
-isolation. Forcing bypasses the ring-position and size gates (so a pattern is
-probed outside its declared envelope) and disables the fallback chain (so a
-rejection is a visible failure, not a silent substitution).
+It also checks four properties of each motif's generator on a standard cell:
+determinism, narrower radial limits never reaching further, angular containment
+and an honest slot declaration.
 
 Usage:
-    python qa_patterns.py                        # smoke tier, every pattern
-    python qa_patterns.py --pattern smart_petal  # one pattern, verbose
+    python qa_patterns.py                        # smoke tier, every motif
+    python qa_patterns.py --motif petal          # one motif
     python qa_patterns.py --tier full
     python qa_patterns.py --list
 """
@@ -29,187 +29,220 @@ from concurrent.futures import ProcessPoolExecutor
 from contextlib import redirect_stdout
 
 from coloring_generator import DesignGenerator
-from smart_patterns import SMART_PATTERNS, get_safe_fallback_pattern
+from motifs import MOTIFS, find_motif, safe_motif
+from motifs.contract import MotifError
+from motifs.geometry import CellPoint, MotifContext
 
 CATEGORIES = ['botanical', 'geometric', 'celtic', 'art_deco', 'abstract']
+POSITIONS = ('centre', 'divider', 'both')
+ROLES = ('base', 'slot', 'contact')
+DEFAULT_SEED = 20260821
 
-# divisions=6 with a large radius is the cell that reproduces the worst
-# chord/arc error (~37px); it must stay in the smoke tier.
-# ring_counts stay inside the UI's supported 2-7 range. rings=1 makes a pattern
-# simultaneously first AND last, which the product cannot produce, so failures
-# there would be chasing an unreachable configuration. rings=3 still covers
-# first / middle / last plus two real ring interfaces.
-SMOKE = {
-    'divisions': (6, 12, 24),
-    'ring_counts': (2, 3),
+# (8, 8, 8, 12) is the fixture of the original sketch; (24, 24, 24) is the dense
+# case where cells are narrowest. Ring count follows the tuple length.
+RING_DIVISIONS = ((8, 8, 8, 12), (7, 12), (6, 6), (24, 24, 24))
+MATRIX_SMOKE = {
+    'ring_divisions': RING_DIVISIONS,
     'complexity': (0.15, 0.5, 0.9),
     'min_white': (10,),
+    'position': POSITIONS,
+    'role': ROLES,
 }
-FULL = {
-    'divisions': (6, 8, 12, 16, 24),
-    'ring_counts': (2, 3, 5),
+MATRIX_FULL = {
+    'ring_divisions': RING_DIVISIONS,
     'complexity': (0.15, 0.35, 0.5, 0.7, 0.9),
     'min_white': (5, 10, 25),
+    'position': POSITIONS,
+    'role': ROLES,
 }
 
+# A job role and the role name the registry uses for it.
+REGISTRY_ROLE = {'base': 'base', 'slot': 'slot', 'contact': 'attachment'}
+# Share of a cell a node gets when centre and divider both carry one (the
+# composer's share varies per ring; this is the middle of its range).
+BOTH_BUDGET = 0.6
+# A design must carry at least this share of one face per cell outside ring 0.
+REGION_FLOOR = 0.75
 
-def all_pattern_names():
-    names = [(p['name'], p['category']) for p in SMART_PATTERNS]
-    names += [(get_safe_fallback_pattern(c)['name'], c) for c in CATEGORIES]
-    return names
+STATUSES = ('PASS', 'SKIP', 'FAIL', 'CONTRACT', 'ERROR')
 
 
-def _declared_gate(name, category):
-    for pattern in SMART_PATTERNS:
-        if pattern['name'] == name:
-            return (pattern.get('min_ring_width', 0),
-                    pattern.get('min_cell_width_px', 0.0),
-                    pattern.get('max_ring_aspect'))
-    fallback = get_safe_fallback_pattern(category)
-    return (fallback.get('min_ring_width', 0),
-            fallback.get('min_cell_width_px', 0.0),
-            fallback.get('max_ring_aspect'))
+def _supports(entry, position, role):
+    needed = ('centre', 'divider') if position == 'both' else (position,)
+    return (all(p in entry['positions'] for p in needed)
+            and REGISTRY_ROLE[role] in entry['roles'])
+
+
+def _gate_skip(entry, generator, ring_divisions, position):
+    """Reason the declared gates exclude the fixture, or None. Ring 0 is never forced."""
+    budget = BOTH_BUDGET if position == 'both' else 1.0
+    cells, depths = [], []
+    for ring, divisions in list(zip(generator.rings, ring_divisions))[1:]:
+        mid = (ring['inner_radius'] + ring['outer_radius']) / 2.0
+        cells.append(mid * math.radians(360.0 / divisions) * budget)
+        depths.append(ring['outer_radius'] - ring['inner_radius'])
+    if not cells:
+        return "no ring past the centre to force"
+    cell, depth = min(cells), min(depths)
+    if entry['min_cell_width_px'] > cell:
+        return f"cell {cell:.0f}px < gate {entry['min_cell_width_px']:.0f}px"
+    if entry['min_ring_depth_px'] > depth:
+        return f"ring depth {depth:.0f}px < gate {entry['min_ring_depth_px']:.0f}px"
+    return None
 
 
 def run_case(job):
-    name, category, divisions, rings, complexity, min_white, seed, probe = job
-    label = f"div{divisions}_rings{rings}_c{complexity}_mws{min_white}"
+    name, category, ring_divisions, complexity, min_white, position, role, seed, probe = job
+    label = f"div{'-'.join(map(str, ring_divisions))}_c{complexity}_mws{min_white}_{position}_{role}"
 
-    chatter = io.StringIO()
+    def result(status, detail=''):
+        return {'name': name, 'label': label, 'status': status, 'detail': detail[:200]}
+
+    entry = find_motif(name)
+    if entry is None:
+        return result('ERROR', f"unknown motif {name}")
+    if not _supports(entry, position, role):
+        return result('SKIP', f"{position}/{role} unsupported")
+
     try:
-        with redirect_stdout(chatter):
+        with redirect_stdout(io.StringIO()):
             generator = DesignGenerator(
-                seed=seed, num_rings=rings, num_divisions=divisions,
-                complexity=complexity, min_pattern_size=min_white,
-                categories=[category], force_pattern_name=name,
+                seed=seed, num_rings=len(ring_divisions), num_divisions=ring_divisions[0],
+                complexity=complexity, min_pattern_size=min_white, categories=[category],
+                ring_divisions=list(ring_divisions),
+                force_motif={'name': name, 'position': position, 'role': role},
             )
             if not probe:
-                # Respect the pattern's declared envelope. Forcing still
-                # bypasses ring-position rules, but a pattern is not failed for
-                # a cell size it explicitly says it does not fit.
-                min_ring, min_cell, max_aspect = _declared_gate(name, category)
-                for ring in generator.rings:
-                    width = ring['outer_radius'] - ring['inner_radius']
-                    mid = ring['inner_radius'] + width * 0.5
-                    cell = mid * math.radians(360.0 / divisions)
-                    if width < min_ring or cell < min_cell:
-                        return {'name': name, 'label': label,
-                                'status': 'SKIP', 'detail': f"cell {cell:.0f}px < gate {min_cell:.0f}px"}
-                    if max_aspect and cell > 0 and width / cell > max_aspect:
-                        return {'name': name, 'label': label, 'status': 'SKIP',
-                                'detail': f"ring aspect {width / cell:.1f} > {max_aspect}"}
+                reason = _gate_skip(entry, generator, ring_divisions, position)
+                if reason:
+                    return result('SKIP', reason)
             generator.generate()
-    except ValueError as exc:
+    except MotifError as exc:
+        return result('CONTRACT', str(exc))
+    except ValueError as exc:  # includes AssemblyError
         text = str(exc)
-        # A cell-contract break and a topology failure have different fixes,
-        # so they are reported in different columns.
-        kind = 'CONTRACT' if 'Invalid smart pattern' in text else 'REJECTED'
-        return {'name': name, 'label': label, 'status': kind, 'detail': text[:200]}
+        if 'Invalid' in text or 'MotifError' in text:
+            return result('CONTRACT', text)
+        return result('ERROR', f"{type(exc).__name__}: {text}")
     except Exception as exc:
-        return {'name': name, 'label': label, 'status': 'ERROR',
-                'detail': f"{type(exc).__name__}: {exc}"[:200]}
+        return result('ERROR', f"{type(exc).__name__}: {exc}")
 
     report = generator.last_validation_result
-    stats = report.stats
-    problems = []
-
     if not report.is_valid:
-        problems.append(report.issues[0] if report.issues else 'invalid')
-
-    # H6: the pattern must actually subdivide its ring. The bar is deliberately
-    # below one face per cell - faces legitimately merge across cells - but it
-    # still catches a pattern that draws only concentric loops.
-    floor = int(divisions * 0.75)
-    if stats.get('num_regions', 0) < floor:
-        problems.append(f"only {stats.get('num_regions', 0)} regions for {divisions} cells (floor {floor})")
-
-    # H7: forcing disables fallback, so any fallback use is a bug in the harness wiring
-    if any(u.get('is_safe_fallback') for u in generator.pattern_usage) and 'safe_spoke' not in name:
-        problems.append('fell back despite forcing')
-
-    if problems:
-        return {'name': name, 'label': label, 'status': 'FAIL', 'detail': '; '.join(problems)[:200]}
-    return {'name': name, 'label': label, 'status': 'PASS', 'detail': ''}
+        return result('FAIL', report.issues[0] if report.issues else 'invalid')
+    cells = sum(ring_divisions[1:])
+    floor = REGION_FLOOR * cells
+    regions = report.stats.get('num_regions', 0)
+    if regions < floor:
+        return result('FAIL', f"only {regions} regions for {cells} cells (floor {floor:.0f})")
+    return result('PASS')
 
 
-def check_port_stability(name, category):
-    """
-    H2 — regression test for the rule-4 bug that shipped once already.
+# ------------------------------------------------------------ property checks
 
-    Side-port radials must come from the ring-stable `port_rng`. Generating with
-    the same port_rng seed but different per-variation rng seeds must produce
-    identical side-boundary radials; otherwise cells drawn from different
-    variations of one ring cannot meet.
-    """
-    from smart_patterns.core import boundary_side
+PROPERTY_CELL = dict(inner_radius=100.0, outer_radius=160.0, wedge_angle=30.0,
+                     center=(306.0, 306.0), stroke_width=1.5, complexity=0.5,
+                     min_white_space=10.0)
 
-    pattern = next((p for p in SMART_PATTERNS if p['name'] == name), None)
-    if pattern is None:
-        pattern = get_safe_fallback_pattern(category)
 
-    signatures = []
-    for extension in (0.0, 0.137, 0.291):     # different per-variation streams
-        rng = random.Random(9001 + int(extension * 1000))
-        port_rng = random.Random(9001)        # identical ring-stable stream
+def _generate(entry, seed, **over):
+    context = MotifContext(**PROPERTY_CELL, rng=random.Random(seed), **over)
+    if 'base' not in entry['roles']:
+        # A motif that cannot stand alone needs a slot to sit in.
+        context.slot = [CellPoint(0.2, -0.4), CellPoint(0.2, 0.4),
+                        CellPoint(0.8, 0.4), CellPoint(0.8, -0.4)]
+    return entry['generator'](context)
+
+
+def _points(instance):
+    return [p for vector in instance.vectors for p in vector.points]
+
+
+def _deterministic(entry):
+    first, second = _generate(entry, 11), _generate(entry, 11)
+    return [v.points for v in first.vectors] == [v.points for v in second.vectors]
+
+
+def _monotone(entry):
+    wide = _points(_generate(entry, 5, radial_limits=(-0.25, 1.25)))
+    narrow = _points(_generate(entry, 5, radial_limits=(-0.1, 1.1)))
+    if not narrow:
+        return True
+    high = max(p.radial for p in wide) if wide else 0
+    low = min(p.radial for p in wide) if wide else 0
+    return (max(p.radial for p in narrow) <= high + 1e-9
+            and min(p.radial for p in narrow) >= low - 1e-9)
+
+
+def _angular(entry):
+    inst = _generate(entry, 3, radial_limits=(0.0, 1.0), angular_limits=0.5)
+    return all(-0.03 <= p.radial <= 1.03 and abs(p.angular) <= 0.53 for p in _points(inst))
+
+
+def _slot(entry):
+    if not entry['slot_estimate']:
+        return True
+    return _generate(entry, 9).declaration.slot is not None
+
+
+def property_checks(entry):
+    """Run the four generator property checks on the standard test cell."""
+    checks = {'deterministic': _deterministic, 'monotone': _monotone,
+              'angular': _angular, 'slot': _slot}
+    outcome = {}
+    for key, check in checks.items():
         try:
-            with redirect_stdout(io.StringIO()):
-                elements = pattern['generator'](
-                    inner_radius=120.0, outer_radius=180.0, wedge_angle=30.0,
-                    center=(306.0, 306.0), complexity=0.75, stroke_width=1.5,
-                    ring_index=1, is_first_ring=False, is_last_ring=False,
-                    rng=rng, port_rng=port_rng, min_white_space=10.0,
-                )
-        except ValueError:
-            return None                       # cannot judge; the case matrix covers it
-        radials = []
-        for element in elements:
-            vector = element.get('smart_vector')
-            if vector is None:
-                continue
-            radials += [round(p.radial, 6) for p in vector.points
-                        if boundary_side(p) in ('left', 'right')]
-        signatures.append(tuple(sorted(radials)))
+            outcome[key] = bool(check(entry))
+        except MotifError:
+            outcome[key] = False
+    return outcome
 
-    return all(sig == signatures[0] for sig in signatures)
+
+# ------------------------------------------------------------------------ CLI
+
+def build_jobs(entries, matrix, seed, probe):
+    return [
+        (entry['name'], entry['category'], ring_divisions, complexity, min_white,
+         position, role, seed, probe)
+        for entry in entries
+        for ring_divisions in matrix['ring_divisions']
+        for complexity in matrix['complexity']
+        for min_white in matrix['min_white']
+        for position in matrix['position']
+        for role in matrix['role']
+    ]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Per-pattern coverage harness")
-    parser.add_argument('--pattern', help="run only this pattern")
+    parser = argparse.ArgumentParser(description="Per-motif coverage harness")
+    parser.add_argument('--motif', help="run only this motif")
     parser.add_argument('--tier', choices=['smoke', 'full'], default='smoke')
-    parser.add_argument('--list', action='store_true', help="list registered patterns and exit")
+    parser.add_argument('--list', action='store_true', help="list registered motifs and exit")
     parser.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 2) // 2))
-    parser.add_argument('--seed', type=int, default=20260821)
+    parser.add_argument('--seed', type=int, default=DEFAULT_SEED)
     parser.add_argument('--probe', action='store_true',
-                        help="ignore declared min_ring_width / min_cell_width_px gates "
+                        help="ignore declared min_cell_width_px / min_ring_depth_px gates "
                              "(use to recalibrate them, not as a pass/fail gate)")
     args = parser.parse_args()
 
-    patterns = all_pattern_names()
     if args.list:
-        for name, category in patterns:
-            print(f"  {category:10} {name}")
-        print(f"\n{len(patterns)} patterns registered "
-              f"({len(SMART_PATTERNS)} real + {len(CATEGORIES)} fallbacks)")
-        return
+        for entry in MOTIFS:
+            print(f"  {entry['category']:10} {entry['name']}")
+        for category in CATEGORIES:
+            print(f"  {category:10} {safe_motif(category)['name']} (safe band)")
+        print(f"\n{len(MOTIFS)} motifs registered + {len(CATEGORIES)} safe bands")
+        return 0
 
-    if args.pattern:
-        patterns = [(n, c) for n, c in patterns if n == args.pattern]
-        if not patterns:
-            print(f"No such pattern: {args.pattern}")
-            sys.exit(2)
+    entries = MOTIFS
+    if args.motif:
+        entries = [e for e in MOTIFS if e['name'] == args.motif]
+        if not entries:
+            print(f"No such motif: {args.motif}")
+            return 2
 
-    matrix = SMOKE if args.tier == 'smoke' else FULL
-    jobs = [
-        (name, category, divisions, rings, complexity, min_white, args.seed, args.probe)
-        for name, category in patterns
-        for divisions in matrix['divisions']
-        for rings in matrix['ring_counts']
-        for complexity in matrix['complexity']
-        for min_white in matrix['min_white']
-    ]
-
-    print(f"{len(patterns)} pattern(s) x {len(jobs)//max(1,len(patterns))} cases "
+    matrix = MATRIX_SMOKE if args.tier == 'smoke' else MATRIX_FULL
+    jobs = build_jobs(entries, matrix, args.seed, args.probe)
+    print(f"{len(entries)} motif(s) x {len(jobs) // len(entries)} cases "
           f"= {len(jobs)} runs ({args.tier} tier, {args.jobs} workers)\n")
 
     if args.jobs > 1 and len(jobs) > 1:
@@ -218,40 +251,42 @@ def main():
     else:
         results = [run_case(job) for job in jobs]
 
-    by_pattern = {}
+    by_motif = {}
     for result in results:
-        by_pattern.setdefault(result['name'], []).append(result)
+        by_motif.setdefault(result['name'], []).append(result)
 
-    print(f"{'PATTERN':30} {'PASS':>5} {'SKIP':>5} {'FAIL':>5} {'CONTR':>6} {'ERR':>4} {'PORTS':>6}")
-    print("-" * 68)
-    failed_patterns = []
-    for name, category in patterns:
-        rows = by_pattern.get(name, [])
-        counts = {k: sum(1 for r in rows if r['status'] == k)
-                  for k in ('PASS', 'FAIL', 'CONTRACT', 'REJECTED', 'ERROR', 'SKIP')}
-        stable = check_port_stability(name, category)
-        ports = 'ok' if stable else ('n/a' if stable is None else 'BAD')
-        bad = counts['FAIL'] + counts['ERROR'] + counts['REJECTED'] + counts['CONTRACT']
-        if bad or ports == 'BAD':
-            failed_patterns.append(name)
-        print(f"{name:30} {counts['PASS']:>5} {counts['SKIP']:>5} "
-              f"{counts['FAIL'] + counts['REJECTED']:>5} {counts['CONTRACT']:>6} "
-              f"{counts['ERROR']:>4} {ports:>6}")
+    header = (f"{'MOTIF':16} {'PASS':>5} {'SKIP':>5} {'FAIL':>5} {'CONTR':>6} {'ERR':>4} "
+              f"{'DET':>5} {'MONO':>5} {'ANG':>5} {'SLOT':>5}")
+    print(header)
+    print("-" * len(header))
+    failed = []
+    for entry in entries:
+        name = entry['name']
+        rows = by_motif.get(name, [])
+        counts = {k: sum(1 for r in rows if r['status'] == k) for k in STATUSES}
+        props = property_checks(entry)
+        mark = {True: 'ok', False: 'BAD'}
+        if counts['FAIL'] or counts['CONTRACT'] or counts['ERROR'] or not all(props.values()):
+            failed.append(name)
+        print(f"{name:16} {counts['PASS']:>5} {counts['SKIP']:>5} {counts['FAIL']:>5} "
+              f"{counts['CONTRACT']:>6} {counts['ERROR']:>4} "
+              f"{mark[props['deterministic']]:>5} {mark[props['monotone']]:>5} "
+              f"{mark[props['angular']]:>5} {mark[props['slot']]:>5}")
 
-    if failed_patterns:
+    if failed:
         print("\nFailing cases:")
-        for name in failed_patterns:
-            for result in by_pattern.get(name, []):
+        for name in failed:
+            for result in by_motif.get(name, []):
                 if result['status'] not in ('PASS', 'SKIP'):
-                    print(f"  {result['name']:28} {result['label']:26} "
+                    print(f"  {result['name']:14} {result['label']:44} "
                           f"[{result['status']}] {result['detail']}")
 
-    print("-" * 68)
+    print("-" * len(header))
     total_pass = sum(1 for r in results if r['status'] == 'PASS')
     print(f"{total_pass}/{len(results)} cases passed across "
-          f"{len(patterns) - len(failed_patterns)}/{len(patterns)} patterns.")
-    sys.exit(1 if failed_patterns else 0)
+          f"{len(entries) - len(failed)}/{len(entries)} motifs.")
+    return 1 if failed else 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
