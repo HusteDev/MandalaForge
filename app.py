@@ -43,8 +43,25 @@ def _parse_ring_seeds(raw, num_rings):
         return {}
     if not isinstance(raw, dict):
         raise ValueError('ring_seeds must be an object')
-    seeds = {int(key): int(value) for key, value in raw.items()}
+    message = 'ring_seeds must map ring indexes to integer seeds'
+    seeds = {}
+    for key, value in raw.items():
+        if isinstance(key, str) and key.isascii() and key.isdigit():
+            key = int(key)
+        elif isinstance(key, bool) or not isinstance(key, int):
+            raise ValueError(message)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(message)
+        seeds[key] = value
     return {key: value for key, value in seeds.items() if 0 <= key < num_rings}
+
+
+def _required_int(params, name):
+    """Read a required integer field; a missing or malformed value raises ValueError."""
+    try:
+        return int(params.get(name))
+    except (TypeError, ValueError):
+        raise ValueError(f'{name} is required and must be an integer')
 
 
 def _generator_kwargs(params, seed):
@@ -177,14 +194,14 @@ def regenerate_ring():
     params = request.get_json()
 
     try:
-        seed = int(params.get('seed'))
+        seed = _required_int(params, 'seed')
         ring_seed_val = params.get('ring_seed')
         if ring_seed_val is None or str(ring_seed_val).strip() == '':
             ring_seed = random.randint(0, 1000000)
         else:
             ring_seed = int(ring_seed_val)
 
-        ring_index = int(params.get('ring_index'))
+        ring_index = _required_int(params, 'ring_index')
         kwargs = _generator_kwargs(params, seed)
         num_rings = kwargs['num_rings']
 

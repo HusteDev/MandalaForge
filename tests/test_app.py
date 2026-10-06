@@ -1,4 +1,3 @@
-import json
 import pytest
 from app import app
 
@@ -39,3 +38,21 @@ def test_stale_ring_seeds_key_is_dropped(client):
     r = client.post("/generate", json={**BASE, "ring_seeds": {"7": 3}})
     assert r.status_code == 200
     assert r.get_json()["ring_seeds"] == {}
+
+@pytest.mark.parametrize("bad", [{"1": None}, {"1": 1.5}, {"1": [3]}, {"1": {"a": 1}}, {"1": True}, {"x": 3}, "nope"])
+def test_malformed_ring_seeds_is_400(client, bad):
+    r = client.post("/generate", json={**BASE, "ring_seeds": bad})
+    assert r.status_code == 400 and "ring_seeds" in r.get_json()["error"]
+
+def test_regenerate_ring_without_ring_index_is_400(client):
+    r = client.post("/regenerate-ring", json=BASE)
+    assert r.status_code == 400 and "ring_index" in r.get_json()["error"]
+
+def test_regenerate_ring_without_seed_is_400(client):
+    body = {k: v for k, v in BASE.items() if k != "seed"}
+    r = client.post("/regenerate-ring", json={**body, "ring_index": 1})
+    assert r.status_code == 400 and "seed" in r.get_json()["error"]
+
+def test_regenerate_ring_wrong_length_ring_divisions_is_400(client):
+    r = client.post("/regenerate-ring", json={**BASE, "ring_index": 1, "ring_divisions": [8, 8]})
+    assert r.status_code == 400 and "ring_divisions" in r.get_json()["error"]
