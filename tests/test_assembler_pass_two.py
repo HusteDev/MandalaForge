@@ -57,6 +57,7 @@ def test_assembly_is_deterministic():
 # ----- behaviour beyond the brief's tests -----
 
 import pytest
+from shapely.geometry import Point
 import shapely
 from motifs.contract import ReachEnd
 from motifs.geometry import CellPoint
@@ -214,3 +215,80 @@ def test_slot_child_drop_is_per_cell():
     # The shared recipe now reports a drop, yet another cell still gets its child.
     a.replace_cells(a.plan.rings[1], [0])
     assert all(len(a.subtree(n)) == 2 for n in a.nodes if n.recipe.motif == "petal")
+
+import types
+import resolver
+from placement import InkIndex, PlacedPath
+
+def stem_of_cell_zero(a):
+    node, end, point, rotation = a.pending_reaches[0]
+    assert node.cell_index == 0 and node.recipe.motif == "petal"
+    return node, ReachEnd(end.point, end.direction, 1.0, end.style), point, rotation
+
+def add_ink(a, ring_index, coords):
+    path = PlacedPath(ring_index, 5, "centre", (0,), "base", list(coords), [0.5] * len(coords), False, 1.0)
+    a.paths.append(path)
+    a.index.add(path)
+    return path
+
+def test_pull_back_terminates_when_neighbours_keep_crossing(monkeypatch):
+    monkeypatch.setattr(resolver, "_ink_crosses", lambda *args, **kwargs: True)
+    a = Assembler(manual_plan(), GEOM, CENTER, 0.5, 10.0, composer_for(GEOM))
+    with pytest.raises(AssemblyError, match="still crosses"):
+        a.assemble()
+    assert all(count <= resolver.MAX_PULL_BACKS for n in a.nodes for count in n.pull_backs.values())
+
+def test_side_at_its_pull_back_cap_is_left_alone():
+    a = placed(manual_plan(), DEEP)
+    petal = next(n for n in a.nodes if n.recipe.motif == "petal")
+    petal.pull_backs["inward"] = resolver.MAX_PULL_BACKS
+    before = list(petal.paths[0].coords)
+    a.resolve_overflow(petal, "inward")
+    assert petal.paths[0].coords == before and petal.context.radial_limits == (-0.25, 1.25)
+
+def test_reach_is_cast_forward_from_its_anchor():
+    a = placed(manual_plan())
+    node, short, point, rotation = stem_of_cell_zero(a)
+    anchor = lowest_vertex(node.paths[0])
+    between = (anchor[0] + point[0]) / 2.0  # ink behind the anchor, between it and the page point
+    behind = add_ink(a, 1, [(between, CENTER[1] - 6.0), (between, CENTER[1] + 6.0)])
+    reach = a.resolve_reach(node, short, point, rotation)
+    assert reach.coords[0] == anchor
+    assert len(behind.coords) == 2
+    assert any(reach.coords[-1] in p.coords for p in a.paths if p.ring_index == 0)
+
+def test_anchor_already_on_other_ink_is_a_touch_without_a_path():
+    a = placed(manual_plan())
+    node, short, point, rotation = stem_of_cell_zero(a)
+    anchor = lowest_vertex(node.paths[0])
+    through = add_ink(a, 0, [(anchor[0], CENTER[1] - 6.0), (anchor[0], CENTER[1] + 6.0)])
+    assert a.resolve_reach(node, short, point, rotation) is None
+    assert anchor in through.coords and not any(p.role == "reach" for p in a.paths)
+
+def test_recast_onto_own_ring_ink_is_accepted_with_a_vertex():
+    a = placed(manual_plan())
+    node, short, point, rotation = stem_of_cell_zero(a)
+    anchor = lowest_vertex(node.paths[0])
+    x = anchor[0] - 4.0  # past the 1px cap, before ring 0's band
+    own_ring = add_ink(a, 1, [(x, CENTER[1] - 6.0), (x, CENTER[1] + 6.0)])
+    reach = a.resolve_reach(node, short, point, rotation)
+    assert reach.coords[-1] in own_ring.coords
+    assert math.isclose(reach.coords[-1][0], x, abs_tol=1e-9)
+
+def test_touch_step_leaves_a_gap_over_two_px_alone():
+    a = placed(manual_plan())
+    petal = next(n for n in a.nodes if n.recipe.motif == "petal")
+    band = [p for p in a.paths if p.ring_index == 0]
+    gap = min(LineString(p.coords).distance(Point(lowest_vertex(petal.paths[0]))) for p in band)
+    assert gap > resolver.TOUCH_GAP_PX
+    before = [list(p.coords) for p in [petal.paths[0], *band]]
+    resolver._touch(a, petal, "inward", 0)
+    assert [list(p.coords) for p in [petal.paths[0], *band]] == before
+
+def test_wavy_reach_flattens_when_the_wave_would_meet_ink():
+    asm = types.SimpleNamespace(index=InkIndex())
+    asm.index.add(PlacedPath(0, 0, "centre", (0,), "base", [(10.0, 2.0), (90.0, 2.0)], [0.5, 0.5], False, 1.0))
+    coords = resolver._wavy_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0))
+    offsets = [abs(y) for _, y in coords]
+    assert len(coords) == 9 and math.isclose(max(offsets), 1.5, abs_tol=1e-9)
+    assert coords[0] == (0.0, 0.0) and coords[-1] == (100.0, 0.0)

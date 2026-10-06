@@ -14,6 +14,7 @@ relies on a snap tolerance to read as connected.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Set, Tuple
@@ -45,11 +46,11 @@ ON_INK_PX = 1e-6
 SAME_VERTEX_PX = 1e-9
 # Ink this close meets: float noise leaves lines meant to be collinear about this far apart.
 MEET_PX = 1e-9
-# Ink meeting only this close to a vertex of either line touches there rather than crosses.
+# Ink meeting only this close to a point that is a vertex of both lines touches there.
 TOUCH_RADIUS_PX = 1e-6
 # A crossing this close to a ring boundary, or past it, is blamed on overflow on that side.
 BOUNDARY_MARGIN_PX = 0.5
-# After this many pull-backs on one side a node's overflow there is removed outright.
+# A node side pulled back this many times is left as it is.
 MAX_PULL_BACKS = 4
 # Rounds of floating-cell replacement per ring before assembly gives up.
 MAX_CONTACT_ROUNDS = 3
@@ -127,25 +128,34 @@ def _neighbour(asm: Assembler, ring_index: int, side: str) -> Optional[int]:
     return neighbour if any(ring.ring_index == neighbour for ring in asm.plan.rings) else None
 
 
-def _crossing(line: BaseGeometry, other: BaseGeometry, vertices: Sequence[PointTuple]) -> Optional[BaseGeometry]:
+def _crossing(line: BaseGeometry, other: BaseGeometry, line_vertices: Sequence[PointTuple],
+              other_vertices: Sequence[PointTuple]) -> Optional[BaseGeometry]:
     """
     Where two pieces of ink cross, or None. They meet where they come within
     `MEET_PX`, so lines meant to be collinear meet despite float noise. Meeting
-    only within `TOUCH_RADIUS_PX` of one of `vertices` (the two paths' own
-    vertices) is a touch, which is how every touch here is made.
+    only within `TOUCH_RADIUS_PX` of a point that is a vertex of both is a
+    touch, which is how every touch here is made (the validator's rule too).
     """
     if not shapely.dwithin(line, other, MEET_PX):
         return None
     near = line.intersection(other.buffer(MEET_PX))
     if near.is_empty:
         return None
-    points = np.asarray(vertices, dtype=float)
     x0, y0, x1, y1 = near.bounds
-    close = points[
-        (points[:, 0] >= x0 - TOUCH_RADIUS_PX) & (points[:, 0] <= x1 + TOUCH_RADIUS_PX)
-        & (points[:, 1] >= y0 - TOUCH_RADIUS_PX) & (points[:, 1] <= y1 + TOUCH_RADIUS_PX)
+
+    def close(vertices: Sequence[PointTuple]) -> np.ndarray:
+        points = np.asarray(vertices, dtype=float)
+        return points[
+            (points[:, 0] >= x0 - TOUCH_RADIUS_PX) & (points[:, 0] <= x1 + TOUCH_RADIUS_PX)
+            & (points[:, 1] >= y0 - TOUCH_RADIUS_PX) & (points[:, 1] <= y1 + TOUCH_RADIUS_PX)
+        ]
+
+    mine, theirs = close(line_vertices), close(other_vertices)
+    shared = [
+        point for point in mine
+        if len(theirs) and np.min(np.hypot(theirs[:, 0] - point[0], theirs[:, 1] - point[1])) <= TOUCH_RADIUS_PX
     ]
-    rest = near if len(close) == 0 else near.difference(shapely.MultiPoint(close).buffer(TOUCH_RADIUS_PX))
+    rest = near if not shared else near.difference(shapely.MultiPoint(shared).buffer(TOUCH_RADIUS_PX))
     return None if rest.is_empty else rest
 
 
@@ -172,23 +182,9 @@ def _ink_crosses(asm: Assembler, paths: Sequence[PlacedPath], neighbour: int, si
         for other in asm.index.candidates(geometry):
             if other.ring_index != neighbour:
                 continue
-            crossing = _crossing(geometry, path_geometry(other), path.coords + other.coords)
+            crossing = _crossing(geometry, path_geometry(other), path.coords, other.coords)
             if crossing is not None and (side is None or _beyond(asm, path.ring_index, side, crossing)):
                 return True
-    return False
-
-
-def _regenerated_crosses(asm: Assembler, node: PlacedNode, regenerated: List[Regenerated]) -> bool:
-    """
-    Whether regenerated ink crosses either neighbouring ring anywhere. A
-    pulled-back motif changes shape inside its own ring too, where the
-    neighbour's overflow may already reach.
-    """
-    paths = [path for *_, paths in regenerated for path in paths]
-    for side in ("inward", "outward"):
-        neighbour = _neighbour(asm, node.ring_index, side)
-        if neighbour is not None and _ink_crosses(asm, paths, neighbour):
-            return True
     return False
 
 
@@ -202,63 +198,86 @@ def resolve_overflow(asm: Assembler, node: PlacedNode, side: str) -> None:
     neighbouring ring's ink, then touch that ink if the gap left is small.
     """
     node.resolved_sides.add(side)
-    _pull_back(asm, node, side)
+    _settle(asm, [(node, side)])
 
 
-def _pull_back(asm: Assembler, node: PlacedNode, side: str) -> None:
-    """`resolve_overflow` without marking the side resolved."""
+def _settle(asm: Assembler, work: List[Tuple[PlacedNode, str]]) -> None:
+    """
+    Pull back each `(node, side)` in turn. A pull-back reshapes the motif inside
+    its own ring too, so its own other side and the facing sides of every node
+    in the neighbouring rings are queued to be checked again, as they would have
+    been had the motif been drawn this way in pass one. A worklist rather than
+    recursion, and `MAX_PULL_BACKS` per node side, bound the whole exchange.
+    """
+    queue = deque(work)
+    while queue:
+        node, side = queue.popleft()
+        if not _is_placed(asm, node) or not _pull_back(asm, node, side):
+            continue
+        queue.append((node, "outward" if side == "inward" else "inward"))
+        for near_side in ("inward", "outward"):
+            neighbour = _neighbour(asm, node.ring_index, near_side)
+            facing = "outward" if near_side == "inward" else "inward"
+            queue.extend((other, facing) for other in asm.nodes if other.ring_index == neighbour)
+
+
+def _pull_back(asm: Assembler, node: PlacedNode, side: str) -> bool:
+    """
+    One pull-back of `node`'s overflow on `side`, without marking the side
+    resolved. False, changing nothing, when its ink does not cross the
+    neighbouring ring there or the side has used up its `MAX_PULL_BACKS`.
+    """
     neighbour = _neighbour(asm, node.ring_index, side)
-    if neighbour is None:
-        return
-    old_paths = [path for member in asm.subtree(node) for path in member.paths]
+    if neighbour is None or node.pull_backs.get(side, 0) >= MAX_PULL_BACKS:
+        return False
+    old_paths = _subtree_paths(asm, node)
     if not _ink_crosses(asm, old_paths, neighbour, side):
-        return
+        return False
 
     bound = 0 if side == "inward" else 1
     limits = node.context.radial_limits
     clear, cross = float(bound), limits[bound]
-    # Neighbours yielding to each other could narrow each other's limits without end; this ends it.
-    steps = SEARCH_STEPS if node.pull_backs.get(side, 0) < MAX_PULL_BACKS else 0
-    for _ in range(steps):
+    for _ in range(SEARCH_STEPS):
         mid = (clear + cross) / 2.0
         try:
-            crosses = _regenerated_crosses(asm, node, asm.regenerate(node, _with_limit(limits, bound, mid)))
+            regenerated = asm.regenerate(node, _with_limit(limits, bound, mid))
+            crosses = _ink_crosses(asm, [path for *_, paths in regenerated for path in paths], neighbour, side)
         except MotifError:
             crosses = True
         if crosses:
             cross = mid
         else:
             clear = mid
-    try:
-        regenerated = asm.regenerate(node, _with_limit(limits, bound, clear))
-    except MotifError as error:
-        raise assembler.AssemblyError(
-            f"ring {node.ring_index} cell {node.cell_index} ({node.position}): "
-            f"{node.recipe.motif} fails without {side} overflow: {error}"
-        ) from error
-    asm.commit(regenerated)
     node.pull_backs[side] = node.pull_backs.get(side, 0) + 1
-    # The node was drawn afresh: touches it made, and touches made on it, are made again.
+    _regenerate_and_commit(asm, node, side, _with_limit(limits, bound, clear))
+    # The node was drawn afresh: touches it made are made again.
     for pulled in ("inward", "outward"):
         if pulled in node.pull_backs:
             _touch(asm, node, pulled, _neighbour(asm, node.ring_index, pulled))
+    if _ink_crosses(asm, _subtree_paths(asm, node), neighbour, side):
+        # The touch, or a shape the search never tried, still crosses: no overflow on this side at all.
+        _regenerate_and_commit(asm, node, side, _with_limit(limits, bound, float(bound)))
+        other_side = "outward" if side == "inward" else "inward"
+        if other_side in node.pull_backs:
+            _touch(asm, node, other_side, _neighbour(asm, node.ring_index, other_side))
     _restore_touches(asm, node)
     _redraw_reaches(asm, node, {id(path) for path in old_paths})
-    _neighbours_yield(asm, node)
+    return True
 
 
-def _neighbours_yield(asm: Assembler, node: PlacedNode) -> None:
-    """
-    Regeneration reshapes a motif inside its own ring too. Neighbouring rings'
-    overflow that now crosses it is pulled back, as it would have been had the
-    motif been drawn this way in pass one.
-    """
-    for side in ("inward", "outward"):
-        neighbour = _neighbour(asm, node.ring_index, side)
-        facing = "outward" if side == "inward" else "inward"
-        for other in [other for other in asm.nodes if other.ring_index == neighbour]:
-            if _is_placed(asm, other):
-                _pull_back(asm, other, facing)
+def _subtree_paths(asm: Assembler, node: PlacedNode) -> List[PlacedPath]:
+    return [path for member in asm.subtree(node) for path in member.paths]
+
+
+def _regenerate_and_commit(asm: Assembler, node: PlacedNode, side: str, limits: Tuple[float, float]) -> None:
+    try:
+        regenerated = asm.regenerate(node, limits)
+    except MotifError as error:
+        raise assembler.AssemblyError(
+            f"ring {node.ring_index} cell {node.cell_index} ({node.position}): "
+            f"{node.recipe.motif} fails with {side} overflow limited: {error}"
+        ) from error
+    asm.commit(regenerated)
 
 
 def _restore_touches(asm: Assembler, node: PlacedNode) -> None:
@@ -341,11 +360,6 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
                 page_point: PointTuple) -> Tuple[Optional[PlacedPath], Optional[PlacedPath]]:
     """The drawn reach (or None) and the ink it ends on (or None when it found none)."""
     subtree_ids = {id(path) for member in asm.subtree(node) for path in member.paths}
-    start_point = Point(page_point)
-    for other in asm.index.candidates(start_point.buffer(ON_INK_PX)):
-        if id(other) not in subtree_ids and path_geometry(other).distance(start_point) <= ON_INK_PX:
-            return None, other  # already on other ink: trivially touching
-
     cx, cy = asm.center
     dx, dy = cx - page_point[0], cy - page_point[1]
     norm = math.hypot(dx, dy)
@@ -353,8 +367,7 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     direction = (sign * dx / norm, sign * dy / norm)
     anchor = _anchor(node, page_point, direction)
     start = page_point if anchor is None else anchor[1]
-    far = (page_point[0] + direction[0] * reach_end.max_length_px,
-           page_point[1] + direction[1] * reach_end.max_length_px)
+    far = (start[0] + direction[0] * reach_end.max_length_px, start[1] + direction[1] * reach_end.max_length_px)
     exclude = lambda path: id(path) in subtree_ids
     hit = _first_hit(asm, LineString([start, far]), exclude)
     if hit is None and reach_end.direction == "inward":
@@ -371,7 +384,7 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     end = insert_vertex(target, hit_point)
     asm.reindex(target)
     if math.hypot(end[0] - start[0], end[1] - start[1]) <= ON_INK_PX:
-        return None, target
+        return None, target  # the start already lies on other ink: a touch, with a vertex on both
 
     coords = [start, end] if reach_end.style == "straight" else _wavy_clear_of_ink(asm, start, end)
     path = PlacedPath(
@@ -498,6 +511,13 @@ def pass_two(asm: Assembler) -> None:
         asm.current_ring = ring.ring_index
         _resolve_ring(asm, ring)
     asm.current_ring = None
+    for ring in asm.plan.rings:
+        inner = _neighbour(asm, ring.ring_index, "inward")
+        own = [path for path in asm.paths if path.ring_index == ring.ring_index]
+        if inner is not None and _ink_crosses(asm, own, inner):
+            raise assembler.AssemblyError(
+                f"ring {ring.ring_index} still crosses ring {inner} after {MAX_PULL_BACKS} pull-backs per side"
+            )
 
 
 def _resolve_ring(asm: Assembler, ring: RingPlan) -> None:
@@ -530,7 +550,8 @@ def _resolve_ring_ink(asm: Assembler, ring_index: int) -> None:
     this ring's ink as pass one drew it; replaced cells change that ink, so it
     is checked again first.
     """
-    _recheck_inner_outward(asm, ring_index)
+    inner = _neighbour(asm, ring_index, "inward")
+    _settle(asm, [(node, "outward") for node in asm.nodes if node.ring_index == inner])
     nodes = [node for node in asm.nodes if node.ring_index == ring_index]
     for side in ("inward", "outward"):
         for node in nodes:
@@ -540,13 +561,6 @@ def _resolve_ring_ink(asm: Assembler, ring_index: int) -> None:
         if any(record.pending is pending for record in asm.resolved_reaches):
             continue
         _resolve_pending(asm, pending)
-
-
-def _recheck_inner_outward(asm: Assembler, ring_index: int) -> None:
-    inner = _neighbour(asm, ring_index, "inward")
-    for node in [node for node in asm.nodes if node.ring_index == inner]:
-        if _is_placed(asm, node):
-            _pull_back(asm, node, "outward")
 
 
 def _is_placed(asm: Assembler, node: PlacedNode) -> bool:
