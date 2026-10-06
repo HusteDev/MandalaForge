@@ -277,6 +277,35 @@ def test_stem_mode_and_floating_stems_are_per_cell():
     for r in p.rings[1:]:
         assert all(not a.once_per_wedge for n in _base_nodes(r) for a in n.attachments)
 
+def test_partial_ring_divisions_list_includes_num_divisions_in_the_gcd():
+    assert plan_for(ring_divisions=[8], num_divisions=12).base_symmetry == 4
+
+def test_downgrade_from_side_mode_clears_once_per_wedge(monkeypatch):
+    import composer as composer_module
+    from composer import CellRecipe, CellEntry, RingPlan, CONTACT_OVERFLOW
+    real = composer_module.find_motif
+    def fake(name):
+        entry = real(name)
+        if name in ("petal", "ring_band"):
+            return {**entry, "side_touch": False}
+        return entry
+    monkeypatch.setattr(composer_module, "find_motif", fake)
+    c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
+    seq = [CellEntry(CellRecipe("leaf", "botanical"), None), CellEntry(CellRecipe("leaf", "botanical"), None)]
+    c._ensure_contact(1, seq, "side")
+    ring = RingPlan(1, 12, 1.0, seq, 1, contact_mode="side")
+    assert seq[0].centre.attachments[0].once_per_wedge
+    assert c.replace_node(ring, 1, "centre", "generation") is True
+    assert ring.sequence[1].centre.motif in ("petal", "ring_band")
+    assert ring.contact_mode == "stem"
+    nodes = _base_nodes(ring)
+    assert not any(a.once_per_wedge for n in nodes for a in n.attachments)
+    for node in nodes:
+        entry = fake(node.motif)
+        has_inward = entry["max_overflow_inward"] >= CONTACT_OVERFLOW
+        assert entry["spans_cell"] or has_inward or node.attachments
+        assert node.provides_contact or any(a.provides_contact for a in node.attachments)
+
 def test_old_plan_json_loads_with_defaults():
     from composer import DesignPlan
     d = plan_for().to_dict()

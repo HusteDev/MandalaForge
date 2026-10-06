@@ -169,6 +169,16 @@ SYMMETRY_MIN = 3
 SYMMETRY_MAX = 8
 
 
+def _weaker_mode(a: str, b: str) -> str:
+    """The weaker of two contact modes, in the order side > overflow > stem."""
+    return max(a, b, key=CONTACT_MODES.index)
+
+
+def _base_nodes(sequence: List[CellEntry]) -> List[CellRecipe]:
+    """The ring's base nodes in sequence order, centre before divider within an entry."""
+    return [n for e in sequence for n in (e.centre, e.divider) if n is not None]
+
+
 def _side_touch_capable(entry: Dict) -> bool:
     """
     Whether a base motif can meet its ring neighbours at a shared side vertex.
@@ -448,13 +458,7 @@ class Composer:
 
     @staticmethod
     def _base_names(plan: RingPlan) -> Tuple[str, ...]:
-        names = {
-            node.motif
-            for entry in plan.sequence
-            for node in (entry.centre, entry.divider)
-            if node is not None
-        }
-        return tuple(sorted(names))
+        return tuple(sorted({node.motif for node in _base_nodes(plan.sequence)}))
 
     def _inward_base_names(self, ring_index: int) -> Tuple[str, ...]:
         """Base names of the canonical (design-seed) ring just inside, so a ring's plan
@@ -576,7 +580,7 @@ class Composer:
         """
         if ring_index == 0:
             return "side"
-        entries = [self._registry_entry(n) for e in sequence for n in (e.centre, e.divider) if n is not None]
+        entries = [self._registry_entry(n) for n in _base_nodes(sequence)]
         if all(_side_touch_capable(entry) for entry in entries):
             return "side"
         if all(entry["max_overflow_inward"] >= CONTACT_OVERFLOW for entry in entries):
@@ -587,14 +591,21 @@ class Composer:
         """
         Re-flag contact after a node changed. The ring keeps its mode unless its new bases no
         longer support it, so a revision-1 plan (mode "stem") keeps its revision-1 contact.
+
+        Leaving side mode turns any once-per-wedge stem back into a per-cell one: without side
+        touch the cells are no longer one band, so every repeat needs its own contact.
         """
-        current = self._contact_mode(ring.ring_index, ring.sequence)
-        ring.contact_mode = max(ring.contact_mode, current, key=CONTACT_MODES.index)
+        previous = ring.contact_mode
+        ring.contact_mode = _weaker_mode(previous, self._contact_mode(ring.ring_index, ring.sequence))
+        if previous == "side" and ring.contact_mode != "side":
+            for node in _base_nodes(ring.sequence):
+                for attachment in node.attachments:
+                    attachment.once_per_wedge = False
         self._ensure_contact(ring.ring_index, ring.sequence, ring.contact_mode)
 
     def _ensure_contact(self, ring_index: int, sequence: List[CellEntry], contact_mode: str) -> None:
         """Give the ring's bases a route to the inward neighbour, as its contact mode allows, and flag them."""
-        nodes = [n for e in sequence for n in (e.centre, e.divider) if n is not None]
+        nodes = _base_nodes(sequence)
         if ring_index == 0:
             for node in nodes:
                 node.provides_contact = True
