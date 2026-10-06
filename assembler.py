@@ -232,13 +232,18 @@ class Assembler:
                 if recipe is None:
                     continue
                 entry_info = _registry_entry(recipe)
-                limits = (-entry_info["max_overflow_inward"], 1.0 + entry_info["max_overflow_outward"])
+                # The innermost ring never overflows inward: its bases keep to its inner boundary.
+                inward = 0.0 if ring.ring_index == self._innermost() else entry_info["max_overflow_inward"]
+                limits = (-inward, 1.0 + entry_info["max_overflow_outward"])
                 try:
                     base = self._place_node(ring, cell_index, position, recipe, (seq_pos,), limits, None, None)
                 except MotifError as error:
                     return cell_index, position, error
                 self._place_slot_children(ring, base)
         return None
+
+    def _innermost(self) -> int:
+        return min(ring.ring_index for ring in self.plan.rings)
 
     def _mark(self) -> Tuple[int, int, int, int, int]:
         return (len(self.nodes), len(self.paths), len(self.pending_reaches),

@@ -39,3 +39,15 @@ def test_validation_summary_shape():
     g = gen(); g.generate()
     assert set(g.validation_summary()) == {"is_valid", "issue_count", "tiny_region_count", "dangling_end_count",
                                            "floating_base_count", "overflow_crossing_count", "issues"}
+
+
+def test_innermost_ring_stays_inside_its_inner_boundary():
+    # Ring 0 has no inward neighbour; its divider scallops used to dip toward the centre, where
+    # neighbouring cells narrow, and bound faces between them too thin for a pen.
+    g = DesignGenerator(seed=2, num_rings=4, num_divisions=12, complexity=0.5, min_pattern_size=10,
+                        categories=["botanical", "geometric"])
+    g.generate()
+    report = g.last_validation_result
+    assert report.is_valid, report.issues[:5]
+    assert not [region for region in report.regions if region.is_uncolorable]
+    assert all(min(path.radials) >= -1e-9 for path in g.assembled.paths if path.ring_index == 0)
