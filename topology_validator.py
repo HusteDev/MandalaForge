@@ -834,6 +834,9 @@ def debug_overlay_svg(
     polylines: Sequence[Sequence[Coord]],
     size: Tuple[float, float] = (612, 612),
     seed: int = 0,
+    *,
+    reach_lines: Sequence[Sequence[Coord]] = (),
+    floating_base_boxes: Sequence[Tuple[float, float, float, float]] = (),
 ) -> str:
     """
     Render a visual QA overlay:
@@ -842,6 +845,8 @@ def debug_overlay_svg(
       - original linework in dark gray
       - dangling endpoints as red circles with crosshairs
       - floating open shapes outlined with a dashed red box
+      - reach lines (connectors between motifs) traced 1px in green
+      - floating base motifs (floating_base_boxes) boxed in dashed red
     """
     rng = random.Random(seed)
     width, height = size
@@ -876,6 +881,16 @@ def debug_overlay_svg(
     for pts in polylines:
         d = 'M ' + ' L '.join(f'{x:.2f} {y:.2f}' for x, y in pts)
         parts.append(f'<path d="{d}" fill="none" stroke="#333" stroke-width="1"/>')
+
+    for pts in reach_lines:
+        d = 'M ' + ' L '.join(f'{x:.2f} {y:.2f}' for x, y in pts)
+        parts.append(f'<path d="{d}" fill="none" stroke="#0a7" stroke-width="1"/>')
+
+    for x0, y0, x1, y1 in floating_base_boxes:
+        parts.append(
+            f'<rect x="{x0 - 4:.1f}" y="{y0 - 4:.1f}" width="{x1 - x0 + 8:.1f}" '
+            f'height="{y1 - y0 + 8:.1f}" fill="none" stroke="red" stroke-dasharray="4,2"/>'
+        )
 
     for comp in report.floating_components:
         x0, y0, x1, y1 = comp.bounds
