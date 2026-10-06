@@ -30,6 +30,7 @@ from contextlib import redirect_stdout
 
 from assembler import stroke_width_for
 from coloring_generator import DesignGenerator
+from composer import node_rng
 from motifs import MOTIFS, find_motif, safe_motif
 from motifs.contract import MotifError
 from motifs.geometry import CellPoint, MotifContext
@@ -81,8 +82,8 @@ SLOT_FRAME = 'petal'
 def _gate_skip(entry, generator, ring_divisions, position, role='base'):
     """
     Reason the declared gates exclude the fixture, or None. Ring 0 is never
-    forced. A slot child is gated on the slot the frame really declares in the
-    first forced ring (see `_frame_slot_px`), not on the whole cell.
+    forced. A slot child is gated on the slots the frame really declares in the
+    forced rings (see `_frame_slot_px`), not on the whole cell.
     """
     budget = BOTH_BUDGET if position == 'both' else 1.0
     if role == 'slot':
@@ -102,20 +103,25 @@ def _gate_skip(entry, generator, ring_divisions, position, role='base'):
     return None
 
 
-def _frame_slot_px(generator, ring_divisions, position, budget):
+def _frame_slot_px(generator, ring_divisions, ring_index, position, budget):
     """
-    Width and depth in pixels of the slot the frame declares in ring 1, the
-    smallest forced cell, drawn as the assembler would draw it there; None
-    when the frame declares no slot or cannot be drawn.
+    Width and depth in pixels of the slot the frame declares in ring
+    `ring_index`, drawn as the assembler draws the frame of the ring's first
+    sequence entry in pass one: that ring's geometry and the node stream
+    `node_rng(seed, ring_index, 0, 0, position)`. In "both" mode the centre
+    frame is measured with `budget`. None when the frame declares no slot or
+    cannot be drawn.
     """
     frame = find_motif(SLOT_FRAME)
-    ring = generator.rings[1]
+    ring = generator.rings[ring_index]
+    frame_position = 'divider' if position == 'divider' else 'centre'
     context = MotifContext(
         inner_radius=ring['inner_radius'], outer_radius=ring['outer_radius'],
-        wedge_angle=360.0 / ring_divisions[1], center=generator.center,
+        wedge_angle=360.0 / ring_divisions[ring_index], center=generator.center,
         stroke_width=stroke_width_for(generator.complexity), complexity=generator.complexity,
-        min_white_space=generator.min_pattern_size, rng=random.Random(generator.seed),
-        position='divider' if position == 'divider' else 'centre', angular_limits=budget,
+        min_white_space=generator.min_pattern_size,
+        rng=node_rng(generator.seed, ring_index, 0, 0, frame_position),
+        position=frame_position, angular_limits=budget,
         radial_limits=(-frame['max_overflow_inward'], 1.0 + frame['max_overflow_outward']),
     )
     try:
@@ -132,12 +138,10 @@ def _frame_slot_px(generator, ring_divisions, position, budget):
     return width, depth, context.stroke_width
 
 
-def _slot_gate_skip(entry, generator, ring_divisions, position, budget):
-    if len(ring_divisions) < 2:
-        return "no ring past the centre to force"
-    measured = _frame_slot_px(generator, ring_divisions, position, budget)
+def _slot_refusal(entry, measured):
+    """Why one ring's measured frame slot cannot take the child, or None when it can."""
     if measured is None:
-        return f"{SLOT_FRAME} frame declares no slot in ring 1"
+        return f"{SLOT_FRAME} frame declares no slot"
     width, depth, stroke = measured
     need_width = entry['min_cell_width_px'] + 2.0 * stroke
     need_depth = entry['min_ring_depth_px'] + 2.0 * stroke
@@ -146,6 +150,25 @@ def _slot_gate_skip(entry, generator, ring_divisions, position, budget):
     if depth < need_depth:
         return f"slot depth {depth:.2f}px < {need_depth:.2f}px (gate + 2 strokes)"
     return None
+
+
+def _slot_gate_skip(entry, generator, ring_divisions, position, budget):
+    """
+    SKIP reason only when no forced ring's real frame slot admits the child.
+    The gate mirrors the FAIL rule: one admitting ring is enough for the child
+    to be placed somewhere, so if any ring admits it the job runs and a child
+    that is never placed is a genuine failure.
+    """
+    if len(ring_divisions) < 2:
+        return "no ring past the centre to force"
+    refusals = []
+    for ring_index in range(1, len(ring_divisions)):
+        measured = _frame_slot_px(generator, ring_divisions, ring_index, position, budget)
+        refusal = _slot_refusal(entry, measured)
+        if refusal is None:
+            return None
+        refusals.append(f"ring {ring_index}: {refusal}")
+    return "no forced ring admits the child; " + "; ".join(refusals)
 
 
 def _placed_count(generator, name, role):

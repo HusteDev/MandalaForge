@@ -72,16 +72,25 @@ def test_forced_slot_motif_that_never_fits_fails():
 
 
 def test_slot_job_is_gated_on_the_frames_measured_slot():
-    # The petal frame drawn in the narrowest (24,24,24) cell declares a slot too small for a diamond and two strokes.
+    # The petal frame drawn in each forced (24,24,24) ring declares a slot too small for a diamond and two strokes.
     job = ("diamond", "geometric", (24, 24, 24), 0.15, 10, "centre", "slot", 20260821, False)
     outcome = run_case(job)
     assert outcome["status"] == "SKIP" and "slot" in outcome["detail"]
 
 
+def test_slot_gate_measures_every_forced_rings_real_frame():
+    # At min size 25 the frames the assembler really draws in rings 1 to 3 (their own node streams) declare
+    # slots under 8px deep, so no ring admits a diamond: SKIP, where measuring one stand-in petal admitted it
+    # and the full tier reported "never placed".
+    job = ("diamond", "geometric", (8, 8, 8, 12), 0.15, 25, "centre", "slot", 20260821, False)
+    outcome = run_case(job)
+    assert outcome["status"] == "SKIP" and "no forced ring admits" in outcome["detail"]
+
+
 def test_partial_slot_drops_pass_and_are_reported():
-    # The measured slot admits the fixture but some cells' real slots are smaller: the spec drops the child
-    # there gracefully, so the job passes and carries its counts for the table's DROP column.
-    job = ("diamond", "geometric", (24, 24, 24), 0.9, 10, "centre", "slot", 20260821, False)
+    # A forced ring's frame slot admits the child but some cells' real slots are smaller: the spec drops the
+    # child there gracefully, so the job passes and carries its counts for the table's DROP column.
+    job = ("diamond", "geometric", (24, 24, 24), 0.9, 5, "centre", "slot", 20260821, False)
     outcome = run_case(job)
     assert outcome["status"] == "PASS"
-    assert outcome["detail"] == "16 placed, 32 dropped" and outcome["dropped"] == 32
+    assert outcome["detail"] == "40 placed, 8 dropped" and outcome["dropped"] == 8
