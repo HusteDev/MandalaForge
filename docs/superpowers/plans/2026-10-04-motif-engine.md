@@ -1278,3 +1278,68 @@ git commit -m "chore: retire the tiling pattern layer"
 ```
 
 Expected: suite green with no import of the removed modules anywhere (`grep -rn "smart_patterns\|pattern_generator\|shape_extractor" --include=*.py .` returns nothing).
+
+---
+
+## Revision 2 tasks (spec section 13)
+
+The visual gate failed after Task 16. These tasks implement spec section 13 on top of the completed branch. Task 16 step 4 (retirement) remains gated on the user's visual review after Task 20.
+
+### Task 17: Composer: base symmetry, contact mode, side-touch radial
+
+**Files:**
+- Modify: `composer.py`
+- Test: `tests/test_composer.py`
+
+**Interfaces:**
+- Consumes: the Task 7 composer.
+- Produces:
+  - `DesignPlan.base_symmetry: int`, `RingPlan.contact_mode: str` in `{"side", "overflow", "stem"}`, `RingPlan.side_touch_radial: float`, all serialised and round-tripped.
+  - `Composer.base_symmetry(num_divisions, vary_divisions, ring_divisions, rng) -> int`: `num_divisions` when vary is off and no explicit list; the gcd of an explicit list; otherwise a divisor of `num_divisions` in 3..8 drawn with weights proportional to the divisor.
+  - Division count with vary on: `B * m` with `m = clamp(round(num_divisions * scale * triangular(0.7, 1.3, 1.0) / B), 1, 24 // B)` using the existing `scale`, count clamped to 4..24.
+  - Sequence length divides `divisions // B`.
+  - `contact_mode`: `"side"` when every base in the ring has registry `side_touch` True (ring 0 always side); else `"overflow"` when every base has `max_overflow_inward >= 0.1`; else `"stem"`. In `side` mode the ring gets exactly one inward contact per wedge: when no base has inward overflow, one stem attachment on the first entry's first occupied position. In `overflow` mode no stems are added. In `stem` mode stems are added to bases lacking inward contact, as today.
+  - `side_touch_radial = rng.uniform(0.35, 0.6)` from the ring-level stream.
+  - `replace_node` for reason "floating" in a `side` ring: first another `side_touch` base, then a stem.
+
+- [ ] Write failing tests: vary on gives counts that are all multiples of `base_symmetry`; `ring_divisions=[8, 8, 8, 12]` gives `base_symmetry == 4`; sequence length divides `divisions // B`; botanical+geometric rings have `contact_mode == "side"` and at most `B` stems per ring; `side_touch_radial` is identical across a ring's entries and within 0.35..0.6; plan JSON round-trips the new fields.
+- [ ] Implement, run `tests/test_composer.py` and the full suite, commit `feat(composer): base symmetry, contact modes and side-touch radial`.
+
+### Task 18: Motifs: side touch and ring fill
+
+**Files:**
+- Modify: `motifs/geometry.py` (`MotifContext.side_touch_radial: Optional[float] = None`), `motifs/botanical.py`, `motifs/geometric.py`, `motifs/fallback.py`, `motifs/__init__.py`
+- Test: `tests/test_motifs.py`
+
+**Interfaces:**
+- Registry key `side_touch: bool` on every entry: petal, leaf, scallop, ring_band and the safe band True; stem and diamond False.
+- When `context.side_touch_radial` is set and the motif is a base (no slot), the outline's widest vertex is exactly `CellPoint(side_touch_radial, ±angular_limits)`; otherwise the revision-1 shape. Petal `length` in 0.95..1.3, leaf 1.0..1.2; petal `max_overflow_inward` 0.5, scallop 0.4.
+
+- [ ] Write failing tests: a petal and a leaf generated with `side_touch_radial=0.5` have a vertex at `(0.5, ±angular_limits)` within 1e-9; two petals from different seeds share that vertex; a centre petal with `angular_limits=0.6` and a divider petal with `0.4` in adjacent positions meet at the same page point (via `cell_rotation_deg` and `to_cartesian`); petal tips reach radial at least 0.95 with default limits; the property tests still pass.
+- [ ] Implement, run `tests/test_motifs.py` and the full suite, commit `feat(motifs): side touch vertices and ring-filling lengths`.
+
+### Task 19: Resolver: symmetry groups and bounded stems
+
+**Files:**
+- Modify: `resolver.py`, `assembler.py`
+- Test: `tests/test_assembler_pass_two.py`, `tests/test_design_generator.py`
+
+**Interfaces:**
+- `Assembler.symmetry_groups(ring_index) -> List[List[PlacedNode]]`: groups of `B` nodes related by rotation `360 / B`, members ordered by cell index, the first member in the first wedge.
+- Pass two operates on group representatives; every commit, touch, reach and undo is mirrored to the members by rotating coordinates about the centre by `k * 360 / B` and applying to the member's corresponding paths (same node_path, same path index) and to the rotated counterpart of any neighbour path touched (the neighbour cell at index `+ k * N_neighbour / B`).
+- Stems cast only to the inward neighbour ring's inner boundary; no recast to the centre.
+- The contact check and floating fallback keep their rules; in a `side` ring a floating cell is handled per group.
+
+- [ ] Write failing tests: a 12/12/12/12 design is exactly 12-fold symmetric (every path's coordinates rotated by 30 degrees match some path's coordinates within 1e-6); an 8/8/8/12 design is 4-fold symmetric; a stem never ends inside a ring other than its inward neighbour; the sketch fixture and the review seeds still validate; determinism.
+- [ ] Implement, run the pass-two tests and the full suite, commit `feat(resolver): symmetry groups mirror resolution; stems stay in the neighbour ring`.
+
+### Task 20: QA, docs, review set
+
+**Files:**
+- Modify: `qa_patterns.py` (fixtures gain `B`; slot gate uses the plan's `centre_share`), `qa_report.py` (table shows `B`), `docs/motifs.md`, `docs/architecture.md`, `README.md`, `static/script.js` (debug bar shows `B=`)
+- Test: existing harness tests updated
+
+- [ ] Run `qa_patterns.py --tier smoke --jobs 6` and `qa_report.py --corpus --overlays always --jobs 6`; expect exit 0 and 180/180; fix harness breakage; report engine failures.
+- [ ] Update the docs for section 13.
+- [ ] Generate the review set: six corpus overlays (botanical c0.5 v1), six finished designs with vary on and six with vary off, seeds 42, 777, 12345, 254302, 955789, 984322, complexity 0.5, botanical+geometric; the controller sends them to the user.
+- [ ] Commit `feat(qa,docs): revision 2 harness fixtures, docs and review set`.

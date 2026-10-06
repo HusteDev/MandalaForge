@@ -224,4 +224,34 @@ Drawn from the reference sketch and `docs/motif-inventory.md`. Enough to reprodu
 
 ## 12. Out of scope
 
-Migrating the existing 21 patterns. Non-circular ring edges. Line-weight hierarchy. Texture fills. The wedge-solve optimisation. Per-ring division controls in the main UI beyond the checkbox.
+Migrating the existing 21 patterns. Non-circular ring edges. Line-weight hierarchy. Texture fills. Per-ring division controls in the main UI beyond the checkbox.
+
+## 13. Revision 2: symmetry and cohesion (2026-10-06)
+
+The first build passed every automated gate and failed the visual one. Designs were stringy, because contact was satisfied per cell by stems and overflow was mostly pulled back by the clearance rule, and they lost their symmetry, because free per-ring division counts combined with per-cell resolution made every cell different. This revision changes three things. Everything else in the spec stands.
+
+### 13.1 Base symmetry
+
+Every design has a base symmetry `B`. With `vary_divisions` off, every ring has `num_divisions` cells and `B = num_divisions`. With it on, the composer draws `B` from the divisors of `num_divisions` between 3 and 8 inclusive, weighted toward the larger values, and gives each ring `B * m` cells with a small integer multiplier `m` chosen so the count stays within 4 to 24 and inner rings get smaller multipliers. An explicit `ring_divisions` list is still accepted; its base symmetry is the greatest common divisor of the counts, which may be 1. A ring's sequence length must divide `divisions / B`, so the pattern of entries repeats in every wedge. The plan carries `base_symmetry`.
+
+Pass two resolves one wedge of `360 / B` degrees and mirrors every operation to the other wedges by rotation: cells are grouped into symmetry groups of `B` members; a pull-back regenerates every member with the same limits, a touch is applied to every member at the rotated point, a reach is drawn for every member at the rotated hit. Predicates are evaluated on the first member only. The result is exactly `B`-fold symmetric by construction, and with `B = 1` the behaviour is the per-cell resolution of revision 1. Validation still runs on the whole design.
+
+This replaces decision 2 of section 2 (free per-ring counts) and the "nothing in pass two assumes repetition" sentence of section 5.4.
+
+### 13.2 Contact priority
+
+A ring connects to the structure in this order of preference, decided by the composer and carried in the plan as the ring's `contact_mode`.
+
+1. **Side touch.** Every base motif in the ring supports side touching: it draws to its full angular budget and places its widest vertex at `(side_touch_radial, ±angular_limits)`, where `side_touch_radial` is one value per ring drawn from the ring-level stream and passed in the context, so adjacent motifs from different sequence entries, and centre and divider motifs sharing an edge, meet at a shared vertex. The ring is then one connected band and needs only one inward contact per wedge, provided by overflow or by a single stem on one entry. Motifs declare `side_touch` in the registry; petal, leaf, scallop, ring_band and the safe band support it.
+2. **Overflow touch.** When side touch is not available, each base relies on its inward overflow nestling into the ring below and touching a base there. Inward overflow allowances rise so tips can reach: petal 0.5, scallop 0.4. The clearance rule is unchanged for flanks; a tip is the part of a run within the touch disc of its extreme vertex, as before.
+3. **Stem.** Stems are the last resort. A stem casts only as far as the inward neighbour ring's inner boundary and never recasts toward the centre. A stem that misses leaves the cell to the contact check, which falls back to a motif that supports side touch or overflow rather than adding a longer stem.
+
+The per-cell structural rule of section 6 is unchanged: every base motif must be in one connected component, now usually through its ring neighbours.
+
+### 13.3 Fill the ring
+
+Motif length ranges centre on reaching the next ring rather than stopping short of it. Petal length is drawn from 0.95 to 1.3 of ring depth, leaf from 1.0 to 1.2, so tips sit on or beyond the ring boundary and overflow resolution decides how far they nestle. Bases sit at radial 0 or dip below it. Rings therefore read as nested bands, as in the reference sketch.
+
+### 13.4 Acceptance
+
+The automated gate of section 9 is necessary but not sufficient. The visual review of the review set (corpus overlays and finished designs in both division modes) is the gate for retiring the old layer, and this revision is judged by that review.
