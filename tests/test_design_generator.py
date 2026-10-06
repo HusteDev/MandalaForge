@@ -51,3 +51,13 @@ def test_innermost_ring_stays_inside_its_inner_boundary():
     assert report.is_valid, report.issues[:5]
     assert not [region for region in report.regions if region.is_uncolorable]
     assert all(min(path.radials) >= -1e-9 for path in g.assembled.paths if path.ring_index == 0)
+
+
+def test_final_touch_never_leaves_a_ring_crowding_its_neighbours_overflow():
+    # With varied divisions, ring-1 petal tips were touched onto ring-2 scallops in the final touch pass;
+    # each touch kept ring 1's outward side clear, but the moved tip crowded ring 2's inward overflow,
+    # and the final check raised "ring 2 still crosses or crowds ring 1".
+    g = DesignGenerator(seed=777, num_rings=4, num_divisions=12, complexity=0.15, min_pattern_size=10,
+                        categories=["botanical"], vary_divisions=True)
+    g.generate()
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]

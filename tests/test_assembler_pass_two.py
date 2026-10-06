@@ -363,6 +363,32 @@ def test_final_touch_pass_snaps_a_tip_within_clearance_that_was_never_pulled_bac
     assert new_tip in ink.coords
     assert math.isclose(math.hypot(new_tip[0] - foot[0], new_tip[1] - foot[1]), 0.0, abs_tol=1e-6)
 
+def test_final_touch_is_undone_when_the_moved_tip_crowds_the_neighbours_overflow():
+    # Seed 777 (vary_divisions): a ring-1 petal's outward tip was touched onto ring-2 ink, which kept its own
+    # side clear, but the moved tip came within a pen's width of a ring-2 scallop's inward overflow outside
+    # that run's touch disc, and the final check raised. The touch is judged from both rings.
+    a = placed(manual_plan())
+    petal = next(n for n in a.nodes if n.recipe.motif == "petal")
+    tip = lowest_vertex(petal.paths[0])
+    cx, cy = CENTER
+    radius = math.hypot(tip[0] - cx, tip[1] - cy)
+    ux, uy = (tip[0] - cx) / radius, (tip[1] - cy) / radius
+    at = lambda u, w: (tip[0] + ux * u - uy * w, tip[1] + uy * u + ux * w)  # u along the radius, w across it
+    target = add_ink(a, 0, [at(-3.0, -2.0), at(-3.0, 2.0)])  # 3px further in, square to the tip's radius
+    # Ring-0 overflow past its outer boundary: down well to the tip's side, then in, square to the radius,
+    # 4px further in than the tip, ending 3px to its side; its extreme vertex is far from that end.
+    run = [at(5.0, 25.0), at(-4.0, 25.0), at(-4.0, 3.0)]
+    facing = PlacedPath(0, 6, "centre", (0,), "base", run, [1.2] * len(run), False, 1.0)
+    a.paths.append(facing)
+    a.index.add(facing)
+    assert not resolver._too_close(a, [facing], 1, "outward")
+    assert min(LineString(run).distance(LineString(p.coords)) for p in petal.paths) > resolver.CLEARANCE_PX
+    resolver.final_touches(a)
+    # Touched, the tip would sit 3.2px from the run's end: the touch is undone.
+    assert lowest_vertex(petal.paths[0]) == tip
+    assert tip not in target.coords
+    assert not resolver._too_close(a, [facing], 1, "outward")
+
 def test_grazing_reach_runs_along_its_ray_then_bends_onto_the_ink():
     a = placed(manual_plan())
     node, short, point, rotation = stem_of_cell_zero(a)

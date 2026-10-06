@@ -243,6 +243,22 @@ def _conflicts(asm: Assembler, paths: Sequence[PlacedPath], neighbour: int, side
     return _ink_crosses(asm, paths, neighbour, side) or _too_close(asm, paths, neighbour, side)
 
 
+def _rings_conflict(asm: Assembler, paths: Sequence[PlacedPath], outer: int, inner: int) -> bool:
+    """
+    Whether any of `paths`, ink of adjacent rings `outer` and `inner`, crosses
+    the other ring's ink anywhere, or has an overflow run toward the other ring
+    that crowds its ink (`_too_close`). Both directions are judged, so ink that
+    moved is checked as a subject and as the neighbour it may now crowd.
+    Reaches are not overflow: they are never subjects of the clearance rule,
+    though they cross and are crowded like any ink.
+    """
+    outer_paths = [path for path in paths if path.ring_index == outer]
+    inner_paths = [path for path in paths if path.ring_index == inner]
+    return (_ink_crosses(asm, outer_paths, inner) or _ink_crosses(asm, inner_paths, outer)
+            or _too_close(asm, [path for path in outer_paths if path.role != "reach"], inner, "inward")
+            or _too_close(asm, [path for path in inner_paths if path.role != "reach"], outer, "outward"))
+
+
 def _with_limit(limits: Tuple[float, float], bound: int, value: float) -> Tuple[float, float]:
     return (value, limits[1]) if bound == 0 else (limits[0], value)
 
@@ -413,8 +429,10 @@ def final_touches(asm: Assembler) -> None:
     moved onto neighbour ink within `TOUCH_GAP_PX`: tips that were never pulled
     back, and tips whose touched ink changed afterwards. A tip already shared
     with other ink (a touch, or a reach's start) is left alone, so nothing
-    attached to it comes loose. A touch is undone when it would make the side
-    cross or crowd the neighbour, or close off a face too thin or small to colour.
+    attached to it comes loose. A touch is undone when it would make the two
+    rings cross or crowd each other, or close off a face too thin or small to
+    colour. Both directions count: the moved tip is the neighbour's ink too, and
+    can come within clearance of the neighbour's own overflow on the facing side.
     """
     outermost = _outermost(asm)
     for node in list(asm.nodes):
@@ -430,7 +448,11 @@ def final_touches(asm: Assembler) -> None:
             if path.coords[i] == saved[0][1][i]:
                 continue  # nothing within reach
             landed = Point(path.coords[i])
-            if (_conflicts(asm, _subtree_paths(asm, node), neighbour, side)
+            outer, inner = (node.ring_index, neighbour) if side == "inward" else (neighbour, node.ring_index)
+            # The node's own ink, and every path of either ring the moved ink could now cross or crowd.
+            near = _subtree_paths(asm, node) + [other for other in asm.index.candidates(
+                path_geometry(path).buffer(CLEARANCE_PX)) if other.ring_index in (outer, inner)]
+            if (_rings_conflict(asm, near, outer, inner)
                     or _uncolourable_face_at(asm, outermost, landed, landed.bounds)):
                 for other, coords, radials in saved:
                     other.coords[:], other.radials[:] = coords, radials
@@ -764,12 +786,7 @@ def pass_two(asm: Assembler) -> None:
         inner = _neighbour(asm, ring.ring_index, "inward")
         if inner is None:
             continue
-        own = [path for path in asm.paths if path.ring_index == ring.ring_index]
-        # Reaches are not overflow: they are never pulled back, and end on ink by construction.
-        own_ink = [path for path in own if path.role != "reach"]
-        inner_ink = [path for path in asm.paths if path.ring_index == inner and path.role != "reach"]
-        if (_ink_crosses(asm, own, inner) or _too_close(asm, own_ink, inner, "inward")
-                or _too_close(asm, inner_ink, ring.ring_index, "outward")):
+        if _rings_conflict(asm, asm.paths, ring.ring_index, inner):
             raise assembler.AssemblyError(
                 f"ring {ring.ring_index} still crosses or crowds ring {inner} after {MAX_PULL_BACKS} pull-backs per side"
             )
