@@ -254,9 +254,12 @@ class Composer:
         return plan
 
     def replace_node(self, ring: RingPlan, seq_pos: int, position: str, reason: str) -> bool:
-        """Advance one node along the fallback chain in place; False when exhausted."""
-        if self.settings.force_motif:
-            return False
+        """
+        Advance one node along the fallback chain in place; False when exhausted.
+
+        A stem is a contact repair that changes no motif, so it stays available under `force_motif`;
+        substituting the motif or falling back to a safe band does not.
+        """
         if not 0 <= seq_pos < len(ring.sequence):
             return False
         entry = ring.sequence[seq_pos]
@@ -267,7 +270,7 @@ class Composer:
             # A floating base first gets a stem toward the ring inside it (the innermost ring has none).
             node.attachments.append(self._stem_recipe())
             return True
-        if node.is_fallback:
+        if self.settings.force_motif or node.is_fallback:
             return False
 
         tried = self._tried.setdefault((ring.ring_index, ring.ring_seed, seq_pos, position), [])

@@ -71,10 +71,17 @@ def test_force_motif_as_slot_child():
     p = plan_for(force_motif={"name": "diamond", "position": "centre", "role": "slot"})
     assert p.rings[1].sequence[0].centre.slot_child.motif == "diamond"
 
-def test_force_motif_disables_fallback():
+def test_force_motif_disables_fallback_but_keeps_the_stem_repair():
     c = Composer(1, GEOM, ComposerSettings(force_motif={"name": "petal", "position": "centre", "role": "base"}))
     ring = c.plan().rings[1]
-    assert c.replace_node(ring, 0, "centre", "test") is False
+    node = ring.sequence[0].centre
+    assert node.attachments == []
+    assert c.replace_node(ring, 0, "centre", "generation") is False
+    assert node.motif == "petal" and node.attachments == []
+    assert c.replace_node(ring, 0, "centre", "floating") is True
+    assert [a.motif for a in node.attachments] == ["stem"]
+    assert c.replace_node(ring, 0, "centre", "floating") is False
+    assert node.motif == "petal" and len(node.attachments) == 1
 
 def test_style_weights_categories_instead_of_filtering_them():
     # Composer seed 2 gives ring 0 a scallop, so the variety filter leaves ring_band allowed in ring 1.

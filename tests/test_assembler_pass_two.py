@@ -168,9 +168,20 @@ def test_floating_cell_is_replaced_and_reassembled():
     assert len(a.index) == len(a.paths) and all(r in design.paths for r in design.reaches)
     assert [n.cell_index for n in design.nodes if n.ring_index == 1 and len(n.node_path) == 1] == list(range(12))
 
-def test_floating_cell_that_cannot_be_replaced_raises():
+def test_forced_floating_cell_gets_a_stem():
     plan = manual_plan()
     plan.rings[1].sequence[0] = CellEntry(CellRecipe("ring_band", "geometric"), None)
+    composer = composer_for(GEOM, force_motif={"name": "ring_band", "position": "centre", "role": "base"})
+    design = Assembler(plan, GEOM, CENTER, 0.5, 10.0, composer).assemble()
+    assert [r.motif for r in plan.rings[1].sequence[0].centre.attachments] == ["stem"]
+    assert validate(design).stats["num_floating_base"] == 0
+
+def test_floating_cell_that_cannot_be_replaced_raises():
+    # The cell already has an attachment (a ring_band draws no reach), so the stem repair is spent and forcing forbids a swap.
+    plan = manual_plan()
+    plan.rings[1].sequence[0] = CellEntry(
+        CellRecipe("ring_band", "geometric", attachments=[CellRecipe("ring_band", "geometric")]), None
+    )
     composer = composer_for(GEOM, force_motif={"name": "ring_band", "position": "centre", "role": "base"})
     with pytest.raises(AssemblyError, match="floating base cannot be replaced"):
         Assembler(plan, GEOM, CENTER, 0.5, 10.0, composer).assemble()
