@@ -402,6 +402,58 @@ def _touch(asm: Assembler, node: PlacedNode, side: str, neighbour: int) -> None:
     asm.reindex(path)
 
 
+def final_touches(asm: Assembler) -> None:
+    """
+    Within a pen's width of ink a tip touches it or keeps clear. Once every
+    ring is resolved, each node side that overflows has its extreme vertex
+    moved onto neighbour ink within `TOUCH_GAP_PX`: tips that were never pulled
+    back, and tips whose touched ink changed afterwards. A tip already shared
+    with other ink (a touch, or a reach's start) is left alone, so nothing
+    attached to it comes loose. A touch is undone when it would make the side
+    cross or crowd the neighbour, or close off a face too thin or small to colour.
+    """
+    outermost = max(ring.ring_index for ring in asm.plan.rings)
+    for node in list(asm.nodes):
+        for side in ("inward", "outward"):
+            neighbour = _neighbour(asm, node.ring_index, side)
+            if neighbour is None or not _overflows(node, side):
+                continue
+            _, path, i = _extreme_vertex(node, side)
+            if _shared_with_other_ink(asm, node, path.coords[i]):
+                continue
+            touched = [path] + [other for other in asm.index.candidates(Point(path.coords[i]).buffer(TOUCH_GAP_PX))
+                                if other.ring_index == neighbour]
+            saved = [(other, list(other.coords), list(other.radials)) for other in touched]
+            _touch(asm, node, side, neighbour)
+            if path.coords[i] == saved[0][1][i]:
+                continue  # nothing within reach
+            landed = Point(path.coords[i])
+            if (_conflicts(asm, _subtree_paths(asm, node), neighbour, side)
+                    or _uncolourable_face_at(asm, outermost, landed, landed.bounds)):
+                for other, coords, radials in saved:
+                    other.coords[:], other.radials[:] = coords, radials
+                    asm.reindex(other)
+
+
+def _overflows(node: PlacedNode, side: str) -> bool:
+    return any(radial < 0.0 if side == "inward" else radial > 1.0 for path in node.paths for radial in path.radials)
+
+
+def _extreme_vertex(node: PlacedNode, side: str) -> Tuple[float, PlacedPath, int]:
+    """The node's vertex furthest past its ring on `side`, as `_touch` picks it."""
+    sign = 1.0 if side == "inward" else -1.0
+    return min(((sign * radial, path, i) for path in node.paths for i, radial in enumerate(path.radials)),
+               key=lambda entry: entry[0])
+
+
+def _shared_with_other_ink(asm: Assembler, node: PlacedNode, vertex: PointTuple) -> bool:
+    own = {id(path) for member in asm.subtree(node) for path in member.paths}
+    return any(
+        id(other) not in own and any(math.hypot(x - vertex[0], y - vertex[1]) <= SAME_VERTEX_PX for x, y in other.coords)
+        for other in asm.index.candidates(Point(vertex).buffer(SAME_VERTEX_PX))
+    )
+
+
 # ----------------------------------------------------------------- reaches
 
 
@@ -424,14 +476,17 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     start = page_point if anchor is None else anchor[1]
     far = (start[0] + direction[0] * reach_end.max_length_px, start[1] + direction[1] * reach_end.max_length_px)
     exclude = lambda path: id(path) in subtree_ids
-    hit = _landing(asm, LineString([start, far]), exclude)
+    ray = LineString([start, far])
+    hit = _landing(asm, ray, exclude)
     if hit is None and reach_end.direction == "inward":
         # The innermost ring is a closed band of ink, so an inward reach always lands
         # somewhere; past its declared length it runs on toward the centre.
-        hit = _landing(asm, LineString([start, asm.center]), exclude)
+        ray = LineString([start, asm.center])
+        hit = _landing(asm, ray, exclude)
     if hit is None:
         return None, None
-    target, hit_point, _ = hit
+    target, hit_point, along = hit
+    lead_point = ray.interpolate(along)
 
     if anchor is not None:
         start = insert_vertex(anchor[0], start)
@@ -441,11 +496,19 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     if math.hypot(end[0] - start[0], end[1] - start[1]) <= ON_INK_PX:
         return None, target  # the start already lies on other ink: a touch, with a vertex on both
 
-    leaves_room = lambda coords: not _closes_uncolourable_face(asm, node.ring_index, coords)
+    # A reach that lands beside its ray runs along the ray to where it came within the touch
+    # gap, then bends onto the ink, so the run up to there keeps the clearance the ray had.
+    lead: Optional[PointTuple] = (lead_point.x, lead_point.y)
+    if ray.distance(Point(end)) <= ON_INK_PX or lead_point.distance(Point(start)) <= ON_INK_PX:
+        lead = None
+    tail = [] if lead is None else [end]
+    leaves_room = lambda coords: not _closes_uncolourable_face(asm, node.ring_index, list(coords) + tail)
     if reach_end.style == "straight":
-        coords = [start, end] if leaves_room([start, end]) else None
+        body = [start, lead or end]
+        coords = body + tail if leaves_room(body) else None
     else:
-        coords = _wavy_clear_of_ink(asm, start, end, leaves_room)
+        body = _wavy_clear_of_ink(asm, start, lead or end, leaves_room)
+        coords = None if body is None else body + tail
     if coords is None:
         # Any reach here would close off a face too thin or too small to colour: none is drawn.
         return None, target
@@ -491,11 +554,20 @@ def _closes_uncolourable_face(asm: Assembler, ring_index: int, coords: Sequence[
     grows to take it in; one already too thin or small only gets more so.
     """
     reach = LineString(coords)
-    probe = reach.interpolate(0.5, normalized=True)
-    window = shapely.box(*reach.bounds).buffer(FACE_WINDOW_PX, join_style="mitre")
+    return _uncolourable_face_at(asm, ring_index, reach.interpolate(0.5, normalized=True), reach.bounds, [list(coords)])
+
+
+def _uncolourable_face_at(asm: Assembler, ring_index: int, probe: Point, bounds: Tuple[float, float, float, float],
+                          extra: Sequence[Sequence[PointTuple]] = ()) -> bool:
+    """
+    Whether any face whose boundary passes through `probe` is too thin or too
+    small to colour, with ink of rings up to `ring_index` plus `extra` lines,
+    built in a window around `bounds` (see `_closes_uncolourable_face`).
+    """
+    window = shapely.box(*bounds).buffer(FACE_WINDOW_PX, join_style="mitre")
     for _ in range(FACE_WINDOW_GROWTHS + 1):
         local = [path.coords for path in asm.index.candidates(window) if path.ring_index <= ring_index]
-        beside = [face for face in FACE_RULES.faces(local + [list(coords)])
+        beside = [face for face in FACE_RULES.faces(local + [list(line) for line in extra])
                   if face.polygon.boundary.distance(probe) <= FACE_PROBE_PX]
         if any(face.is_uncolorable for face in beside):
             return True
@@ -637,6 +709,7 @@ def pass_two(asm: Assembler) -> None:
         asm.current_ring = ring.ring_index
         _resolve_ring(asm, ring)
     asm.current_ring = None
+    final_touches(asm)
     for ring in asm.plan.rings:
         inner = _neighbour(asm, ring.ring_index, "inward")
         if inner is None:

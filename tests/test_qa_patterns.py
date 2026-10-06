@@ -31,7 +31,8 @@ def test_stem_reach_does_not_close_a_slit_between_overflowing_petals():
 
 def test_overflow_and_reaches_touch_or_keep_pen_width_clear_of_other_rings():
     # Within a pen's width of ink a line either touches it or keeps clear. Every overflow part and every reach
-    # stays at least 4px from every other-ring path, once both lose a 10px disc around each vertex they share.
+    # stays at least 4px from every other-ring path, once both lose a 10px disc around each vertex the line's
+    # path shares with any ink of that other ring.
     import io
     from contextlib import redirect_stdout
     from shapely.geometry import LineString, MultiPoint
@@ -45,12 +46,15 @@ def test_overflow_and_reaches_touch_or_keep_pen_width_clear_of_other_rings():
     design = g.assembled
     lines = [(path, LineString(path.coords)) for path in design.paths if path.role == "reach"]
     lines += [(path, run) for path in design.paths for _, run in path_overflow(path, design.center)]
+    ring_vertices = {}
+    for path in design.paths:
+        ring_vertices.setdefault(path.ring_index, set()).update(path.coords)
     for path, line in lines:
         for other in design.paths:
             if other.ring_index == path.ring_index or len(set(other.coords)) < 2:
                 continue
             mine, ink = line, LineString(other.coords)
-            shared = set(path.coords) & set(other.coords)
+            shared = set(path.coords) & ring_vertices[other.ring_index]
             if shared:
                 disc = MultiPoint(list(shared)).buffer(10.0)
                 mine, ink = mine.difference(disc), ink.difference(disc)

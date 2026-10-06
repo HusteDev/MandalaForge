@@ -338,3 +338,33 @@ def test_touch_within_the_touch_radius_of_a_vertex_reuses_it():
     path = PlacedPath(0, 0, "centre", (0,), "base", [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)], [0.5, 0.5, 0.5], False, 1.0)
     assert resolver.insert_vertex(path, (10.0 + 3e-7, 0.0)) == (10.0, 0.0)
     assert len(path.coords) == 3
+
+def test_final_touch_pass_snaps_a_tip_within_clearance_that_was_never_pulled_back():
+    a = placed(manual_plan())
+    petal = next(n for n in a.nodes if n.recipe.motif == "petal")
+    tip = lowest_vertex(petal.paths[0])
+    assert min(petal.paths[0].radials) < 0.0 and not petal.pull_backs
+    # Neighbour ink 3px further toward the centre, square to the tip's radius: no crossing, no crowding.
+    cx, cy = CENTER
+    radius = math.hypot(tip[0] - cx, tip[1] - cy)
+    ux, uy = (tip[0] - cx) / radius, (tip[1] - cy) / radius
+    foot = (cx + ux * (radius - 3.0), cy + uy * (radius - 3.0))
+    ink = add_ink(a, 0, [(foot[0] - uy * 2.0, foot[1] + ux * 2.0), (foot[0] + uy * 2.0, foot[1] - ux * 2.0)])
+    resolver.final_touches(a)
+    new_tip = lowest_vertex(petal.paths[0])
+    assert new_tip in ink.coords
+    assert math.isclose(math.hypot(new_tip[0] - foot[0], new_tip[1] - foot[1]), 0.0, abs_tol=1e-6)
+
+def test_grazing_reach_runs_along_its_ray_then_bends_onto_the_ink():
+    a = placed(manual_plan())
+    node, short, point, rotation = stem_of_cell_zero(a)
+    anchor = lowest_vertex(node.paths[0])
+    # A short stroke 3px beside the reach's ray (which runs toward the centre along y = anchor y), its end 3.9px on.
+    x, y = anchor[0] - 3.9, anchor[1] + 3.0
+    beside = add_ink(a, 1, [(x, y), (x, y + 5.0)])
+    reach = a.resolve_reach(node, short, point, rotation)
+    assert len(reach.coords) == 3
+    lead = reach.coords[1]
+    assert math.isclose(lead[1], anchor[1], abs_tol=1e-6)  # still on the ray
+    assert math.isclose(math.hypot(lead[0] - x, lead[1] - y), resolver.TOUCH_GAP_PX, abs_tol=0.01)
+    assert reach.coords[-1] in beside.coords and math.isclose(reach.coords[-1][0], x, abs_tol=1e-9)
