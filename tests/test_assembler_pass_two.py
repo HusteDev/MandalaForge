@@ -57,7 +57,9 @@ def test_assembly_is_deterministic():
 # ----- behaviour beyond the brief's tests -----
 
 import pytest
+import shapely
 from motifs.contract import ReachEnd
+from motifs.geometry import CellPoint
 
 # Ring 1 deep enough that the petal's inward dip crosses ring 0's band.
 DEEP = [dict(inner_radius=40, outer_radius=100), dict(inner_radius=100, outer_radius=220)]
@@ -146,13 +148,6 @@ def test_reach_radials_are_in_its_own_ring():
         for (x, y), radial in zip(reach.coords, reach.radials):
             assert math.isclose(100.0 + 70.0 * radial, math.hypot(x - CENTER[0], y - CENTER[1]), abs_tol=1e-9)
 
-def test_reach_with_nothing_in_range_draws_nothing():
-    a = placed(manual_plan())
-    node, end, point, rotation = a.pending_reaches[0]
-    short = ReachEnd(end.point, end.direction, 1.0, end.style)
-    assert a.resolve_reach(node, short, point, rotation) is None
-    assert not any(p.role == "reach" for p in a.paths)
-
 def test_floating_base_cells_lists_unconnected_bases():
     a = placed(manual_plan())
     a.current_ring = 1
@@ -165,7 +160,8 @@ def test_floating_cell_is_replaced_and_reassembled():
     plan.rings[1].sequence[0] = CellEntry(CellRecipe("ring_band", "geometric"), None)
     a = Assembler(plan, GEOM, CENTER, 0.5, 10.0, composer_for(GEOM))
     design = a.assemble()
-    assert plan.rings[1].sequence[0].centre.motif != "ring_band"
+    assert [r.motif for r in plan.rings[1].sequence[0].centre.attachments] == ["stem"]
+    assert len(design.reaches) == 12
     assert validate(design).stats["num_floating_base"] == 0
     assert len(a.index) == len(a.paths) and all(r in design.paths for r in design.reaches)
     assert [n.cell_index for n in design.nodes if n.ring_index == 1 and len(n.node_path) == 1] == list(range(12))
@@ -186,3 +182,35 @@ def test_composer_plans_assemble_deterministically():
     assert [p.coords for p in a.paths] == [p.coords for p in b.paths]
     report = validate(a)
     assert report.stats["num_dangles"] == 0 and report.stats["num_floating_base"] == 0
+
+def test_inward_reach_runs_on_past_its_length_to_find_ink():
+    a = placed(manual_plan())
+    node, end, point, rotation = a.pending_reaches[0]
+    short = ReachEnd(end.point, end.direction, 1.0, end.style)
+    reach = a.resolve_reach(node, short, point, rotation)
+    assert reach is not None
+    petal = next(n for n in a.nodes if n is node)
+    assert reach.coords[0] in petal.paths[0].coords
+    hit = reach.coords[-1]
+    assert any(hit in p.coords for p in a.paths if p.ring_index == 0)
+
+def test_outward_reach_keeps_its_declared_length():
+    a = placed(manual_plan())
+    band = next(n for n in a.nodes if n.ring_index == 0 and n.cell_index == 0)
+    # Start on the band's outer edge: the petals above are a few px away, beyond the 1px cap.
+    edge = LineString(band.paths[0].coords).intersection(LineString([CENTER, (CENTER[0] + 100.0, CENTER[1])]))
+    page_point = max(((x, y) for x, y in shapely.get_coordinates(edge)), key=lambda c: c[0])
+    assert a.resolve_reach(band, ReachEnd(CellPoint(0.9, 0.0), "outward", 1.0), page_point, 0.0) is None
+
+def test_slot_child_drop_is_per_cell():
+    a = placed(manual_plan(), DEEP)
+    petals = [n for n in a.nodes if n.recipe.motif == "petal"]
+    first = petals[0]
+    regenerated = a.regenerate(first, (-0.1, 1.25))
+    child, _, context, _ = regenerated[1]
+    a.commit([regenerated[0], (child, None, context, [])])
+    assert first.child_dropped and child.recipe.dropped
+    assert not any(p.child_dropped for p in petals[1:])
+    # The shared recipe now reports a drop, yet another cell still gets its child.
+    a.replace_cells(a.plan.rings[1], [0])
+    assert all(len(a.subtree(n)) == 2 for n in a.nodes if n.recipe.motif == "petal")

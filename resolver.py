@@ -351,11 +351,16 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     norm = math.hypot(dx, dy)
     sign = 1.0 if reach_end.direction == "inward" else -1.0
     direction = (sign * dx / norm, sign * dy / norm)
-    anchor = _anchor(node, page_point, direction, reach_end.max_length_px)
+    anchor = _anchor(node, page_point, direction)
     start = page_point if anchor is None else anchor[1]
     far = (page_point[0] + direction[0] * reach_end.max_length_px,
            page_point[1] + direction[1] * reach_end.max_length_px)
-    hit = _first_hit(asm, LineString([start, far]), lambda path: id(path) in subtree_ids)
+    exclude = lambda path: id(path) in subtree_ids
+    hit = _first_hit(asm, LineString([start, far]), exclude)
+    if hit is None and reach_end.direction == "inward":
+        # The innermost ring is a closed band of ink, so an inward reach always lands
+        # somewhere; past its declared length it runs on toward the centre.
+        hit = _first_hit(asm, LineString([start, asm.center]), exclude)
     if hit is None:
         return None, None
     target, hit_point, _ = hit
@@ -431,18 +436,19 @@ def _first_hit(asm: Assembler, ray: LineString,
     return best
 
 
-def _anchor(node: PlacedNode, page_point: PointTuple, direction: PointTuple,
-            max_length_px: float) -> Optional[Tuple[PlacedPath, PointTuple]]:
+def _anchor(node: PlacedNode, page_point: PointTuple,
+            direction: PointTuple) -> Optional[Tuple[PlacedPath, PointTuple]]:
     """
     Where the reach starts, so that its start is a touch too: the node's own ink
-    furthest along the reach's line in its direction, within `max_length_px` of
-    the page point either way. A stem whose page point lies inside its petal
+    furthest along the reach's line in its direction, within two ring depths of
+    the page point either way (a motif's ink, overflow included, lies closer). A stem whose page point lies inside its petal
     starts where it leaves the petal; one whose page point lies short of its
     band starts on the band. None when the line misses the node's ink.
     """
+    span = 2.0 * node.context.ring_depth
     line = LineString([
-        (page_point[0] - direction[0] * max_length_px, page_point[1] - direction[1] * max_length_px),
-        (page_point[0] + direction[0] * max_length_px, page_point[1] + direction[1] * max_length_px),
+        (page_point[0] - direction[0] * span, page_point[1] - direction[1] * span),
+        (page_point[0] + direction[0] * span, page_point[1] + direction[1] * span),
     ])
     best: Optional[Tuple[float, PlacedPath, PointTuple]] = None
     for path in node.paths:

@@ -261,7 +261,13 @@ class Composer:
             return False
         entry = ring.sequence[seq_pos]
         node = entry.centre if position == "centre" else entry.divider
-        if node is None or node.is_fallback:
+        if node is None:
+            return False
+        if reason == "floating" and not node.attachments and ring.ring_index > 0:
+            # A floating base first gets a stem toward the ring inside it (the innermost ring has none).
+            node.attachments.append(self._stem_recipe())
+            return True
+        if node.is_fallback:
             return False
 
         tried = self._tried.setdefault((ring.ring_index, ring.ring_seed, seq_pos, position), [])
@@ -287,10 +293,6 @@ class Composer:
             )
             self._set_node(entry, position, new_node)
             self._ensure_contact(ring.ring_index, ring.sequence)
-            return True
-
-        if reason == "floating" and not node.attachments:
-            node.attachments.append(self._stem_recipe())
             return True
 
         safe = safe_motif(node.category)

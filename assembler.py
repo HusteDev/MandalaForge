@@ -66,6 +66,8 @@ class PlacedNode:
     context: MotifContext
     parent: Optional[PlacedNode]
     attachment_seeds: List[int] = field(default_factory=list)
+    # True when this node's slot child could not be placed in this cell.
+    child_dropped: bool = False
     # Overflow sides pass two has resolved for this node, and how often it pulled each back.
     resolved_sides: Set[str] = field(default_factory=set)
     pull_backs: Dict[str, int] = field(default_factory=dict)
@@ -251,13 +253,17 @@ class Assembler:
         del self.pending_reaches[reaches:]
 
     def _place_slot_children(self, ring: RingPlan, parent: PlacedNode) -> None:
-        """Place the slot child chain under `parent`, dropping a child that cannot be placed."""
+        """
+        Place the slot child chain under `parent`, dropping a child that cannot be
+        placed. A child's fit depends on this cell's slot, so it is always tried;
+        `recipe.dropped` only reports that it was dropped in at least one cell.
+        """
         recipe = parent.recipe.slot_child
         if recipe is None:
             return
         slot = parent.instance.declaration.slot
         child = None
-        if not recipe.dropped and slot:
+        if slot:
             try:
                 child = self._place_node(
                     ring, parent.cell_index, parent.position, recipe,
@@ -267,6 +273,7 @@ class Assembler:
                 child = None
         if child is None:
             recipe.dropped = True
+            parent.child_dropped = True
             self.dropped_children += 1
             return
         self._place_slot_children(ring, child)
@@ -418,6 +425,7 @@ class Assembler:
             if instance is None:
                 if not dropping:
                     node.recipe.dropped = True
+                    node.parent.child_dropped = True
                     self.dropped_children += 1
                     dropping = True
                 self.nodes = [other for other in self.nodes if other is not node]

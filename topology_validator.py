@@ -374,8 +374,13 @@ class TopologyValidator:
                 if hit.is_empty:
                     continue
                 parts = list(hit.geoms) if hasattr(hit, 'geoms') else [hit]
+                # A point at either end of the overflow line is allowed, and so is a touch:
+                # a point that is a vertex of both the overflow line and the other polyline.
                 if all(
-                    part.geom_type == 'Point' and any(e.distance(part) <= 1e-6 for e in ends)
+                    part.geom_type == 'Point' and (
+                        any(e.distance(part) <= 1e-6 for e in ends)
+                        or (_near_vertex(part, line.coords) and _near_vertex(part, other.coords))
+                    )
                     for part in parts
                 ):
                     continue
@@ -755,6 +760,10 @@ class TopologyValidator:
 
 
 # ---------------------------------------------------------------- adapters
+
+def _near_vertex(point: ShPoint, coords, tolerance: float = 1e-6) -> bool:
+    return any(math.hypot(point.x - x, point.y - y) <= tolerance for x, y in coords)
+
 
 def structural_components(
     polylines: Sequence[Sequence[Coord]], touch_tolerance: float = 0.01

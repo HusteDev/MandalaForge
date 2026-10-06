@@ -108,3 +108,12 @@ def test_explicit_division_counts_are_validated():
         Composer(1, GEOM, ComposerSettings(ring_divisions=[8, 30]))
     with pytest.raises(ValueError, match="3"):
         Composer(1, GEOM, ComposerSettings(num_divisions=3))
+
+def test_floating_node_gets_a_stem_first():
+    from composer import CellRecipe, CellEntry, RingPlan
+    c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
+    ring = RingPlan(1, 12, 1.0, [CellEntry(CellRecipe("ring_band", "geometric"), None)], 1)
+    assert c.replace_node(ring, 0, "centre", "floating") is True
+    node = ring.sequence[0].centre
+    assert node.motif == "ring_band"
+    assert [a.motif for a in node.attachments] == ["stem"] and node.attachments[0].provides_contact
