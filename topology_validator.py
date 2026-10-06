@@ -28,6 +28,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import shapely as _shapely
 from shapely import STRtree
 from shapely.geometry import LineString, MultiLineString, Point as ShPoint, Polygon
 from shapely.ops import polygonize_full, unary_union
@@ -192,7 +193,6 @@ class TopologyValidator:
         # self-intersections) becomes a shared vertex between edge pieces.
         # Snap-rounding to a 0.001px grid (invisible at page scale) makes
         # near-coincident coordinates exact so micro-gaps cannot survive.
-        import shapely as _shapely
         noded = _shapely.set_precision(unary_union(lines), 0.001)
         edges = self._as_line_list(noded)
 
@@ -346,7 +346,6 @@ class TopologyValidator:
         lines = self._build_lines(polylines)
         if not lines:
             return []
-        import shapely as _shapely
         edges = self._as_line_list(_shapely.set_precision(unary_union(lines), 0.001))
         polygons = polygonize_full(edges)[0]
         return self._resolve_faces(list(polygons.geoms))
@@ -762,11 +761,15 @@ class TopologyValidator:
                 area = piece.area
                 if area < self.sliver_area:
                     continue
-                if piece.buffer(-self.ink_radius).is_empty:
+                # Erode the same coordinates in floating precision: a face noded on the
+                # 0.001px grid carries that grid, and GEOS can collapse a negative buffer
+                # on gridded input to empty even where a pen fits with room to spare.
+                exact = _shapely.set_precision(piece, 0.0)
+                if exact.buffer(-self.ink_radius).is_empty:
                     # entirely covered by stroke ink - not a visible region
                     continue
                 is_tiny = area < self.min_region_area
-                is_too_thin = (not is_tiny) and piece.buffer(-self.pen_radius).is_empty
+                is_too_thin = (not is_tiny) and exact.buffer(-self.pen_radius).is_empty
                 label = piece.representative_point()
                 faces.append(RegionInfo(
                     polygon=piece,
