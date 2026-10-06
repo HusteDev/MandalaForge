@@ -68,3 +68,11 @@ def test_forced_slot_motif_that_never_fits_fails():
     job = ("diamond", "geometric", (24, 24, 24), 0.5, 25, "centre", "slot", 20260821, False)
     outcome = run_case(job)
     assert outcome["status"] == "FAIL" and "never placed" in outcome["detail"]
+
+
+def test_slot_job_is_gated_on_the_frames_estimated_slot():
+    # A (48,48,48) cell is about 20px wide where it is narrowest: wide enough for a diamond's 10px gate, but
+    # the petal frame's slot, half of it as the composer estimates when nesting, is not.
+    job = ("diamond", "geometric", (48, 48, 48), 0.15, 10, "centre", "slot", 20260821, False)
+    outcome = run_case(job)
+    assert outcome["status"] == "SKIP" and "slot" in outcome["detail"]

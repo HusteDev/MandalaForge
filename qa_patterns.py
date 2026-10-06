@@ -73,8 +73,17 @@ def _supports(entry, position, role):
             and REGISTRY_ROLE[role] in entry['roles'])
 
 
-def _gate_skip(entry, generator, ring_divisions, position):
-    """Reason the declared gates exclude the fixture, or None. Ring 0 is never forced."""
+# The frame a forced slot child nests in, whose slot estimate sizes the room it gets.
+SLOT_FRAME = 'petal'
+
+
+def _gate_skip(entry, generator, ring_divisions, position, role='base'):
+    """
+    Reason the declared gates exclude the fixture, or None. Ring 0 is never
+    forced. A slot child is gated on the frame's slot as the composer
+    estimates it when nesting: the cell and ring depth scaled by the frame's
+    `slot_estimate`.
+    """
     budget = BOTH_BUDGET if position == 'both' else 1.0
     cells, depths = [], []
     for ring, divisions in list(zip(generator.rings, ring_divisions))[1:]:
@@ -84,10 +93,14 @@ def _gate_skip(entry, generator, ring_divisions, position):
     if not cells:
         return "no ring past the centre to force"
     cell, depth = min(cells), min(depths)
+    room = 'cell'
+    if role == 'slot':
+        width_fraction, depth_fraction = find_motif(SLOT_FRAME)['slot_estimate']
+        cell, depth, room = cell * width_fraction, depth * depth_fraction, 'slot'
     if entry['min_cell_width_px'] > cell:
-        return f"cell {cell:.0f}px < gate {entry['min_cell_width_px']:.0f}px"
+        return f"{room} {cell:.1f}px < gate {entry['min_cell_width_px']:.0f}px"
     if entry['min_ring_depth_px'] > depth:
-        return f"ring depth {depth:.0f}px < gate {entry['min_ring_depth_px']:.0f}px"
+        return f"{room} depth {depth:.1f}px < gate {entry['min_ring_depth_px']:.0f}px"
     return None
 
 
@@ -123,7 +136,7 @@ def run_case(job):
                 force_motif={'name': name, 'position': position, 'role': role},
             )
             if not probe:
-                reason = _gate_skip(entry, generator, ring_divisions, position)
+                reason = _gate_skip(entry, generator, ring_divisions, position, role)
                 if reason:
                     return result('SKIP', reason)
             generator.generate()
@@ -139,7 +152,9 @@ def run_case(job):
 
     # A design can validate without the motif under test: a slot child that never fits is dropped.
     placed = _placed_count(generator, name, role)
-    dropped = generator.assembled.dropped_children
+    dropped = sum(1 for node in generator.assembled.nodes
+                  if node.child_dropped and node.recipe.slot_child is not None
+                  and node.recipe.slot_child.motif == name)
     if placed == 0:
         return result('FAIL', f"forced motif never placed ({dropped} dropped)")
     if role == 'slot' and not probe and dropped > placed:
