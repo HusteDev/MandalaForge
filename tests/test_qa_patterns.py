@@ -89,8 +89,9 @@ def test_slot_gate_measures_every_forced_rings_real_frame():
 
 def test_partial_slot_drops_pass_and_are_reported():
     # A forced ring's frame slot admits the child but some cells' real slots are smaller: the spec drops the
-    # child there gracefully, so the job passes and carries its counts for the table's DROP column.
-    job = ("diamond", "geometric", (24, 24, 24), 0.9, 5, "centre", "slot", 20260821, False)
+    # child there gracefully, so the job passes and carries its counts for the table's DROP column. With base
+    # symmetry every cell of a uniform ring shares one recipe, so here one ring places and the other drops.
+    job = ("diamond", "geometric", (24, 24, 24), 0.9, 5, "centre", "slot", 1, False)
     outcome = run_case(job)
     assert outcome["status"] == "PASS"
-    assert outcome["detail"] == "40 placed, 8 dropped" and outcome["dropped"] == 8
+    assert outcome["detail"] == "24 placed, 24 dropped" and outcome["dropped"] == 24

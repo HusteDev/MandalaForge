@@ -31,7 +31,7 @@ def test_sequence_length_divides_count_and_is_bounded():
                                                    categories=["botanical", "geometric"])).plan()
         for r in p.rings:
             n = len(r.sequence)
-            assert r.divisions % n == 0 and n <= 4 and n < r.divisions
+            assert (r.divisions // p.base_symmetry) % n == 0 and n <= 4 and n < r.divisions
 
 def test_complexity_zero_gives_single_entry_and_no_nesting():
     p = plan_for(complexity=0.0)
@@ -124,3 +124,161 @@ def test_floating_node_gets_a_stem_first():
     node = ring.sequence[0].centre
     assert node.motif == "ring_band"
     assert [a.motif for a in node.attachments] == ["stem"] and node.attachments[0].provides_contact
+
+
+# ------------------------------------------------------- revision 2: symmetry and contact
+
+def _base_nodes(ring):
+    return [n for e in ring.sequence for n in (e.centre, e.divider) if n is not None]
+
+def _stems_in_ring(ring):
+    """Stem attachments over every cell of the ring, not just the sequence."""
+    per_entry = [sum(1 for n in (e.centre, e.divider) if n is not None
+                     for a in n.attachments if a.motif == "stem") for e in ring.sequence]
+    return sum(per_entry[i % len(ring.sequence)] for i in range(ring.divisions))
+
+def test_base_symmetry_is_num_divisions_without_vary():
+    assert plan_for(num_divisions=10).base_symmetry == 10
+
+def test_explicit_ring_divisions_give_their_gcd_as_base_symmetry():
+    assert plan_for(ring_divisions=[8, 8, 8, 12]).base_symmetry == 4
+    assert plan_for(ring_divisions=[9, 7, 12, 6]).base_symmetry == 1
+
+def test_base_symmetry_static_rule():
+    import random
+    rng = random.Random(0)
+    assert Composer.base_symmetry(12, False, None, rng) == 12
+    assert Composer.base_symmetry(12, True, [6, 9], rng) == 3
+    for _ in range(50):
+        assert Composer.base_symmetry(24, True, None, rng) in (3, 4, 6, 8)
+    assert Composer.base_symmetry(11, True, None, rng) == 1
+
+def test_vary_counts_are_multiples_of_base_symmetry():
+    symmetries = set()
+    for num in (8, 9, 12, 16, 24):
+        for seed in range(15):
+            p = Composer(seed, GEOM, ComposerSettings(num_divisions=num, vary_divisions=True,
+                                                      categories=["botanical"])).plan()
+            assert 3 <= p.base_symmetry <= 8 and num % p.base_symmetry == 0
+            symmetries.add(p.base_symmetry)
+            for r in p.rings:
+                assert 4 <= r.divisions <= 24
+                assert r.divisions % p.base_symmetry == 0
+    assert len(symmetries) > 1
+
+def test_sequence_length_divides_the_wedge():
+    for seed in range(20):
+        p = Composer(seed, GEOM, ComposerSettings(complexity=1.0, vary_divisions=True,
+                                                  categories=["botanical", "geometric"])).plan()
+        for r in p.rings:
+            n = len(r.sequence)
+            assert (r.divisions // p.base_symmetry) % n == 0 and n <= 4 and n < r.divisions
+
+def test_uniform_divisions_repeat_one_entry_per_cell():
+    for seed in range(10):
+        p = Composer(seed, GEOM, ComposerSettings(complexity=1.0, categories=["botanical", "geometric"])).plan()
+        assert all(len(r.sequence) == 1 for r in p.rings)
+
+def test_botanical_geometric_rings_are_side_mode_with_at_most_b_stems():
+    from composer import _side_touch_capable
+    from motifs import find_motif, safe_motif
+    for seed in range(20):
+        p = Composer(seed, GEOM, ComposerSettings(complexity=0.8, categories=["botanical", "geometric"])).plan()
+        for r in p.rings:
+            assert r.contact_mode == "side"
+            assert _stems_in_ring(r) <= p.base_symmetry
+            for node in _base_nodes(r):
+                assert _side_touch_capable(find_motif(node.motif) or safe_motif(node.category))
+                assert node.provides_contact
+
+def test_side_ring_without_inward_overflow_gets_one_stem_on_its_first_node():
+    from composer import CellRecipe, CellEntry
+    c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
+    seq = [CellEntry(CellRecipe("ring_band", "geometric"), CellRecipe("ring_band", "geometric")),
+           CellEntry(CellRecipe("leaf", "botanical"), None)]
+    c._ensure_contact(1, seq, "side")
+    assert [a.motif for a in seq[0].centre.attachments] == ["stem"]
+    assert seq[0].divider.attachments == [] and seq[1].centre.attachments == []
+    assert all(n.provides_contact for e in seq for n in (e.centre, e.divider) if n is not None)
+
+def test_side_ring_with_inward_overflow_gets_no_stem():
+    from composer import CellRecipe, CellEntry
+    c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
+    seq = [CellEntry(CellRecipe("leaf", "botanical"), CellRecipe("petal", "botanical"))]
+    c._ensure_contact(1, seq, "side")
+    assert seq[0].centre.attachments == [] and seq[0].divider.attachments == []
+    assert seq[0].centre.provides_contact and seq[0].divider.provides_contact
+
+def test_contact_mode_falls_back_to_overflow_then_stem(monkeypatch):
+    import composer as composer_module
+    from composer import CellRecipe, CellEntry
+    real = composer_module.find_motif
+    def fake(name):
+        entry = real(name)
+        if name in ("petal", "scallop"):
+            return {**entry, "side_touch": False}
+        return entry
+    monkeypatch.setattr(composer_module, "find_motif", fake)
+    c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
+    overflow = [CellEntry(CellRecipe("petal", "botanical"), CellRecipe("scallop", "botanical"))]
+    assert c._contact_mode(1, overflow) == "overflow"
+    assert c._contact_mode(0, overflow) == "side"
+    c._ensure_contact(1, overflow, "overflow")
+    assert overflow[0].centre.attachments == [] and overflow[0].divider.attachments == []
+    assert overflow[0].centre.provides_contact and overflow[0].divider.provides_contact
+    stem = [CellEntry(CellRecipe("petal", "botanical"), None), CellEntry(CellRecipe("diamond", "geometric"), None)]
+    assert c._contact_mode(1, stem) == "stem"
+
+def test_forced_non_side_base_gives_stem_mode():
+    p = plan_for(force_motif={"name": "diamond", "position": "centre", "role": "base"})
+    assert p.rings[0].contact_mode == "side"
+    for r in p.rings[1:]:
+        assert r.contact_mode == "stem"
+        for node in _base_nodes(r):
+            assert [a.motif for a in node.attachments] == ["stem"]
+
+def test_side_touch_radial_is_one_value_per_ring_in_range():
+    seen = set()
+    for seed in range(10):
+        p = Composer(seed, GEOM, ComposerSettings(categories=["botanical"])).plan()
+        for r in p.rings:
+            assert 0.35 <= r.side_touch_radial <= 0.6
+            seen.add(r.side_touch_radial)
+    assert len(seen) > 1
+    assert [r.side_touch_radial for r in plan_for().rings] == [r.side_touch_radial for r in plan_for().rings]
+
+def test_plan_json_round_trips_the_revision_two_fields():
+    from composer import DesignPlan
+    p = Composer(5, GEOM, ComposerSettings(vary_divisions=True, categories=["botanical", "geometric"])).plan()
+    d = p.to_dict()
+    assert d["base_symmetry"] == p.base_symmetry
+    assert all("contact_mode" in r and "side_touch_radial" in r for r in d["rings"])
+    assert DesignPlan.from_json(p.to_json()) == p
+
+def test_old_plan_json_loads_with_defaults():
+    from composer import DesignPlan
+    d = plan_for().to_dict()
+    del d["base_symmetry"]
+    for r in d["rings"]:
+        del r["contact_mode"], r["side_touch_radial"]
+    old = DesignPlan.from_dict(d)
+    assert old.base_symmetry == 1
+    assert all(r.contact_mode == "stem" and r.side_touch_radial == 0.5 for r in old.rings)
+
+def test_floating_node_in_side_ring_tries_side_bases_before_a_stem():
+    from composer import CellRecipe, CellEntry, RingPlan, _side_touch_capable
+    c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
+    width, depth = c._ring_metrics(1, 12)
+    side_names = {m["name"] for m in c._base_candidates(1, "centre", width, depth) if _side_touch_capable(m)}
+    ring = RingPlan(1, 12, 1.0, [CellEntry(CellRecipe("petal", "botanical"), None)], 1, contact_mode="side")
+    seen = ["petal"]
+    while True:
+        before = ring.sequence[0].centre
+        assert c.replace_node(ring, 0, "centre", "floating") is True
+        node = ring.sequence[0].centre
+        if node is before or node.is_fallback:
+            break
+        assert node.motif not in seen and node.motif in side_names
+        seen.append(node.motif)
+    assert set(seen) == side_names and len(seen) > 1
+    assert ring.contact_mode == "side"

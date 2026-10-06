@@ -73,6 +73,9 @@ class RingPlan:
     centre_share: float
     sequence: List[CellEntry]
     ring_seed: int
+    # Defaults keep revision-1 plans loadable: they used stems for contact and no side touch.
+    contact_mode: str = "stem"
+    side_touch_radial: float = 0.5
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -81,6 +84,8 @@ class RingPlan:
             "centre_share": self.centre_share,
             "sequence": [entry.to_dict() for entry in self.sequence],
             "ring_seed": self.ring_seed,
+            "contact_mode": self.contact_mode,
+            "side_touch_radial": self.side_touch_radial,
         }
 
     @classmethod
@@ -91,6 +96,8 @@ class RingPlan:
             centre_share=d["centre_share"],
             sequence=[CellEntry.from_dict(e) for e in d["sequence"]],
             ring_seed=d["ring_seed"],
+            contact_mode=d.get("contact_mode", "stem"),
+            side_touch_radial=d.get("side_touch_radial", 0.5),
         )
 
 
@@ -99,12 +106,14 @@ class DesignPlan:
     seed: int
     style: Dict[str, Any]
     rings: List[RingPlan]
+    base_symmetry: int = 1
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "seed": self.seed,
             "style": self.style,
             "rings": [ring.to_dict() for ring in self.rings],
+            "base_symmetry": self.base_symmetry,
         }
 
     @classmethod
@@ -113,6 +122,7 @@ class DesignPlan:
             seed=d["seed"],
             style=d["style"],
             rings=[RingPlan.from_dict(r) for r in d["rings"]],
+            base_symmetry=d.get("base_symmetry", 1),
         )
 
     def to_json(self) -> str:
@@ -146,6 +156,22 @@ POSITION_MODES = ("centre", "divider", "both")
 FORCE_ROLES = ("base", "slot", "contact")
 MIN_DIVISIONS = 4
 MAX_DIVISIONS = 24
+# Ring contact modes, strongest first (spec 13.2).
+CONTACT_MODES = ("side", "overflow", "stem")
+SIDE_TOUCH_RADIAL_RANGE = (0.35, 0.6)
+# Base symmetry drawn with `vary_divisions` is a divisor of `num_divisions` in this range.
+SYMMETRY_MIN = 3
+SYMMETRY_MAX = 8
+
+
+def _side_touch_capable(entry: Dict) -> bool:
+    """
+    Whether a base motif can meet its ring neighbours at a shared side vertex.
+
+    The registry gains a `side_touch` key in Task 18; until then the motifs that will support it
+    are the cell-spanning bands (scallop, ring_band, the safe band) plus petal and leaf.
+    """
+    return bool(entry.get("side_touch", entry["spans_cell"] or entry["name"] in ("petal", "leaf")))
 
 
 @dataclass
@@ -184,16 +210,51 @@ class Composer:
         self.ring_geometry = ring_geometry
         self.settings = settings
         self._style: Optional[Dict[str, Any]] = None
+        self._symmetry: Optional[int] = None
         self._canonical_names: Dict[int, Tuple[str, ...]] = {}
         self._tried: Dict[Tuple[int, int, int, str], List[str]] = {}
 
     # ------------------------------------------------------------------ public
 
     @staticmethod
-    def divisor_candidates(count: int) -> List[int]:
+    def divisor_candidates(count: int, symmetry: int = 1) -> List[int]:
+        """Sequence lengths that repeat whole in every wedge of `count // symmetry` cells."""
+        wedge = count // symmetry
         found = {1}
-        found.update(d for d in range(1, 5) if count % d == 0 and d < count)
+        found.update(d for d in range(1, 5) if wedge % d == 0 and d < count)
         return sorted(found)
+
+    @staticmethod
+    def base_symmetry(num_divisions: int, vary_divisions: bool,
+                      ring_divisions: Optional[List[int]], rng: random.Random) -> int:
+        """
+        The design's base symmetry `B` (spec 13.1): every ring's count is a multiple of it.
+
+        An explicit list gives its gcd (possibly 1); without vary every ring has `num_divisions`;
+        with vary a divisor of `num_divisions` in 3..8, weighted by its value, or 1 when none exists.
+        """
+        if ring_divisions:
+            return math.gcd(*ring_divisions)
+        if not vary_divisions:
+            return num_divisions
+        candidates = [d for d in range(SYMMETRY_MIN, SYMMETRY_MAX + 1) if num_divisions % d == 0]
+        if not candidates:
+            return 1
+        return rng.choices(candidates, weights=candidates)[0]
+
+    @property
+    def symmetry(self) -> int:
+        """This design's base symmetry, drawn once from its own design-level stream."""
+        if self._symmetry is None:
+            settings = self.settings
+            given = list(settings.ring_divisions or [])
+            if given and len(given) < len(self.ring_geometry) and not settings.vary_divisions:
+                given.append(settings.num_divisions)  # the rings past the list use num_divisions
+            self._symmetry = self.base_symmetry(
+                settings.num_divisions, settings.vary_divisions, given or None,
+                node_rng(self.seed, -1, 0, 1, "centre"),
+            )
+        return self._symmetry
 
     @property
     def style(self) -> Dict[str, Any]:
@@ -218,18 +279,21 @@ class Composer:
         return rng.choices(ordered, weights=weights)[0]
 
     def plan(self) -> DesignPlan:
+        symmetry = self.symmetry
         ring_seeds = self.settings.ring_seeds or {}
         rings = [
             self.plan_ring(i, ring_seeds.get(i, self.seed))
             for i in range(len(self.ring_geometry))
         ]
-        return DesignPlan(self.seed, {**self.style, "categories": list(self.style["categories"])}, rings)
+        style = {**self.style, "categories": list(self.style["categories"])}
+        return DesignPlan(self.seed, style, rings, symmetry)
 
     def plan_ring(self, ring_index: int, ring_seed: int) -> RingPlan:
         rng = node_rng(ring_seed, ring_index, 0, -1, "centre")
         divisions = self._division_count(ring_index, rng)
         seq_len = self._sequence_length(divisions, rng)
         mode, centre_share = self._position_mode(ring_index, divisions, rng)
+        side_touch_radial = rng.uniform(*SIDE_TOUCH_RADIAL_RANGE)
         cell_width, ring_depth = self._ring_metrics(ring_index, divisions)
         avoid = set(self._inward_base_names(ring_index))
         force = self.settings.force_motif if ring_index > 0 else None
@@ -246,9 +310,11 @@ class Composer:
                 )
             sequence.append(CellEntry(nodes["centre"], nodes["divider"]))
 
+        contact_mode = self._contact_mode(ring_index, sequence)
         if not (force and force["role"] == "contact"):
-            self._ensure_contact(ring_index, sequence)
-        plan = RingPlan(ring_index, divisions, centre_share, sequence, ring_seed)
+            self._ensure_contact(ring_index, sequence, contact_mode)
+        plan = RingPlan(ring_index, divisions, centre_share, sequence, ring_seed,
+                        contact_mode, side_touch_radial)
         if ring_seed == self.seed:
             self._canonical_names[ring_index] = self._base_names(plan)
         return plan
@@ -257,8 +323,10 @@ class Composer:
         """
         Advance one node along the fallback chain in place; False when exhausted.
 
-        A stem is a contact repair that changes no motif, so it stays available under `force_motif`;
-        substituting the motif or falling back to a safe band does not.
+        A floating base in a side-touch ring first tries another side-touching base, then a stem;
+        in other rings it gets the stem first. A stem is a contact repair that changes no motif,
+        so it stays available under `force_motif`; substituting the motif or falling back to a
+        safe band does not.
         """
         if not 0 <= seq_pos < len(ring.sequence):
             return False
@@ -266,13 +334,27 @@ class Composer:
         node = entry.centre if position == "centre" else entry.divider
         if node is None:
             return False
+        can_substitute = not self.settings.force_motif and not node.is_fallback
+        if (reason == "floating" and ring.contact_mode == "side" and can_substitute
+                and self._substitute(ring, seq_pos, position, side_only=True)):
+            return True
         if reason == "floating" and not node.attachments and ring.ring_index > 0:
-            # A floating base first gets a stem toward the ring inside it (the innermost ring has none).
+            # A floating base gets a stem toward the ring inside it (the innermost ring has none).
             node.attachments.append(self._stem_recipe())
             return True
-        if self.settings.force_motif or node.is_fallback:
+        if not can_substitute:
             return False
+        if self._substitute(ring, seq_pos, position, side_only=False):
+            return True
+        safe = safe_motif(node.category)
+        self._set_node(entry, position, CellRecipe(safe["name"], safe["category"], is_fallback=True))
+        self._refresh_contact(ring)
+        return True
 
+    def _substitute(self, ring: RingPlan, seq_pos: int, position: str, side_only: bool) -> bool:
+        """Swap the node for an untried base (side-touching only, if asked); False when none is left."""
+        entry = ring.sequence[seq_pos]
+        node = entry.centre if position == "centre" else entry.divider
         tried = self._tried.setdefault((ring.ring_index, ring.ring_seed, seq_pos, position), [])
         if node.motif not in tried:
             tried.append(node.motif)
@@ -283,24 +365,20 @@ class Composer:
 
         candidates = [
             c for c in self._base_candidates(ring.ring_index, position, cell_width, ring_depth)
-            if c["name"] not in tried
+            if c["name"] not in tried and (not side_only or _side_touch_capable(c))
         ]
-        if candidates:
-            offset = 3 * len(tried)
-            rng = node_rng(ring.ring_seed, ring.ring_index, seq_pos, offset, position)
-            chosen = self._pick(candidates, rng)
-            tried.append(chosen["name"])
-            new_node = self._compose(
-                chosen, rng, ring.ring_index, ring.ring_seed, seq_pos, position,
-                cell_width, ring_depth, offset,
-            )
-            self._set_node(entry, position, new_node)
-            self._ensure_contact(ring.ring_index, ring.sequence)
-            return True
-
-        safe = safe_motif(node.category)
-        self._set_node(entry, position, CellRecipe(safe["name"], safe["category"], is_fallback=True))
-        self._ensure_contact(ring.ring_index, ring.sequence)
+        if not candidates:
+            return False
+        offset = 3 * len(tried)
+        rng = node_rng(ring.ring_seed, ring.ring_index, seq_pos, offset, position)
+        chosen = self._pick(candidates, rng)
+        tried.append(chosen["name"])
+        new_node = self._compose(
+            chosen, rng, ring.ring_index, ring.ring_seed, seq_pos, position,
+            cell_width, ring_depth, offset,
+        )
+        self._set_node(entry, position, new_node)
+        self._refresh_contact(ring)
         return True
 
     # ----------------------------------------------------------- ring decisions
@@ -314,13 +392,18 @@ class Composer:
         if given is not None and ring_index < len(given):
             return given[ring_index]
         if self.settings.vary_divisions:
+            # A multiple of the base symmetry, with inner rings drawing smaller multipliers.
+            symmetry = self.symmetry
             scale = 0.5 + 0.5 * (self._mid_radius(ring_index) / self._mid_radius(len(self.ring_geometry) - 1))
-            raw = round(self.settings.num_divisions * scale * rng.triangular(0.7, 1.3, 1.0))
-            return max(MIN_DIVISIONS, min(MAX_DIVISIONS, raw))
+            raw = round(self.settings.num_divisions * scale * rng.triangular(0.7, 1.3, 1.0) / symmetry)
+            count = symmetry * max(1, min(MAX_DIVISIONS // symmetry, raw))
+            if count < MIN_DIVISIONS:
+                count = symmetry * math.ceil(MIN_DIVISIONS / symmetry)
+            return count
         return self.settings.num_divisions
 
     def _sequence_length(self, divisions: int, rng: random.Random) -> int:
-        candidates = self.divisor_candidates(divisions)
+        candidates = self.divisor_candidates(divisions, self.symmetry)
         weights = [1.0 if d == 1 else self.settings.complexity for d in candidates]
         return rng.choices(candidates, weights=weights)[0]
 
@@ -481,8 +564,31 @@ class Composer:
     def _registry_entry(node: CellRecipe) -> Dict:
         return find_motif(node.motif) or safe_motif(node.category)
 
-    def _ensure_contact(self, ring_index: int, sequence: List[CellEntry]) -> None:
-        """Give every base a route to its inward neighbour and flag it."""
+    def _contact_mode(self, ring_index: int, sequence: List[CellEntry]) -> str:
+        """
+        How the ring reaches the structure (spec 13.2): by side touch when every base supports it
+        (always in the innermost ring), else by inward overflow when every base has it, else stems.
+        """
+        if ring_index == 0:
+            return "side"
+        entries = [self._registry_entry(n) for e in sequence for n in (e.centre, e.divider) if n is not None]
+        if all(_side_touch_capable(entry) for entry in entries):
+            return "side"
+        if all(entry["max_overflow_inward"] >= CONTACT_OVERFLOW for entry in entries):
+            return "overflow"
+        return "stem"
+
+    def _refresh_contact(self, ring: RingPlan) -> None:
+        """
+        Re-flag contact after a node changed. The ring keeps its mode unless its new bases no
+        longer support it, so a revision-1 plan (mode "stem") keeps its revision-1 contact.
+        """
+        current = self._contact_mode(ring.ring_index, ring.sequence)
+        ring.contact_mode = max(ring.contact_mode, current, key=CONTACT_MODES.index)
+        self._ensure_contact(ring.ring_index, ring.sequence, ring.contact_mode)
+
+    def _ensure_contact(self, ring_index: int, sequence: List[CellEntry], contact_mode: str) -> None:
+        """Give the ring's bases a route to the inward neighbour, as its contact mode allows, and flag them."""
         nodes = [n for e in sequence for n in (e.centre, e.divider) if n is not None]
         if ring_index == 0:
             for node in nodes:
@@ -494,6 +600,19 @@ class Composer:
 
         def spans(node: CellRecipe) -> bool:
             return bool(self._registry_entry(node)["spans_cell"])
+
+        if contact_mode == "side":
+            # The ring is one connected band, so one inward contact per sequence is enough:
+            # overflow where a base has it, else a single stem on the first node.
+            if nodes and not any(has_inward(n) or n.attachments for n in nodes):
+                nodes[0].attachments.append(self._stem_recipe())
+            for node in nodes:
+                node.provides_contact = True
+            return
+        if contact_mode == "overflow":
+            for node in nodes:
+                node.provides_contact = has_inward(node)
+            return
 
         if nodes and not any(has_inward(n) or n.attachments for n in nodes):
             nodes[0].attachments.append(self._stem_recipe())
