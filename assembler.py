@@ -12,19 +12,16 @@ and its parent, so any node can be regenerated exactly with different limits.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-import math
 import random
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-import shapely
-from shapely.geometry import LineString, Point
-from shapely.geometry.base import BaseGeometry
-from shapely.strtree import STRtree
+from shapely.geometry import LineString
 
 from composer import CellRecipe, Composer, DesignPlan, RingPlan, node_seed
 from motifs import find_motif, safe_motif
 from motifs.contract import MotifError, MotifInstance, ReachEnd
-from motifs.geometry import MotifContext, PointTuple, SmartVector, cell_rotation_deg
+from motifs.geometry import MotifContext, PointTuple, cell_rotation_deg
+from placement import InkIndex, PlacedPath, path_overflow, trace
 
 
 POSITIONS = ("centre", "divider")
@@ -47,20 +44,12 @@ def stroke_width_for(complexity: float) -> float:
 
 
 @dataclass(eq=False)
-class PlacedPath:
-    ring_index: int
-    cell_index: int
-    position: str
-    node_path: Tuple[int, ...]
-    role: str
-    coords: List[PointTuple]
-    radials: List[float]
-    closed: bool
-    stroke_width: float
-
-
-@dataclass(eq=False)
 class PlacedNode:
+    """
+    One generated motif placed in one cell. Regenerate it with
+    `replace(node.context, rng=random.Random(node.rng_seed))`: the stored context's stream is spent.
+    """
+
     ring_index: int
     cell_index: int
     position: str
@@ -74,144 +63,6 @@ class PlacedNode:
     attachment_seeds: List[int] = field(default_factory=list)
 
 
-# --------------------------------------------------------------------- geometry
-
-
-def trace(context: MotifContext, vector: SmartVector, rotation_deg: float) -> Tuple[List[PointTuple], List[float]]:
-    """
-    Page coordinates of `vector` (as `context.polyline` draws them) and the
-    cell-space radial of each one. Radials are interpolated through the arc
-    subdivision and exact at every original vertex.
-    """
-    source = list(vector.points)
-    if vector.closed and len(source) > 1:
-        source.append(source[0])
-
-    coords = [context.to_cartesian(source[0], rotation_deg)]
-    radials = [source[0].radial]
-    for start, end in zip(source, source[1:]):
-        segment = context.polyline(SmartVector([start, end]), rotation_deg)
-        steps = len(segment) - 1
-        coords.extend(segment[1:])
-        radials.extend(start.radial + (end.radial - start.radial) * step / steps for step in range(1, steps))
-        radials.append(end.radial)
-    return coords, radials
-
-
-def path_geometry(path: PlacedPath) -> BaseGeometry:
-    return LineString(path.coords) if len(path.coords) > 1 else Point(path.coords[0])
-
-
-def _overflow_side(radial: float) -> Optional[str]:
-    if radial < 0.0:
-        return "inward"
-    if radial > 1.0:
-        return "outward"
-    return None
-
-
-def path_overflow(path: PlacedPath) -> List[Tuple[str, LineString]]:
-    """
-    Each maximal run of coordinates past the inner (`inward`) or outer
-    (`outward`) ring boundary, extended at each end to the point where the path
-    crosses that boundary.
-    """
-    coords, radials = path.coords, path.radials
-    last = len(coords) - 1
-
-    runs: List[List] = []  # [side, first index, last index]
-    for index, radial in enumerate(radials):
-        side = _overflow_side(radial)
-        if side is None:
-            continue
-        if runs and runs[-1][0] == side and runs[-1][2] == index - 1:
-            runs[-1][2] = index
-        else:
-            runs.append([side, index, index])
-
-    # A closed path repeats its first coordinate last, so a run through that point is one run.
-    if path.closed and len(runs) > 1 and runs[0][1] == 0 and runs[-1][2] == last and runs[0][0] == runs[-1][0]:
-        side, first, _ = runs.pop()
-        runs[0] = [side, first, runs[0][2]]
-
-    def crossing(inside: int, outside: int, side: str) -> PointTuple:
-        boundary = 0.0 if side == "inward" else 1.0
-        t = (boundary - radials[inside]) / (radials[outside] - radials[inside])
-        (x0, y0), (x1, y1) = coords[inside], coords[outside]
-        return (x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)
-
-    parts: List[Tuple[str, LineString]] = []
-    for side, first, final in runs:
-        if first <= final:
-            points = list(coords[first:final + 1])
-        else:  # wrapped through the closing point
-            points = list(coords[first:]) + list(coords[1:final + 1])
-        if first > 0:
-            points.insert(0, crossing(first - 1, first, side))
-        if final < last:
-            points.append(crossing(final + 1, final, side))
-        if len(points) > 1:
-            parts.append((side, LineString(points)))
-    return parts
-
-
-# ------------------------------------------------------------------- ink index
-
-
-class InkIndex:
-    """Spatial index over placed ink; the tree is rebuilt lazily after any change."""
-
-    def __init__(self) -> None:
-        self._paths: List[PlacedPath] = []
-        self._geometries: List[BaseGeometry] = []
-        self._tree: Optional[STRtree] = None
-
-    def add(self, path: PlacedPath) -> None:
-        self._paths.append(path)
-        self._geometries.append(path_geometry(path))
-        self._tree = None
-
-    def remove(self, path: PlacedPath) -> None:
-        for index, existing in enumerate(self._paths):
-            if existing is path:
-                del self._paths[index]
-                del self._geometries[index]
-                self._tree = None
-                return
-        raise ValueError("path is not in the index")
-
-    def rebuild(self) -> None:
-        self._tree = STRtree(self._geometries)
-
-    def _candidate_indices(self, geom: BaseGeometry) -> List[int]:
-        if self._tree is None:
-            self.rebuild()
-        return sorted(int(index) for index in self._tree.query(geom))
-
-    def candidates(self, geom: BaseGeometry) -> List[PlacedPath]:
-        """Paths whose bounds meet `geom`'s, in insertion order."""
-        return [self._paths[index] for index in self._candidate_indices(geom)]
-
-    def first_hit(
-        self, ray: LineString, exclude: Callable[[PlacedPath], bool]
-    ) -> Optional[Tuple[PlacedPath, PointTuple, float]]:
-        """The nearest point where `ray` meets ink not excluded, and its distance from the ray's start."""
-        start_x, start_y = ray.coords[0]
-        best: Optional[Tuple[PlacedPath, PointTuple, float]] = None
-        for index in self._candidate_indices(ray):
-            path = self._paths[index]
-            if exclude(path):
-                continue
-            hit = ray.intersection(self._geometries[index])
-            if hit.is_empty:
-                continue
-            for x, y in shapely.get_coordinates(hit):
-                distance = math.hypot(x - start_x, y - start_y)
-                if best is None or distance < best[2]:
-                    best = (path, (float(x), float(y)), distance)
-        return best
-
-
 # ------------------------------------------------------------------- the design
 
 
@@ -222,6 +73,7 @@ class AssembledDesign:
     nodes: List[PlacedNode]
     reaches: List[PlacedPath]
     dropped_children: int
+    center: PointTuple
 
     def polylines(self) -> List[List[PointTuple]]:
         return [path.coords for path in self.paths]
@@ -233,7 +85,7 @@ class AssembledDesign:
         return [path.ring_index for path in self.paths]
 
     def overflow_parts(self) -> List[Tuple[int, LineString]]:
-        return [(path.ring_index, line) for path in self.paths for _, line in path_overflow(path)]
+        return [(path.ring_index, line) for path in self.paths for _, line in path_overflow(path, self.center)]
 
 
 # -------------------------------------------------------------------- assembler
@@ -273,11 +125,14 @@ class Assembler:
         self.paths: List[PlacedPath] = []
         self.pending_reaches: List[PendingReach] = []
         self.dropped_children = 0
+        self.dropped_attachments = 0
         self.index = InkIndex()
 
     def assemble(self) -> AssembledDesign:
         self.pass_one()
-        return AssembledDesign(self.plan, list(self.paths), list(self.nodes), [], self.dropped_children)
+        return AssembledDesign(
+            self.plan, list(self.paths), list(self.nodes), [], self.dropped_children, self.center
+        )
 
     # ----------------------------------------------------------- pass one
 
@@ -289,9 +144,11 @@ class Assembler:
 
     def _place_ring(self, ring: RingPlan) -> None:
         """Place the ring's cells; a failing base is replaced and the ring placed again."""
+        if not ring.sequence:
+            raise AssemblyError(f"ring {ring.ring_index} has an empty sequence")
         replacements: Dict[Tuple[int, str], int] = {}
         while True:
-            mark = (len(self.nodes), len(self.paths), len(self.pending_reaches), self.dropped_children)
+            mark = self._mark()
             failure = self._place_cells(ring)
             if failure is None:
                 return
@@ -324,14 +181,17 @@ class Assembler:
                 self._place_slot_children(ring, base)
         return None
 
-    def _rewind(self, mark: Tuple[int, int, int, int]) -> None:
-        nodes, paths, reaches, dropped = mark
+    def _mark(self) -> Tuple[int, int, int, int, int]:
+        return (len(self.nodes), len(self.paths), len(self.pending_reaches),
+                self.dropped_children, self.dropped_attachments)
+
+    def _rewind(self, mark: Tuple[int, int, int, int, int]) -> None:
+        nodes, paths, reaches, self.dropped_children, self.dropped_attachments = mark
         for path in self.paths[paths:]:
             self.index.remove(path)
         del self.nodes[nodes:]
         del self.paths[paths:]
         del self.pending_reaches[reaches:]
-        self.dropped_children = dropped
 
     def _place_slot_children(self, ring: RingPlan, parent: PlacedNode) -> None:
         """Place the slot child chain under `parent`, dropping a child that cannot be placed."""
@@ -411,12 +271,20 @@ class Assembler:
         return node
 
     def _record_reaches(self, ring: RingPlan, node: PlacedNode, rotation: float) -> None:
-        """Generate each attachment with the node's context and keep only its reach ends."""
+        """
+        Generate each attachment with the node's context and keep only its reach
+        ends. Called once the node itself is placed; an attachment that fails is
+        dropped and counted, never treated as a failure of the node.
+        """
         for offset, attachment in enumerate(node.recipe.attachments):
             seed = node_seed(ring.ring_seed, ring.ring_index, node.node_path[0], ATTACHMENT_DEPTH + offset, node.position)
             node.attachment_seeds.append(seed)
             context = replace(node.context, radial_limits=(0.0, 1.0), rng=random.Random(seed))
-            declaration = _registry_entry(attachment)["generator"](context).declaration
+            try:
+                declaration = _registry_entry(attachment)["generator"](context).declaration
+            except MotifError:
+                self.dropped_attachments += 1
+                continue
             for reach_end in declaration.reach_ends:
                 page_point = node.context.to_cartesian(reach_end.point, rotation)
                 self.pending_reaches.append((node, reach_end, page_point, rotation))

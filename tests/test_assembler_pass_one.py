@@ -56,3 +56,80 @@ def test_radials_track_overflow():
     a = build(manual_plan())
     petal = next(n for n in a.nodes if n.recipe.motif == "petal")
     assert max(petal.paths[0].radials) == max(p.radial for v in petal.instance.vectors for p in v.points)
+
+
+# ----- behaviour beyond the brief's tests -----
+
+import pytest
+from shapely.geometry import Point, LineString
+from assembler import AssemblyError
+from placement import path_overflow
+from motifs.geometry import cell_rotation_deg
+
+def slot_motif_base_plan():
+    plan = manual_plan()
+    plan.rings[1].sequence[0].centre = CellRecipe("diamond", "geometric")
+    return plan
+
+def test_failing_base_is_replaced_and_ink_rewound():
+    plan = slot_motif_base_plan()
+    a = build(plan)
+    replaced = plan.rings[1].sequence[0].centre
+    assert replaced.is_fallback or replaced.motif != "diamond"
+    assert len([n for n in a.nodes if n.ring_index == 1 and len(n.node_path) == 1]) == 12
+    assert len(a.index) == len(a.paths)
+
+def test_unreplaceable_base_raises_assembly_error():
+    force = {"name": "diamond", "position": "centre", "role": "base"}
+    composer = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"], force_motif=force))
+    with pytest.raises(AssemblyError):
+        Assembler(slot_motif_base_plan(), GEOM, CENTER, 0.5, 10.0, composer).pass_one()
+
+def test_petal_inward_overflow_ends_on_the_boundary_circle():
+    a = build(manual_plan())
+    petals = [n for n in a.nodes if n.recipe.motif == "petal"]
+    assert len(petals) == 12
+    for petal in petals:
+        inward = [line for side, line in path_overflow(petal.paths[0], CENTER) if side == "inward"]
+        assert len(inward) == 1
+        for x, y in (inward[0].coords[0], inward[0].coords[-1]):
+            assert math.isclose(math.hypot(x - CENTER[0], y - CENTER[1]), 100.0, abs_tol=1e-6)
+
+def test_first_hit_from_ring_one_boundary_finds_ring_zero_ink():
+    a = build(manual_plan())
+    start = (CENTER[0] + 100.0, CENTER[1])
+    ray = LineString([start, (CENTER[0] + 30.0, CENTER[1])])
+    path, point, distance = a.index.first_hit(ray, lambda p: p.ring_index == 1)
+    assert path.ring_index == 0
+    assert math.isclose(distance, ray.project(Point(point)), abs_tol=1e-9)
+
+def test_every_path_has_a_radial_per_coordinate():
+    a = build(manual_plan())
+    assert all(len(p.radials) == len(p.coords) for p in a.paths)
+
+def test_pass_one_is_deterministic():
+    assert [p.coords for p in build(manual_plan()).paths] == [p.coords for p in build(manual_plan()).paths]
+
+def test_divider_cells_sit_at_divider_rotation():
+    plan = manual_plan()
+    plan.rings[1].sequence[0] = CellEntry(None, CellRecipe("petal", "botanical"))
+    a = build(plan)
+    for cell in (0, 3, 7):
+        node = next(n for n in a.nodes if n.ring_index == 1 and n.cell_index == cell)
+        xs = [x for x, y in node.paths[0].coords]; ys = [y for x, y in node.paths[0].coords]
+        angle = math.degrees(math.atan2(sum(ys) / len(ys) - CENTER[1], sum(xs) / len(xs) - CENTER[0])) % 360
+        assert math.isclose(angle, cell_rotation_deg(cell, 12, "divider"), abs_tol=3.0)
+
+def test_failing_attachment_is_dropped_not_mistaken_for_base_failure():
+    plan = manual_plan()
+    plan.rings[1].sequence[0].centre.attachments = [CellRecipe("diamond", "geometric")]
+    a = build(plan)
+    assert a.dropped_attachments == 12 and a.pending_reaches == []
+    assert plan.rings[1].sequence[0].centre.motif == "petal"
+    assert len(a.index) == len(a.paths)
+
+def test_empty_sequence_raises_assembly_error():
+    plan = manual_plan()
+    plan.rings[1].sequence = []
+    with pytest.raises(AssemblyError, match="ring 1 has an empty sequence"):
+        build(plan)
