@@ -209,13 +209,18 @@ def touch_disc_px(asm: Assembler) -> float:
     return max(asm.min_white_space, TOUCH_DISC_FLOOR_PX)
 
 
-def _too_close(asm: Assembler, paths: Sequence[PlacedPath], neighbour: int, side: str) -> bool:
+def _too_close(asm: Assembler, paths: Sequence[PlacedPath], neighbour: int, side: str,
+               stale: Set[int] = frozenset()) -> bool:
     """
-    Whether an overflow run of `paths` on `side`, outside its touch disc, comes
+    Whether an overflow run of `paths` on `side`, outside its touch discs, comes
     within `CLEARANCE_PX` of ring `neighbour`'s ink. A run that slides along
-    neighbour ink leaves a slit no pen fits. The touch disc, around the run's
-    extreme vertex, which the touch step may bring onto the ink, is where the
-    gap may narrow to that touch.
+    neighbour ink leaves a slit no pen fits. The touch discs are where the gap
+    may narrow to a touch: one around the run's extreme vertex, which the touch
+    step may bring onto the ink, and one around every vertex of the path shared
+    with other ink, a touch already made. A reach landing on the run is one; so
+    is a grazing reach that bends onto the path just inside the boundary, beside
+    the run's end, which is why the path's vertices count, not only the run's.
+    `stale` holds ids of indexed paths that `paths` replace, which share nothing.
     """
     disc = touch_disc_px(asm)
     for path in paths:
@@ -226,21 +231,30 @@ def _too_close(asm: Assembler, paths: Sequence[PlacedPath], neighbour: int, side
             radii = np.hypot(coords[:, 0] - asm.center[0], coords[:, 1] - asm.center[1])
             extreme = coords[int(np.argmin(radii) if side == "inward" else np.argmax(radii))]
             rest = run.difference(Point(extreme).buffer(disc))
-            if rest.is_empty:
+            if rest.is_empty or not _near_ring(asm, rest, neighbour):
                 continue
-            for other in asm.index.candidates(rest.buffer(CLEARANCE_PX)):
-                if other.ring_index == neighbour and shapely.dwithin(rest, path_geometry(other), CLEARANCE_PX):
-                    return True
+            shared = [vertex for vertex in path.coords if _shared_with_other_ink(asm, path, vertex, stale)]
+            if shared:
+                rest = rest.difference(shapely.MultiPoint(shared).buffer(disc))
+            if not rest.is_empty and _near_ring(asm, rest, neighbour):
+                return True
     return False
 
 
-def _conflicts(asm: Assembler, paths: Sequence[PlacedPath], neighbour: int, side: str) -> bool:
+def _near_ring(asm: Assembler, geometry: BaseGeometry, ring_index: int) -> bool:
+    """Whether `geometry` comes within `CLEARANCE_PX` of ring `ring_index`'s ink."""
+    return any(other.ring_index == ring_index and shapely.dwithin(geometry, path_geometry(other), CLEARANCE_PX)
+               for other in asm.index.candidates(geometry.buffer(CLEARANCE_PX)))
+
+
+def _conflicts(asm: Assembler, paths: Sequence[PlacedPath], neighbour: int, side: str,
+               stale: Set[int] = frozenset()) -> bool:
     """
     Whether `paths` overflow on `side` into ring `neighbour`'s ink: they cross
     it where their own overflow is to blame, or an overflow run comes closer
-    than a pen's width to it outside the run's touch disc.
+    than a pen's width to it outside the run's touch discs.
     """
-    return _ink_crosses(asm, paths, neighbour, side) or _too_close(asm, paths, neighbour, side)
+    return _ink_crosses(asm, paths, neighbour, side) or _too_close(asm, paths, neighbour, side, stale)
 
 
 def _rings_conflict(asm: Assembler, paths: Sequence[PlacedPath], outer: int, inner: int) -> bool:
@@ -257,6 +271,24 @@ def _rings_conflict(asm: Assembler, paths: Sequence[PlacedPath], outer: int, inn
     return (_ink_crosses(asm, outer_paths, inner) or _ink_crosses(asm, inner_paths, outer)
             or _too_close(asm, [path for path in outer_paths if path.role != "reach"], inner, "inward")
             or _too_close(asm, [path for path in inner_paths if path.role != "reach"], outer, "outward"))
+
+
+def _touch_conflicts(asm: Assembler, node: PlacedNode, moved: PlacedPath, sides: Sequence[str]) -> bool:
+    """
+    Whether moving a vertex of `moved`, ink of `node`, made the node's ring and
+    its neighbour on any of `sides` cross or crowd each other (`_rings_conflict`),
+    judged on the node's own ink and every path of either ring near the moved ink.
+    """
+    for side in sides:
+        neighbour = _neighbour(asm, node.ring_index, side)
+        if neighbour is None:
+            continue
+        outer, inner = (node.ring_index, neighbour) if side == "inward" else (neighbour, node.ring_index)
+        near = _subtree_paths(asm, node) + [other for other in asm.index.candidates(
+            path_geometry(moved).buffer(CLEARANCE_PX)) if other.ring_index in (outer, inner)]
+        if _rings_conflict(asm, near, outer, inner):
+            return True
+    return False
 
 
 def _with_limit(limits: Tuple[float, float], bound: int, value: float) -> Tuple[float, float]:
@@ -314,7 +346,9 @@ def _pull_back(asm: Assembler, node: PlacedNode, side: str) -> bool:
         mid = (clear + cross) / 2.0
         try:
             regenerated = asm.regenerate(node, _with_limit(limits, bound, mid))
-            crosses = _conflicts(asm, [path for *_, paths in regenerated for path in paths], neighbour, side)
+            # The old ink is still indexed; it shares no vertex with the shape tried in its place.
+            crosses = _conflicts(asm, [path for *_, paths in regenerated for path in paths], neighbour, side,
+                                 {id(path) for path in old_paths})
         except MotifError:
             crosses = True
         if crosses:
@@ -448,11 +482,7 @@ def final_touches(asm: Assembler) -> None:
             if path.coords[i] == saved[0][1][i]:
                 continue  # nothing within reach
             landed = Point(path.coords[i])
-            outer, inner = (node.ring_index, neighbour) if side == "inward" else (neighbour, node.ring_index)
-            # The node's own ink, and every path of either ring the moved ink could now cross or crowd.
-            near = _subtree_paths(asm, node) + [other for other in asm.index.candidates(
-                path_geometry(path).buffer(CLEARANCE_PX)) if other.ring_index in (outer, inner)]
-            if (_rings_conflict(asm, near, outer, inner)
+            if (_touch_conflicts(asm, node, path, [side])
                     or _uncolourable_face_at(asm, outermost, landed, landed.bounds)):
                 for other, coords, radials in saved:
                     other.coords[:], other.radials[:] = coords, radials
@@ -474,10 +504,14 @@ def _extreme_vertex(node: PlacedNode, side: str) -> Optional[Tuple[float, Placed
                key=lambda entry: entry[0], default=None)
 
 
-def _shared_with_other_ink(asm: Assembler, path: PlacedPath, vertex: PointTuple) -> bool:
-    """Whether `vertex` of `path` is also a vertex of any other ink, the node's own included (a leaf's midrib ends on its outline)."""
+def _shared_with_other_ink(asm: Assembler, path: PlacedPath, vertex: PointTuple,
+                           stale: Set[int] = frozenset()) -> bool:
+    """
+    Whether `vertex` of `path` is also a vertex of any other ink, the node's own included (a leaf's midrib
+    ends on its outline); indexed paths whose ids are in `stale` do not count.
+    """
     return any(
-        other is not path and any(math.hypot(x - vertex[0], y - vertex[1]) <= SAME_VERTEX_PX for x, y in other.coords)
+        other is not path and id(other) not in stale and any(math.hypot(x - vertex[0], y - vertex[1]) <= SAME_VERTEX_PX for x, y in other.coords)
         for other in asm.index.candidates(Point(vertex).buffer(SAME_VERTEX_PX))
     )
 
@@ -590,8 +624,9 @@ def _snap_anchor(asm: Assembler, node: PlacedNode, anchor: PlacedPath, start: Po
     Move the node's anchor vertex at `start` onto `end`, a vertex of other ink,
     so a reach shorter than a pen's width becomes a touch. Refused, changing
     nothing, when the vertex is shared with other ink, or the move would make
-    the node cross ink, cross or crowd a neighbour ring, or close a face too
-    thin or small to colour.
+    the node cross ink, make its ring and a neighbour ring cross or crowd each
+    other (judged both ways, as a final touch is), or close a face too thin or
+    small to colour.
     """
     if _shared_with_other_ink(asm, anchor, start):
         return False
@@ -607,12 +642,7 @@ def _snap_anchor(asm: Assembler, node: PlacedNode, anchor: PlacedPath, start: Po
         _crossing(geometry, path_geometry(other), anchor.coords, other.coords) is not None
         for other in asm.index.candidates(geometry) if id(other) not in own
     )
-    subtree = _subtree_paths(asm, node)
-    crowds = any(
-        _conflicts(asm, subtree, neighbour, side)
-        for side in ("inward", "outward")
-        for neighbour in [_neighbour(asm, node.ring_index, side)] if neighbour is not None
-    )
+    crowds = _touch_conflicts(asm, node, anchor, ("inward", "outward"))
     if crosses or crowds or _uncolourable_face_at(asm, _outermost(asm), Point(end), Point(end).bounds):
         anchor.coords[:], anchor.radials[:] = saved_coords, saved_radials
         asm.reindex(anchor)

@@ -389,6 +389,21 @@ def test_final_touch_is_undone_when_the_moved_tip_crowds_the_neighbours_overflow
     assert tip not in target.coords
     assert not resolver._too_close(a, [facing], 1, "outward")
 
+def test_clearance_is_waived_around_a_vertex_the_run_shares_with_other_ink():
+    # A reach landing on an overflow run is a touch: the run may come within a pen's width of it inside
+    # the touch disc around the landing, as it may around its own extreme vertex; elsewhere it may not.
+    asm = types.SimpleNamespace(index=InkIndex(), center=(0.0, 0.0), min_white_space=10.0)
+    run = PlacedPath(0, 0, "centre", (0,), "base", [(0.0, 100.0), (20.0, 100.0), (40.0, 100.0)], [1.2] * 3, False, 1.0)
+    landing = PlacedPath(1, 0, "centre", (0,), "reach", [(0.0, 120.0), (0.0, 100.0)], [0.2, 0.0], False, 1.0)
+    for path in (run, landing):
+        asm.index.add(path)
+    assert not resolver._too_close(asm, [run], 1, "outward")
+    # The same landing ignored as stale (the run replaces the ink it was drawn on) is crowding again.
+    assert resolver._too_close(asm, [run], 1, "outward", {id(landing)})
+    beside = PlacedPath(1, 1, "centre", (0,), "base", [(20.0, 103.0), (20.0, 120.0)], [0.0, 0.2], False, 1.0)
+    asm.index.add(beside)
+    assert resolver._too_close(asm, [run], 1, "outward")
+
 def test_grazing_reach_runs_along_its_ray_then_bends_onto_the_ink():
     a = placed(manual_plan())
     node, short, point, rotation = stem_of_cell_zero(a)

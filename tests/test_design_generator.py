@@ -61,3 +61,15 @@ def test_final_touch_never_leaves_a_ring_crowding_its_neighbours_overflow():
                         categories=["botanical"], vary_divisions=True)
     g.generate()
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+
+
+def test_clearance_exempts_every_vertex_a_run_shares_with_other_ink():
+    # With varied divisions, a ring-3 stem grazed a ring-2 petal's outward overflow and bent onto the petal
+    # just inside the boundary, 3.6px from the run's end and 14px from its extreme vertex: a deliberate
+    # touch, which the clearance rule read as crowding, so the final check raised.
+    g = DesignGenerator(seed=1, num_rings=4, num_divisions=12, complexity=0.5, min_pattern_size=10,
+                        categories=["botanical", "geometric"], vary_divisions=True)
+    g.generate()
+    report = g.last_validation_result
+    assert report.is_valid, report.issues[:5]
+    assert not [region for region in report.regions if region.is_uncolorable]
