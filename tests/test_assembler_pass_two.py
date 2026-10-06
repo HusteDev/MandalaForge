@@ -298,12 +298,20 @@ def test_touch_step_leaves_a_gap_over_the_touch_gap_alone():
     assert [list(p.coords) for p in [petal.paths[0], *band]] == before
 
 def test_wavy_reach_flattens_when_the_wave_would_meet_ink():
-    asm = types.SimpleNamespace(index=InkIndex())
+    # Ink the full wave would meet is within a pen's width of every lesser wave too: the reach goes straight.
+    asm = types.SimpleNamespace(index=InkIndex(), min_white_space=10.0)
     asm.index.add(PlacedPath(0, 0, "centre", (0,), "base", [(10.0, 2.0), (90.0, 2.0)], [0.5, 0.5], False, 1.0))
     coords = resolver._wavy_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0))
     offsets = [abs(y) for _, y in coords]
-    assert len(coords) == 9 and math.isclose(max(offsets), 1.5, abs_tol=1e-9)
+    assert len(coords) == 9 and max(offsets) == 0.0
     assert coords[0] == (0.0, 0.0) and coords[-1] == (100.0, 0.0)
+
+def test_wavy_reach_flattens_until_it_keeps_a_pen_width_from_ink():
+    # The wave peaks 3px toward ink 5px off its line; it halves until the peak stays 4px clear (0.75px).
+    asm = types.SimpleNamespace(index=InkIndex(), min_white_space=10.0)
+    asm.index.add(PlacedPath(0, 0, "centre", (0,), "base", [(15.0, 5.0), (85.0, 5.0)], [0.5, 0.5], False, 1.0))
+    coords = resolver._wavy_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0))
+    assert math.isclose(max(abs(y) for _, y in coords), 0.75, abs_tol=1e-9)
 
 
 def test_final_contact_check_names_a_base_that_floated_after_its_ring_was_resolved():
@@ -329,7 +337,7 @@ def test_reach_that_would_close_a_slit_too_thin_to_colour_is_refused():
     assert not resolver._closes_uncolourable_face(_slit(40.0), 0, [(40.0, 20.0), (40.0, -20.0)])
 
 def test_wavy_reach_is_refused_when_no_flattening_is_accepted():
-    asm = types.SimpleNamespace(index=InkIndex())
+    asm = types.SimpleNamespace(index=InkIndex(), min_white_space=10.0)
     assert resolver._wavy_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0), lambda coords: False) is None
 
 def test_touch_within_the_touch_radius_of_a_vertex_reuses_it():
@@ -368,3 +376,24 @@ def test_grazing_reach_runs_along_its_ray_then_bends_onto_the_ink():
     assert math.isclose(lead[1], anchor[1], abs_tol=1e-6)  # still on the ray
     assert math.isclose(math.hypot(lead[0] - x, lead[1] - y), resolver.TOUCH_GAP_PX, abs_tol=0.01)
     assert reach.coords[-1] in beside.coords and math.isclose(reach.coords[-1][0], x, abs_tol=1e-9)
+
+def test_reach_shorter_than_a_pen_width_is_a_touch():
+    a = placed(manual_plan())
+    node, short, point, rotation = stem_of_cell_zero(a)
+    anchor = lowest_vertex(node.paths[0])
+    x = anchor[0] - 3.0  # 3px on along the reach's ray, square to it
+    near = add_ink(a, 1, [(x, anchor[1] - 6.0), (x, anchor[1] + 6.0)])
+    assert a.resolve_reach(node, short, point, rotation) is None
+    assert not any(p.role == "reach" for p in a.paths)
+    tip = lowest_vertex(node.paths[0])
+    assert tip in near.coords and math.isclose(tip[0], x, abs_tol=1e-9)
+
+def test_a_vertex_shared_with_the_nodes_own_ink_is_not_moved():
+    # A leaf's midrib ends on its outline's apex; moving the apex for a touch would leave the midrib dangling.
+    asm = types.SimpleNamespace(index=InkIndex())
+    outline = PlacedPath(1, 0, "centre", (0,), "base", [(0.0, 0.0), (10.0, 5.0), (20.0, 0.0)], [0.0, 1.1, 0.0], False, 1.0)
+    midrib = PlacedPath(1, 0, "centre", (0,), "base", [(10.0, 0.0), (10.0, 5.0)], [0.0, 1.1], False, 1.0)
+    asm.index.add(outline)
+    asm.index.add(midrib)
+    assert resolver._shared_with_other_ink(asm, outline, (10.0, 5.0))
+    assert not resolver._shared_with_other_ink(asm, outline, (20.0, 0.0))

@@ -419,7 +419,7 @@ def final_touches(asm: Assembler) -> None:
             if neighbour is None or not _overflows(node, side):
                 continue
             _, path, i = _extreme_vertex(node, side)
-            if _shared_with_other_ink(asm, node, path.coords[i]):
+            if _shared_with_other_ink(asm, path, path.coords[i]):
                 continue
             touched = [path] + [other for other in asm.index.candidates(Point(path.coords[i]).buffer(TOUCH_GAP_PX))
                                 if other.ring_index == neighbour]
@@ -446,10 +446,10 @@ def _extreme_vertex(node: PlacedNode, side: str) -> Tuple[float, PlacedPath, int
                key=lambda entry: entry[0])
 
 
-def _shared_with_other_ink(asm: Assembler, node: PlacedNode, vertex: PointTuple) -> bool:
-    own = {id(path) for member in asm.subtree(node) for path in member.paths}
+def _shared_with_other_ink(asm: Assembler, path: PlacedPath, vertex: PointTuple) -> bool:
+    """Whether `vertex` of `path` is also a vertex of any other ink, the node's own included (a leaf's midrib ends on its outline)."""
     return any(
-        id(other) not in own and any(math.hypot(x - vertex[0], y - vertex[1]) <= SAME_VERTEX_PX for x, y in other.coords)
+        other is not path and any(math.hypot(x - vertex[0], y - vertex[1]) <= SAME_VERTEX_PX for x, y in other.coords)
         for other in asm.index.candidates(Point(vertex).buffer(SAME_VERTEX_PX))
     )
 
@@ -495,6 +495,9 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     asm.reindex(target)
     if math.hypot(end[0] - start[0], end[1] - start[1]) <= ON_INK_PX:
         return None, target  # the start already lies on other ink: a touch, with a vertex on both
+    if (anchor is not None and math.hypot(end[0] - start[0], end[1] - start[1]) < CLEARANCE_PX
+            and _snap_anchor(asm, node, anchor[0], start, end)):
+        return None, target  # a reach shorter than a pen's width is a touch, not a path
 
     # A reach that lands beside its ray runs along the ray to where it came within the touch
     # gap, then bends onto the ink, so the run up to there keeps the clearance the ray had.
@@ -507,7 +510,8 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
         body = [start, lead or end]
         coords = body + tail if leaves_room(body) else None
     else:
-        body = _wavy_clear_of_ink(asm, start, lead or end, leaves_room)
+        ends = [(anchor[0], start)] if anchor is not None else []
+        body = _wavy_clear_of_ink(asm, start, lead or end, leaves_room, ends + [(target, end)])
         coords = None if body is None else body + tail
     if coords is None:
         # Any reach here would close off a face too thin or too small to colour: none is drawn.
@@ -523,21 +527,70 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
 
 
 def _wavy_clear_of_ink(asm: Assembler, start: PointTuple, end: PointTuple,
-                      accept: Callable[[List[PointTuple]], bool] = lambda coords: True) -> Optional[List[PointTuple]]:
+                      accept: Callable[[List[PointTuple]], bool] = lambda coords: True,
+                      end_paths: Sequence[Tuple[PlacedPath, PointTuple]] = ()) -> Optional[List[PointTuple]]:
     """
     The wavy reach from `start` to `end`, its wave flattened step by step until
-    it meets ink only at its two ends and `accept` takes it. The straight
-    segment always meets ink only at its ends, being the ray up to its first
-    hit; None when `accept` refuses even that.
+    it keeps `CLEARANCE_PX` from ink and `accept` takes it. The paths the reach
+    starts and ends on, `end_paths` with the point on each, may come closer
+    within the touch disc around that point. The straight segment always
+    qualifies, being the ray up to where it came within the touch gap of ink;
+    None when `accept` refuses even that.
     """
-    ends = (Point(start), Point(end))
     for scale in WAVY_FALLBACK_SCALES:
         coords = wavy_coords(start, end, scale)
-        line = LineString(coords)
-        if (scale == 0.0 or all(_only_at(line.intersection(path_geometry(other)), ends)
-                                for other in asm.index.candidates(line))) and accept(coords):
+        if (scale == 0.0 or _keeps_clearance(asm, LineString(coords), end_paths)) and accept(coords):
             return coords
     return None
+
+
+def _keeps_clearance(asm: Assembler, line: LineString, end_paths: Sequence[Tuple[PlacedPath, PointTuple]]) -> bool:
+    """Whether `line` stays `CLEARANCE_PX` from all ink, end paths excepted within the touch disc of their ends."""
+    disc = touch_disc_px(asm)
+    for other in asm.index.candidates(line.buffer(CLEARANCE_PX)):
+        ink = path_geometry(other)
+        for path, point in end_paths:
+            if path is other:
+                ink = ink.difference(Point(point).buffer(disc))
+        if not ink.is_empty and shapely.dwithin(line, ink, CLEARANCE_PX):
+            return False
+    return True
+
+
+def _snap_anchor(asm: Assembler, node: PlacedNode, anchor: PlacedPath, start: PointTuple, end: PointTuple) -> bool:
+    """
+    Move the node's anchor vertex at `start` onto `end`, a vertex of other ink,
+    so a reach shorter than a pen's width becomes a touch. Refused, changing
+    nothing, when the vertex is shared with other ink, or the move would make
+    the node cross ink, cross or crowd a neighbour ring, or close a face too
+    thin or small to colour.
+    """
+    if _shared_with_other_ink(asm, anchor, start):
+        return False
+    saved_coords, saved_radials = list(anchor.coords), list(anchor.radials)
+    moved = [i for i, point in enumerate(anchor.coords) if point == start]
+    for i in moved:
+        anchor.coords[i] = end
+        anchor.radials[i] = _radial(node.context, end)
+    asm.reindex(anchor)
+    own = {id(path) for member in asm.subtree(node) for path in member.paths}
+    geometry = path_geometry(anchor)
+    crosses = any(
+        _crossing(geometry, path_geometry(other), anchor.coords, other.coords) is not None
+        for other in asm.index.candidates(geometry) if id(other) not in own
+    )
+    subtree = _subtree_paths(asm, node)
+    crowds = any(
+        _conflicts(asm, subtree, neighbour, side)
+        for side in ("inward", "outward")
+        for neighbour in [_neighbour(asm, node.ring_index, side)] if neighbour is not None
+    )
+    outermost = max(ring.ring_index for ring in asm.plan.rings)
+    if crosses or crowds or _uncolourable_face_at(asm, outermost, Point(end), Point(end).bounds):
+        anchor.coords[:], anchor.radials[:] = saved_coords, saved_radials
+        asm.reindex(anchor)
+        return False
+    return True
 
 
 def _closes_uncolourable_face(asm: Assembler, ring_index: int, coords: Sequence[PointTuple]) -> bool:
