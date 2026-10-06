@@ -60,3 +60,11 @@ def test_overflow_and_reaches_touch_or_keep_pen_width_clear_of_other_rings():
                 mine, ink = mine.difference(disc), ink.difference(disc)
             gap = float("inf") if mine.is_empty or ink.is_empty else mine.distance(ink)
             assert gap >= 4.0, (path.ring_index, path.cell_index, path.role, other.ring_index, other.cell_index, gap)
+
+
+def test_forced_slot_motif_that_never_fits_fails():
+    # At min size 25 no slot in the dense (24,24,24) fixture fits a diamond; the design still validates
+    # without it, so the harness must check the forced motif was placed at all.
+    job = ("diamond", "geometric", (24, 24, 24), 0.5, 25, "centre", "slot", 20260821, False)
+    outcome = run_case(job)
+    assert outcome["status"] == "FAIL" and "never placed" in outcome["detail"]

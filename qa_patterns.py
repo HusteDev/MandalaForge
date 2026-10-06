@@ -91,6 +91,16 @@ def _gate_skip(entry, generator, ring_divisions, position):
     return None
 
 
+def _placed_count(generator, name, role):
+    """How many times the forced motif was actually placed in its role."""
+    nodes = generator.assembled.nodes
+    if role == 'contact':  # an attachment is no node of its own; count the nodes that carry it
+        return sum(1 for node in nodes if any(att.motif == name for att in node.recipe.attachments))
+    if role == 'slot':
+        return sum(1 for node in nodes if node.parent is not None and node.recipe.motif == name)
+    return sum(1 for node in nodes if node.parent is None and node.recipe.motif == name)
+
+
 def run_case(job):
     name, category, ring_divisions, complexity, min_white, position, role, seed, probe = job
     label = f"div{'-'.join(map(str, ring_divisions))}_c{complexity}_mws{min_white}_{position}_{role}"
@@ -126,6 +136,14 @@ def run_case(job):
         return result('ERROR', f"{type(exc).__name__}: {text}")
     except Exception as exc:
         return result('ERROR', f"{type(exc).__name__}: {exc}")
+
+    # A design can validate without the motif under test: a slot child that never fits is dropped.
+    placed = _placed_count(generator, name, role)
+    dropped = generator.assembled.dropped_children
+    if placed == 0:
+        return result('FAIL', f"forced motif never placed ({dropped} dropped)")
+    if role == 'slot' and not probe and dropped > placed:
+        return result('FAIL', f"forced slot motif dropped in most cells ({placed} placed, {dropped} dropped)")
 
     report = generator.last_validation_result
     if not report.is_valid:
@@ -193,7 +211,7 @@ def property_checks(entry):
     for key, check in checks.items():
         try:
             outcome[key] = bool(check(entry))
-        except MotifError:
+        except Exception:  # a crashing generator fails the property, it does not stop the run
             outcome[key] = False
     return outcome
 

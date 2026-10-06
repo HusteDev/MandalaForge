@@ -66,7 +66,7 @@ MAX_CONTACT_ROUNDS = 3
 WAVY_POINTS = 9
 WAVY_MAX_AMPLITUDE_PX = 3.0
 WAVY_AMPLITUDE_SHARE = 0.1
-# A wave that would cross ink is flattened through these amplitude scales.
+# A wave that would come within CLEARANCE_PX of ink is flattened through these amplitude scales.
 WAVY_FALLBACK_SCALES = (1.0, 0.5, 0.25, 0.0)
 # A reach's midpoint this close to a face's boundary bounds that face (noding snaps to 0.001px).
 FACE_PROBE_PX = 0.01
@@ -249,8 +249,10 @@ def _with_limit(limits: Tuple[float, float], bound: int, value: float) -> Tuple[
 
 def resolve_overflow(asm: Assembler, node: PlacedNode, side: str) -> None:
     """
-    Pull `node`'s overflow on `side` back until it no longer crosses the
-    neighbouring ring's ink, then touch that ink if the gap left is small.
+    Pull `node`'s overflow on `side` back until it neither crosses the
+    neighbouring ring's ink nor, outside the touch disc around its extreme
+    vertex, comes within `CLEARANCE_PX` of it; then touch that ink if the
+    extreme vertex is within `TOUCH_GAP_PX` of it.
     """
     node.resolved_sides.add(side)
     _settle(asm, [(node, side)])
@@ -367,16 +369,18 @@ def _redraw_reaches(asm: Assembler, node: PlacedNode, old_ids: Set[int]) -> None
 
 
 def _touch(asm: Assembler, node: PlacedNode, side: str, neighbour: int) -> None:
-    """Move the node's extreme vertex on `side` onto neighbour ink within `TOUCH_GAP_PX`."""
-    extreme: Optional[Tuple[float, PlacedPath, int]] = None
-    sign = 1.0 if side == "inward" else -1.0
-    for path in node.paths:
-        for i, radial in enumerate(path.radials):
-            if extreme is None or sign * radial < extreme[0]:
-                extreme = (sign * radial, path, i)
+    """
+    Move the node's extreme vertex on `side` onto neighbour ink within
+    `TOUCH_GAP_PX`. A vertex shared with any other path is left where it is:
+    moving it would detach what ends there (a leaf's midrib on its apex, a
+    reach's start, a touch already made).
+    """
+    extreme = _extreme_vertex(node, side)
     if extreme is None:
         return
     _, path, i = extreme
+    if _shared_with_other_ink(asm, path, path.coords[i]):
+        return
     vertex = Point(path.coords[i])
 
     nearest: Optional[Tuple[float, PlacedPath]] = None
@@ -412,15 +416,13 @@ def final_touches(asm: Assembler) -> None:
     attached to it comes loose. A touch is undone when it would make the side
     cross or crowd the neighbour, or close off a face too thin or small to colour.
     """
-    outermost = max(ring.ring_index for ring in asm.plan.rings)
+    outermost = _outermost(asm)
     for node in list(asm.nodes):
         for side in ("inward", "outward"):
             neighbour = _neighbour(asm, node.ring_index, side)
             if neighbour is None or not _overflows(node, side):
                 continue
             _, path, i = _extreme_vertex(node, side)
-            if _shared_with_other_ink(asm, path, path.coords[i]):
-                continue
             touched = [path] + [other for other in asm.index.candidates(Point(path.coords[i]).buffer(TOUCH_GAP_PX))
                                 if other.ring_index == neighbour]
             saved = [(other, list(other.coords), list(other.radials)) for other in touched]
@@ -435,15 +437,19 @@ def final_touches(asm: Assembler) -> None:
                     asm.reindex(other)
 
 
+def _outermost(asm: Assembler) -> int:
+    return max(ring.ring_index for ring in asm.plan.rings)
+
+
 def _overflows(node: PlacedNode, side: str) -> bool:
     return any(radial < 0.0 if side == "inward" else radial > 1.0 for path in node.paths for radial in path.radials)
 
 
-def _extreme_vertex(node: PlacedNode, side: str) -> Tuple[float, PlacedPath, int]:
-    """The node's vertex furthest past its ring on `side`, as `_touch` picks it."""
+def _extreme_vertex(node: PlacedNode, side: str) -> Optional[Tuple[float, PlacedPath, int]]:
+    """The node's vertex furthest past its ring on `side` (the first of equals), or None without ink."""
     sign = 1.0 if side == "inward" else -1.0
     return min(((sign * radial, path, i) for path in node.paths for i, radial in enumerate(path.radials)),
-               key=lambda entry: entry[0])
+               key=lambda entry: entry[0], default=None)
 
 
 def _shared_with_other_ink(asm: Assembler, path: PlacedPath, vertex: PointTuple) -> bool:
@@ -585,8 +591,7 @@ def _snap_anchor(asm: Assembler, node: PlacedNode, anchor: PlacedPath, start: Po
         for side in ("inward", "outward")
         for neighbour in [_neighbour(asm, node.ring_index, side)] if neighbour is not None
     )
-    outermost = max(ring.ring_index for ring in asm.plan.rings)
-    if crosses or crowds or _uncolourable_face_at(asm, outermost, Point(end), Point(end).bounds):
+    if crosses or crowds or _uncolourable_face_at(asm, _outermost(asm), Point(end), Point(end).bounds):
         anchor.coords[:], anchor.radials[:] = saved_coords, saved_radials
         asm.reindex(anchor)
         return False
@@ -630,14 +635,6 @@ def _uncolourable_face_at(asm: Assembler, ring_index: int, probe: Point, bounds:
         grown = shapely.union_all([window, *outside])
         window = shapely.box(*grown.bounds).buffer(FACE_WINDOW_PX, join_style="mitre")
     return False
-
-
-def _only_at(hit: BaseGeometry, points: Sequence[Point]) -> bool:
-    """Whether `hit` is empty or nothing but isolated points at `points`."""
-    return all(
-        part.geom_type == "Point" and any(part.distance(point) <= ON_INK_PX for point in points)
-        for part in getattr(hit, "geoms", [hit]) if not part.is_empty
-    )
 
 
 def _landing(asm: Assembler, ray: LineString,

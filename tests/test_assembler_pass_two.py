@@ -397,3 +397,32 @@ def test_a_vertex_shared_with_the_nodes_own_ink_is_not_moved():
     asm.index.add(midrib)
     assert resolver._shared_with_other_ink(asm, outline, (10.0, 5.0))
     assert not resolver._shared_with_other_ink(asm, outline, (20.0, 0.0))
+
+def test_pull_back_touch_never_detaches_a_leafs_midrib():
+    # A leaf's midrib ends on its outline's apex; the touch after a pull-back must not move that shared apex.
+    geom = [dict(inner_radius=40, outer_radius=100), dict(inner_radius=100, outer_radius=200),
+            dict(inner_radius=200, outer_radius=240)]
+    plan = DesignPlan(1, {"categories": ["botanical", "geometric"], "positions": "centre"}, [
+        RingPlan(0, 8, 1.0, [CellEntry(CellRecipe("ring_band", "geometric", provides_contact=True), None)], 1),
+        RingPlan(1, 12, 1.0, [CellEntry(CellRecipe("leaf", "botanical"), None)], 11),  # apex at radial 1.12
+        RingPlan(2, 12, 1.0, [CellEntry(CellRecipe("ring_band", "geometric", provides_contact=True), None)], 1),
+    ])
+    a = Assembler(plan, geom, CENTER, 0.5, 10.0, composer_for(geom))
+    a.pass_one()
+    leaf = next(n for n in a.nodes if n.recipe.motif == "leaf" and max(n.paths[0].radials) > 1.03)
+    outline, midrib = leaf.paths
+    apex = outline.coords[max(range(len(outline.radials)), key=lambda i: outline.radials[i])]
+    assert apex in (midrib.coords[0], midrib.coords[-1])
+    # Ring-2 ink square to the apex's radius, 2px short of it: the apex crosses it and must be pulled back.
+    cx, cy = CENTER
+    radius = math.hypot(apex[0] - cx, apex[1] - cy)
+    ux, uy = (apex[0] - cx) / radius, (apex[1] - cy) / radius
+    foot = (cx + ux * (radius - 2.0), cy + uy * (radius - 2.0))
+    add_ink(a, 2, [(foot[0] - uy * 15.0, foot[1] + ux * 15.0), (foot[0] + uy * 15.0, foot[1] - ux * 15.0)])
+    a.resolve_overflow(leaf, "outward")
+    assert leaf.pull_backs.get("outward")
+    outline, midrib = leaf.paths
+    apex = outline.coords[max(range(len(outline.radials)), key=lambda i: outline.radials[i])]
+    assert apex in (midrib.coords[0], midrib.coords[-1])
+    report = TopologyValidator(snap_tolerance=2.5, whisker_tolerance=5.0).analyze([p.coords for p in a.paths])
+    assert report.stats["num_dangles"] == 0
