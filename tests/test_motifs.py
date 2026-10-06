@@ -156,3 +156,22 @@ def test_stem_is_a_pure_reach(cell_kwargs):
     inst = find_motif("stem")["generator"](make_ctx(cell_kwargs))
     assert inst.vectors == [] and inst.kind == "open"
     assert inst.declaration.reach_ends[0].direction == "inward"
+
+
+def test_leaf_midrib_is_dropped_when_its_halves_are_too_thin_to_colour(cell_kwargs):
+    ctx = make_ctx(cell_kwargs, 7)
+    ctx.slot = [CellPoint(0.2, -0.2), CellPoint(0.2, 0.2), CellPoint(0.8, 0.2), CellPoint(0.8, -0.2)]
+    narrow = find_motif("leaf")["generator"](ctx)
+    assert ctx.angular_to_px(0.2, 0.5) < ctx.min_white_space
+    assert len(narrow.vectors) == 1 and narrow.vectors[0].closed
+
+    wide_ctx = make_ctx(cell_kwargs, 7)
+    wide_ctx.slot = slot_for(cell_kwargs)
+    assert len(find_motif("leaf")["generator"](wide_ctx).vectors) == 2
+
+
+def test_leaf_midrib_is_dropped_outside_a_slot_when_the_halves_are_too_thin(cell_kwargs):
+    gen = find_motif("leaf")["generator"]
+    thin = gen(make_ctx(cell_kwargs, 7, angular_limits=0.1))
+    assert len(thin.vectors) == 1 and thin.vectors[0].closed
+    assert len(gen(make_ctx(cell_kwargs, 7)).vectors) == 2

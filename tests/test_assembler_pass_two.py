@@ -57,6 +57,7 @@ def test_assembly_is_deterministic():
 # ----- behaviour beyond the brief's tests -----
 
 import pytest
+import resolver
 from shapely.geometry import Point
 import shapely
 from motifs.contract import ReachEnd
@@ -292,3 +293,14 @@ def test_wavy_reach_flattens_when_the_wave_would_meet_ink():
     offsets = [abs(y) for _, y in coords]
     assert len(coords) == 9 and math.isclose(max(offsets), 1.5, abs_tol=1e-9)
     assert coords[0] == (0.0, 0.0) and coords[-1] == (100.0, 0.0)
+
+
+def test_final_contact_check_names_a_base_that_floated_after_its_ring_was_resolved():
+    a = Assembler(manual_plan(), GEOM, CENTER, 0.5, 10.0, composer_for(GEOM))
+    a.assemble()
+    resolver.check_contact(a)
+    reach = a.reaches[0]
+    a.paths.remove(reach)
+    a.index.remove(reach)
+    with pytest.raises(AssemblyError, match=r"ring 1 cell 0 \(centre\).*floats"):
+        resolver.check_contact(a)

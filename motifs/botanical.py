@@ -108,6 +108,17 @@ def _leaf_vectors(base_radial: float, apex_radial: float, half_width: float, rou
     return [SmartVector(outline, closed=True), SmartVector(midrib)]
 
 
+def _drop_thin_midrib(context: MotifContext, vectors: List[SmartVector]) -> List[SmartVector]:
+    """
+    Keep the midrib only when each half it makes is colourable: at the leaf's
+    widest point a half is as wide as that point's angular offset.
+    """
+    widest = max(vectors[0].points, key=lambda point: abs(point.angular))
+    if context.angular_to_px(widest.angular, widest.radial) >= context.min_white_space:
+        return vectors
+    return vectors[:1]
+
+
 def generate_leaf(context: MotifContext) -> MotifInstance:
     rng = context.rng
     length = rng.uniform(0.85, 1.15)
@@ -140,7 +151,8 @@ def generate_leaf(context: MotifContext) -> MotifInstance:
         vectors = built[-1]
     else:
         vectors = _leaf_vectors(0.0, min(high, length), half_width, roundness)
-    return build_instance(context, vectors, base_point=vectors[1].points[0])
+    vectors = _drop_thin_midrib(context, vectors)
+    return build_instance(context, vectors, base_point=vectors[0].points[0])
 
 
 def generate_scallop(context: MotifContext) -> MotifInstance:

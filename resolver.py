@@ -518,6 +518,21 @@ def pass_two(asm: Assembler) -> None:
             raise assembler.AssemblyError(
                 f"ring {ring.ring_index} still crosses ring {inner} after {MAX_PULL_BACKS} pull-backs per side"
             )
+    check_contact(asm)
+
+
+def check_contact(asm: Assembler) -> None:
+    """
+    Design-wide contact check. A ring is checked for floating bases only while
+    it is resolved, and a later ring's pull-back can regenerate earlier nodes
+    and remove a touch, so every ring is checked again once all are resolved.
+    """
+    floating = floating_base_cells(asm)
+    if floating:
+        ring, cell, position = floating[0]
+        raise assembler.AssemblyError(
+            f"ring {ring} cell {cell} ({position}): base floats after pass two; {len(floating)} floating in all"
+        )
 
 
 def _resolve_ring(asm: Assembler, ring: RingPlan) -> None:
