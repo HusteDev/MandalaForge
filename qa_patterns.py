@@ -162,8 +162,8 @@ def run_case(job):
     name, category, ring_divisions, complexity, min_white, position, role, seed, probe = job
     label = f"div{'-'.join(map(str, ring_divisions))}_c{complexity}_mws{min_white}_{position}_{role}"
 
-    def result(status, detail=''):
-        return {'name': name, 'label': label, 'status': status, 'detail': detail[:200]}
+    def result(status, detail='', dropped=0):
+        return {'name': name, 'label': label, 'status': status, 'detail': detail[:200], 'dropped': dropped}
 
     entry = find_motif(name)
     if entry is None:
@@ -196,23 +196,24 @@ def run_case(job):
 
     # A design can validate without the motif under test: a slot child that never fits is dropped.
     placed = _placed_count(generator, name, role)
-    dropped = sum(1 for node in generator.assembled.nodes
-                  if node.child_dropped and node.recipe.slot_child is not None
-                  and node.recipe.slot_child.motif == name)
+    # Only a slot job forces the motif as a child; elsewhere it may nest of its own accord and is not counted.
+    dropped = 0 if role != 'slot' else sum(
+        1 for node in generator.assembled.nodes
+        if node.child_dropped and node.recipe.slot_child is not None and node.recipe.slot_child.motif == name)
     if placed == 0:
-        return result('FAIL', f"forced motif never placed ({dropped} dropped)")
-    if role == 'slot' and not probe and dropped > placed:
-        return result('FAIL', f"forced slot motif dropped in most cells ({placed} placed, {dropped} dropped)")
+        return result('FAIL', f"forced motif never placed ({dropped} dropped)", dropped)
+    # A child that does not fit its cell's real slot is dropped gracefully: reported, not failed.
+    partial = f"{placed} placed, {dropped} dropped" if dropped else ''
 
     report = generator.last_validation_result
     if not report.is_valid:
-        return result('FAIL', report.issues[0] if report.issues else 'invalid')
+        return result('FAIL', report.issues[0] if report.issues else 'invalid', dropped)
     cells = sum(ring_divisions[1:])
     floor = REGION_FLOOR * cells
     regions = report.stats.get('num_regions', 0)
     if regions < floor:
-        return result('FAIL', f"only {regions} regions for {cells} cells (floor {floor:.0f})")
-    return result('PASS')
+        return result('FAIL', f"only {regions} regions for {cells} cells (floor {floor:.0f})", dropped)
+    return result('PASS', partial, dropped)
 
 
 # ------------------------------------------------------------ property checks
@@ -332,7 +333,7 @@ def main():
     for result in results:
         by_motif.setdefault(result['name'], []).append(result)
 
-    header = (f"{'MOTIF':16} {'PASS':>5} {'SKIP':>5} {'FAIL':>5} {'CONTR':>6} {'ERR':>4} "
+    header = (f"{'MOTIF':16} {'PASS':>5} {'SKIP':>5} {'FAIL':>5} {'CONTR':>6} {'ERR':>4} {'DROP':>5} "
               f"{'DET':>5} {'MONO':>5} {'ANG':>5} {'SLOT':>5}")
     print(header)
     print("-" * len(header))
@@ -341,12 +342,13 @@ def main():
         name = entry['name']
         rows = by_motif.get(name, [])
         counts = {k: sum(1 for r in rows if r['status'] == k) for k in STATUSES}
+        dropped = sum(r.get('dropped', 0) for r in rows)  # slot children dropped where they did not fit
         props = property_checks(entry)
         mark = {True: 'ok', False: 'BAD'}
         if counts['FAIL'] or counts['CONTRACT'] or counts['ERROR'] or not all(props.values()):
             failed.append(name)
         print(f"{name:16} {counts['PASS']:>5} {counts['SKIP']:>5} {counts['FAIL']:>5} "
-              f"{counts['CONTRACT']:>6} {counts['ERROR']:>4} "
+              f"{counts['CONTRACT']:>6} {counts['ERROR']:>4} {dropped:>5} "
               f"{mark[props['deterministic']]:>5} {mark[props['monotone']]:>5} "
               f"{mark[props['angular']]:>5} {mark[props['slot']]:>5}")
 

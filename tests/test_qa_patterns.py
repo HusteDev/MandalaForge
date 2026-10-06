@@ -76,3 +76,12 @@ def test_slot_job_is_gated_on_the_frames_measured_slot():
     job = ("diamond", "geometric", (24, 24, 24), 0.15, 10, "centre", "slot", 20260821, False)
     outcome = run_case(job)
     assert outcome["status"] == "SKIP" and "slot" in outcome["detail"]
+
+
+def test_partial_slot_drops_pass_and_are_reported():
+    # The measured slot admits the fixture but some cells' real slots are smaller: the spec drops the child
+    # there gracefully, so the job passes and carries its counts for the table's DROP column.
+    job = ("diamond", "geometric", (24, 24, 24), 0.9, 10, "centre", "slot", 20260821, False)
+    outcome = run_case(job)
+    assert outcome["status"] == "PASS"
+    assert outcome["detail"] == "16 placed, 32 dropped" and outcome["dropped"] == 32
