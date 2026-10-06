@@ -38,12 +38,11 @@ if TYPE_CHECKING:
 
 # Halvings of the overflow limit before settling on the last clear one.
 SEARCH_STEPS = 10
-# A resolved overflow within this gap of neighbour ink is moved onto it.
-TOUCH_GAP_PX = 2.0
 # A point this close to ink is on it.
 ON_INK_PX = 1e-6
-# A point this close to an existing vertex is that vertex.
-SAME_VERTEX_PX = 1e-9
+# A point this close to an existing vertex is that vertex: the touch radius, so two touches the
+# validator would read as one point never leave two vertices a sub-micron segment apart.
+SAME_VERTEX_PX = 1e-6
 # Ink this close meets: float noise leaves lines meant to be collinear about this far apart.
 MEET_PX = 1e-9
 # Ink meeting only this close to a point that is a vertex of both lines touches there.
@@ -55,6 +54,10 @@ BOUNDARY_MARGIN_PX = 0.5
 # clearance, the gap may narrow to the touch.
 CLEARANCE_PX = 2.0 * PEN_RADIUS_PX
 TOUCH_DISC_FLOOR_PX = 2.0 * CLEARANCE_PX
+# Within a pen's width of ink a line either touches it or keeps clear: a resolved overflow's
+# extreme vertex within this gap of neighbour ink is moved onto it, and a reach that comes this
+# close to ink lands on it.
+TOUCH_GAP_PX = CLEARANCE_PX
 # A node side pulled back this many times is left as it is.
 MAX_PULL_BACKS = 4
 # Rounds of floating-cell replacement per ring before assembly gives up.
@@ -421,11 +424,11 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     start = page_point if anchor is None else anchor[1]
     far = (start[0] + direction[0] * reach_end.max_length_px, start[1] + direction[1] * reach_end.max_length_px)
     exclude = lambda path: id(path) in subtree_ids
-    hit = _first_hit(asm, LineString([start, far]), exclude)
+    hit = _landing(asm, LineString([start, far]), exclude)
     if hit is None and reach_end.direction == "inward":
         # The innermost ring is a closed band of ink, so an inward reach always lands
         # somewhere; past its declared length it runs on toward the centre.
-        hit = _first_hit(asm, LineString([start, asm.center]), exclude)
+        hit = _landing(asm, LineString([start, asm.center]), exclude)
     if hit is None:
         return None, None
     target, hit_point, _ = hit
@@ -510,6 +513,38 @@ def _only_at(hit: BaseGeometry, points: Sequence[Point]) -> bool:
         part.geom_type == "Point" and any(part.distance(point) <= ON_INK_PX for point in points)
         for part in getattr(hit, "geoms", [hit]) if not part.is_empty
     )
+
+
+def _landing(asm: Assembler, ray: LineString,
+             exclude: Callable[[PlacedPath], bool]) -> Optional[Tuple[PlacedPath, PointTuple, float]]:
+    """
+    Where a reach cast along `ray` lands: at the first point along the ray within
+    `TOUCH_GAP_PX` of ink not excluded, on the point of that ink nearest to it.
+    A reach that would pass that close to ink without hitting it lands there
+    instead, bending by at most `TOUCH_GAP_PX` at its end, so it never runs
+    beside ink in a gap no pen fits. Ink the ray hits comes within the gap first,
+    so a straight approach lands where it hits.
+    """
+    best: Optional[Tuple[float, float, PlacedPath, PointTuple]] = None  # along, distance, ink, point
+    for path in asm.index.candidates(ray.buffer(TOUCH_GAP_PX)):
+        if exclude(path):
+            continue
+        geometry = path_geometry(path)
+        if not shapely.dwithin(geometry, ray, TOUCH_GAP_PX):
+            continue
+        zone = ray.intersection(geometry.buffer(TOUCH_GAP_PX, quad_segs=32))
+        alongs = [ray.project(Point(x, y)) for x, y in shapely.get_coordinates(zone)]
+        if not alongs:
+            hit = _first_hit(asm, ray, lambda other: other is not path)
+            if hit is None:
+                continue
+            alongs = [hit[2]]
+        along = min(alongs)
+        near = nearest_points(geometry, ray.interpolate(along))[0]
+        distance = near.distance(ray.interpolate(along))
+        if best is None or (along, distance) < best[:2]:
+            best = (along, distance, path, (near.x, near.y))
+    return None if best is None else (best[2], best[3], best[0])
 
 
 def _first_hit(asm: Assembler, ray: LineString,

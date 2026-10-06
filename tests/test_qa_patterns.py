@@ -29,14 +29,11 @@ def test_stem_reach_does_not_close_a_slit_between_overflowing_petals():
     assert run_case(job)["status"] == "PASS"
 
 
-def test_overflow_keeps_pen_width_clearance_outside_its_touch_disc():
-    # Overflow may narrow to neighbour ink only within the touch disc around the run's extreme vertex
-    # (and around any shared vertex); elsewhere it stays a pen's width clear, so no flank slides along a neighbour.
-    # Disc 10px = max(min_white_space 10, 2 x 4px clearance).
+def test_overflow_and_reaches_touch_or_keep_pen_width_clear_of_other_rings():
+    # Within a pen's width of ink a line either touches it or keeps clear. Every overflow part and every reach
+    # stays at least 4px from every other-ring path, once both lose a 10px disc around each vertex they share.
     import io
     from contextlib import redirect_stdout
-    import numpy as np
-    import shapely
     from shapely.geometry import LineString, MultiPoint
     from coloring_generator import DesignGenerator
     from placement import path_overflow
@@ -46,17 +43,16 @@ def test_overflow_keeps_pen_width_clearance_outside_its_touch_disc():
                             force_motif={"name": "stem", "position": "divider", "role": "contact"})
         g.generate()
     design = g.assembled
-    for path in design.paths:
-        if path.role == "reach":
-            continue
-        for side, run in path_overflow(path, design.center):
-            coords = shapely.get_coordinates(run)
-            radii = np.hypot(coords[:, 0] - design.center[0], coords[:, 1] - design.center[1])
-            extreme = coords[int(np.argmin(radii) if side == "inward" else np.argmax(radii))]
-            for other in design.paths:
-                if other.ring_index == path.ring_index or other.role == "reach":
-                    continue
-                shared = set(path.coords) & set(other.coords)
-                disc = MultiPoint([tuple(extreme), *shared]).buffer(10.0)
-                rest, ink = run.difference(disc), LineString(other.coords).difference(disc)
-                assert rest.is_empty or ink.is_empty or rest.distance(ink) >= 4.0, (path.ring_index, path.cell_index, side)
+    lines = [(path, LineString(path.coords)) for path in design.paths if path.role == "reach"]
+    lines += [(path, run) for path in design.paths for _, run in path_overflow(path, design.center)]
+    for path, line in lines:
+        for other in design.paths:
+            if other.ring_index == path.ring_index or len(set(other.coords)) < 2:
+                continue
+            mine, ink = line, LineString(other.coords)
+            shared = set(path.coords) & set(other.coords)
+            if shared:
+                disc = MultiPoint(list(shared)).buffer(10.0)
+                mine, ink = mine.difference(disc), ink.difference(disc)
+            gap = float("inf") if mine.is_empty or ink.is_empty else mine.distance(ink)
+            assert gap >= 4.0, (path.ring_index, path.cell_index, path.role, other.ring_index, other.cell_index, gap)

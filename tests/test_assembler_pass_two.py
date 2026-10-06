@@ -287,7 +287,7 @@ def test_recast_onto_own_ring_ink_is_accepted_with_a_vertex():
     assert reach.coords[-1] in own_ring.coords
     assert math.isclose(reach.coords[-1][0], x, abs_tol=1e-9)
 
-def test_touch_step_leaves_a_gap_over_two_px_alone():
+def test_touch_step_leaves_a_gap_over_the_touch_gap_alone():
     a = placed(manual_plan())
     petal = next(n for n in a.nodes if n.recipe.motif == "petal")
     band = [p for p in a.paths if p.ring_index == 0]
@@ -331,3 +331,10 @@ def test_reach_that_would_close_a_slit_too_thin_to_colour_is_refused():
 def test_wavy_reach_is_refused_when_no_flattening_is_accepted():
     asm = types.SimpleNamespace(index=InkIndex())
     assert resolver._wavy_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0), lambda coords: False) is None
+
+def test_touch_within_the_touch_radius_of_a_vertex_reuses_it():
+    # A second touch landing 3e-7px from an earlier one used to add a vertex beside it; once both lines
+    # held both vertices they overlapped along a sub-micron segment, which the validator reads as a crossing.
+    path = PlacedPath(0, 0, "centre", (0,), "base", [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)], [0.5, 0.5, 0.5], False, 1.0)
+    assert resolver.insert_vertex(path, (10.0 + 3e-7, 0.0)) == (10.0, 0.0)
+    assert len(path.coords) == 3
