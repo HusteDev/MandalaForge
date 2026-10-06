@@ -64,15 +64,15 @@ def test_overflow_and_reaches_touch_or_keep_pen_width_clear_of_other_rings():
 
 def test_forced_slot_motif_that_never_fits_fails():
     # At min size 25 no slot in the dense (24,24,24) fixture fits a diamond; the design still validates
-    # without it, so the harness must check the forced motif was placed at all.
-    job = ("diamond", "geometric", (24, 24, 24), 0.5, 25, "centre", "slot", 20260821, False)
+    # without it, so the harness must check the forced motif was placed at all. The slot gate would SKIP
+    # this fixture, so it runs as a probe (gates off) to reach the placement check.
+    job = ("diamond", "geometric", (24, 24, 24), 0.5, 25, "centre", "slot", 20260821, True)
     outcome = run_case(job)
     assert outcome["status"] == "FAIL" and "never placed" in outcome["detail"]
 
 
-def test_slot_job_is_gated_on_the_frames_estimated_slot():
-    # A (48,48,48) cell is about 20px wide where it is narrowest: wide enough for a diamond's 10px gate, but
-    # the petal frame's slot, half of it as the composer estimates when nesting, is not.
-    job = ("diamond", "geometric", (48, 48, 48), 0.15, 10, "centre", "slot", 20260821, False)
+def test_slot_job_is_gated_on_the_frames_measured_slot():
+    # The petal frame drawn in the narrowest (24,24,24) cell declares a slot too small for a diamond and two strokes.
+    job = ("diamond", "geometric", (24, 24, 24), 0.15, 10, "centre", "slot", 20260821, False)
     outcome = run_case(job)
     assert outcome["status"] == "SKIP" and "slot" in outcome["detail"]

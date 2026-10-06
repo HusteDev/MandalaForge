@@ -28,6 +28,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import redirect_stdout
 
+from assembler import stroke_width_for
 from coloring_generator import DesignGenerator
 from motifs import MOTIFS, find_motif, safe_motif
 from motifs.contract import MotifError
@@ -73,18 +74,19 @@ def _supports(entry, position, role):
             and REGISTRY_ROLE[role] in entry['roles'])
 
 
-# The frame a forced slot child nests in, whose slot estimate sizes the room it gets.
+# The frame a forced slot child nests in; the gate measures the slot it really declares.
 SLOT_FRAME = 'petal'
 
 
 def _gate_skip(entry, generator, ring_divisions, position, role='base'):
     """
     Reason the declared gates exclude the fixture, or None. Ring 0 is never
-    forced. A slot child is gated on the frame's slot as the composer
-    estimates it when nesting: the cell and ring depth scaled by the frame's
-    `slot_estimate`.
+    forced. A slot child is gated on the slot the frame really declares in the
+    first forced ring (see `_frame_slot_px`), not on the whole cell.
     """
     budget = BOTH_BUDGET if position == 'both' else 1.0
+    if role == 'slot':
+        return _slot_gate_skip(entry, generator, ring_divisions, position, budget)
     cells, depths = [], []
     for ring, divisions in list(zip(generator.rings, ring_divisions))[1:]:
         mid = (ring['inner_radius'] + ring['outer_radius']) / 2.0
@@ -93,14 +95,56 @@ def _gate_skip(entry, generator, ring_divisions, position, role='base'):
     if not cells:
         return "no ring past the centre to force"
     cell, depth = min(cells), min(depths)
-    room = 'cell'
-    if role == 'slot':
-        width_fraction, depth_fraction = find_motif(SLOT_FRAME)['slot_estimate']
-        cell, depth, room = cell * width_fraction, depth * depth_fraction, 'slot'
     if entry['min_cell_width_px'] > cell:
-        return f"{room} {cell:.1f}px < gate {entry['min_cell_width_px']:.0f}px"
+        return f"cell {cell:.0f}px < gate {entry['min_cell_width_px']:.0f}px"
     if entry['min_ring_depth_px'] > depth:
-        return f"{room} depth {depth:.1f}px < gate {entry['min_ring_depth_px']:.0f}px"
+        return f"ring depth {depth:.0f}px < gate {entry['min_ring_depth_px']:.0f}px"
+    return None
+
+
+def _frame_slot_px(generator, ring_divisions, position, budget):
+    """
+    Width and depth in pixels of the slot the frame declares in ring 1, the
+    smallest forced cell, drawn as the assembler would draw it there; None
+    when the frame declares no slot or cannot be drawn.
+    """
+    frame = find_motif(SLOT_FRAME)
+    ring = generator.rings[1]
+    context = MotifContext(
+        inner_radius=ring['inner_radius'], outer_radius=ring['outer_radius'],
+        wedge_angle=360.0 / ring_divisions[1], center=generator.center,
+        stroke_width=stroke_width_for(generator.complexity), complexity=generator.complexity,
+        min_white_space=generator.min_pattern_size, rng=random.Random(generator.seed),
+        position='divider' if position == 'divider' else 'centre', angular_limits=budget,
+        radial_limits=(-frame['max_overflow_inward'], 1.0 + frame['max_overflow_outward']),
+    )
+    try:
+        slot = frame['generator'](context).declaration.slot
+    except MotifError:
+        return None
+    if not slot:
+        return None
+    radials = [point.radial for point in slot]
+    angulars = [point.angular for point in slot]
+    mid = (min(radials) + max(radials)) / 2.0
+    width = context.angular_to_px(max(angulars) - min(angulars), mid)
+    depth = context.radial_to_px(max(radials) - min(radials))
+    return width, depth, context.stroke_width
+
+
+def _slot_gate_skip(entry, generator, ring_divisions, position, budget):
+    if len(ring_divisions) < 2:
+        return "no ring past the centre to force"
+    measured = _frame_slot_px(generator, ring_divisions, position, budget)
+    if measured is None:
+        return f"{SLOT_FRAME} frame declares no slot in ring 1"
+    width, depth, stroke = measured
+    need_width = entry['min_cell_width_px'] + 2.0 * stroke
+    need_depth = entry['min_ring_depth_px'] + 2.0 * stroke
+    if width < need_width:
+        return f"slot {width:.2f}px < {need_width:.2f}px (gate + 2 strokes)"
+    if depth < need_depth:
+        return f"slot depth {depth:.2f}px < {need_depth:.2f}px (gate + 2 strokes)"
     return None
 
 
