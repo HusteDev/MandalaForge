@@ -28,8 +28,8 @@ from shapely.ops import nearest_points
 import assembler
 from motifs.contract import MotifError, ReachEnd
 from motifs.geometry import MotifContext, PointTuple
-from placement import PlacedPath, path_geometry
-from topology_validator import TopologyValidator, structural_components
+from placement import PlacedPath, path_geometry, path_overflow
+from topology_validator import PEN_RADIUS_PX, TopologyValidator, structural_components
 
 if TYPE_CHECKING:
     from assembler import Assembler, PendingReach, PlacedNode, Regenerated
@@ -50,6 +50,11 @@ MEET_PX = 1e-9
 TOUCH_RADIUS_PX = 1e-6
 # A crossing this close to a ring boundary, or past it, is blamed on overflow on that side.
 BOUNDARY_MARGIN_PX = 0.5
+# Overflow keeps this far from neighbour ink, a pen's width, outside the disc around the vertex it
+# touches with. Within one white space of a deliberate touch, and never less than twice the
+# clearance, the gap may narrow to the touch.
+CLEARANCE_PX = 2.0 * PEN_RADIUS_PX
+TOUCH_DISC_FLOOR_PX = 2.0 * CLEARANCE_PX
 # A node side pulled back this many times is left as it is.
 MAX_PULL_BACKS = 4
 # Rounds of floating-cell replacement per ring before assembly gives up.
@@ -196,6 +201,45 @@ def _ink_crosses(asm: Assembler, paths: Sequence[PlacedPath], neighbour: int, si
     return False
 
 
+def touch_disc_px(asm: Assembler) -> float:
+    """Radius of the disc around an overflow run's extreme vertex where it may come closer than `CLEARANCE_PX`."""
+    return max(asm.min_white_space, TOUCH_DISC_FLOOR_PX)
+
+
+def _too_close(asm: Assembler, paths: Sequence[PlacedPath], neighbour: int, side: str) -> bool:
+    """
+    Whether an overflow run of `paths` on `side`, outside its touch disc, comes
+    within `CLEARANCE_PX` of ring `neighbour`'s ink. A run that slides along
+    neighbour ink leaves a slit no pen fits. The touch disc, around the run's
+    extreme vertex, which the touch step may bring onto the ink, is where the
+    gap may narrow to that touch.
+    """
+    disc = touch_disc_px(asm)
+    for path in paths:
+        for run_side, run in path_overflow(path, asm.center):
+            if run_side != side:
+                continue
+            coords = shapely.get_coordinates(run)
+            radii = np.hypot(coords[:, 0] - asm.center[0], coords[:, 1] - asm.center[1])
+            extreme = coords[int(np.argmin(radii) if side == "inward" else np.argmax(radii))]
+            rest = run.difference(Point(extreme).buffer(disc))
+            if rest.is_empty:
+                continue
+            for other in asm.index.candidates(rest.buffer(CLEARANCE_PX)):
+                if other.ring_index == neighbour and shapely.dwithin(rest, path_geometry(other), CLEARANCE_PX):
+                    return True
+    return False
+
+
+def _conflicts(asm: Assembler, paths: Sequence[PlacedPath], neighbour: int, side: str) -> bool:
+    """
+    Whether `paths` overflow on `side` into ring `neighbour`'s ink: they cross
+    it where their own overflow is to blame, or an overflow run comes closer
+    than a pen's width to it outside the run's touch disc.
+    """
+    return _ink_crosses(asm, paths, neighbour, side) or _too_close(asm, paths, neighbour, side)
+
+
 def _with_limit(limits: Tuple[float, float], bound: int, value: float) -> Tuple[float, float]:
     return (value, limits[1]) if bound == 0 else (limits[0], value)
 
@@ -239,7 +283,7 @@ def _pull_back(asm: Assembler, node: PlacedNode, side: str) -> bool:
     if neighbour is None or node.pull_backs.get(side, 0) >= MAX_PULL_BACKS:
         return False
     old_paths = _subtree_paths(asm, node)
-    if not _ink_crosses(asm, old_paths, neighbour, side):
+    if not _conflicts(asm, old_paths, neighbour, side):
         return False
 
     bound = 0 if side == "inward" else 1
@@ -249,7 +293,7 @@ def _pull_back(asm: Assembler, node: PlacedNode, side: str) -> bool:
         mid = (clear + cross) / 2.0
         try:
             regenerated = asm.regenerate(node, _with_limit(limits, bound, mid))
-            crosses = _ink_crosses(asm, [path for *_, paths in regenerated for path in paths], neighbour, side)
+            crosses = _conflicts(asm, [path for *_, paths in regenerated for path in paths], neighbour, side)
         except MotifError:
             crosses = True
         if crosses:
@@ -262,8 +306,8 @@ def _pull_back(asm: Assembler, node: PlacedNode, side: str) -> bool:
     for pulled in ("inward", "outward"):
         if pulled in node.pull_backs:
             _touch(asm, node, pulled, _neighbour(asm, node.ring_index, pulled))
-    if _ink_crosses(asm, _subtree_paths(asm, node), neighbour, side):
-        # The touch, or a shape the search never tried, still crosses: no overflow on this side at all.
+    if _conflicts(asm, _subtree_paths(asm, node), neighbour, side):
+        # The touch, or a shape the search never tried, still crosses or crowds: no overflow on this side at all.
         _regenerate_and_commit(asm, node, side, _with_limit(limits, bound, float(bound)))
         other_side = "outward" if side == "inward" else "inward"
         if other_side in node.pull_backs:
@@ -560,10 +604,16 @@ def pass_two(asm: Assembler) -> None:
     asm.current_ring = None
     for ring in asm.plan.rings:
         inner = _neighbour(asm, ring.ring_index, "inward")
+        if inner is None:
+            continue
         own = [path for path in asm.paths if path.ring_index == ring.ring_index]
-        if inner is not None and _ink_crosses(asm, own, inner):
+        # Reaches are not overflow: they are never pulled back, and end on ink by construction.
+        own_ink = [path for path in own if path.role != "reach"]
+        inner_ink = [path for path in asm.paths if path.ring_index == inner and path.role != "reach"]
+        if (_ink_crosses(asm, own, inner) or _too_close(asm, own_ink, inner, "inward")
+                or _too_close(asm, inner_ink, ring.ring_index, "outward")):
             raise assembler.AssemblyError(
-                f"ring {ring.ring_index} still crosses ring {inner} after {MAX_PULL_BACKS} pull-backs per side"
+                f"ring {ring.ring_index} still crosses or crowds ring {inner} after {MAX_PULL_BACKS} pull-backs per side"
             )
     check_contact(asm)
 
