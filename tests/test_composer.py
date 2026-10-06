@@ -131,11 +131,9 @@ def test_floating_node_gets_a_stem_first():
 def _base_nodes(ring):
     return [n for e in ring.sequence for n in (e.centre, e.divider) if n is not None]
 
-def _stems_in_ring(ring):
-    """Stem attachments over every cell of the ring, not just the sequence."""
-    per_entry = [sum(1 for n in (e.centre, e.divider) if n is not None
-                     for a in n.attachments if a.motif == "stem") for e in ring.sequence]
-    return sum(per_entry[i % len(ring.sequence)] for i in range(ring.divisions))
+def _stems_in_plan(ring):
+    """Stem attachments in the ring's plan (its sequence), not repeated over its cells."""
+    return [a for n in _base_nodes(ring) for a in n.attachments if a.motif == "stem"]
 
 def test_base_symmetry_is_num_divisions_without_vary():
     assert plan_for(num_divisions=10).base_symmetry == 10
@@ -179,17 +177,27 @@ def test_uniform_divisions_repeat_one_entry_per_cell():
         p = Composer(seed, GEOM, ComposerSettings(complexity=1.0, categories=["botanical", "geometric"])).plan()
         assert all(len(r.sequence) == 1 for r in p.rings)
 
-def test_botanical_geometric_rings_are_side_mode_with_at_most_b_stems():
-    from composer import _side_touch_capable
+def test_botanical_geometric_rings_are_side_mode_with_one_stem_per_wedge():
+    from composer import _side_touch_capable, CONTACT_OVERFLOW
     from motifs import find_motif, safe_motif
-    for seed in range(20):
-        p = Composer(seed, GEOM, ComposerSettings(complexity=0.8, categories=["botanical", "geometric"])).plan()
-        for r in p.rings:
-            assert r.contact_mode == "side"
-            assert _stems_in_ring(r) <= p.base_symmetry
-            for node in _base_nodes(r):
-                assert _side_touch_capable(find_motif(node.motif) or safe_motif(node.category))
-                assert node.provides_contact
+    stemmed = 0
+    for vary in (False, True):
+        for seed in range(20):
+            p = Composer(seed, GEOM, ComposerSettings(complexity=0.8, vary_divisions=vary,
+                                                      categories=["botanical", "geometric"])).plan()
+            for r in p.rings:
+                assert r.contact_mode == "side"
+                entries = [find_motif(n.motif) or safe_motif(n.category) for n in _base_nodes(r)]
+                stems = _stems_in_plan(r)
+                if r.ring_index > 0 and not any(e["max_overflow_inward"] >= CONTACT_OVERFLOW for e in entries):
+                    assert len(stems) == 1 and stems[0].once_per_wedge
+                    stemmed += 1
+                else:
+                    assert stems == []
+                for node in _base_nodes(r):
+                    assert _side_touch_capable(find_motif(node.motif) or safe_motif(node.category))
+                    assert node.provides_contact
+    assert stemmed > 0
 
 def test_side_ring_without_inward_overflow_gets_one_stem_on_its_first_node():
     from composer import CellRecipe, CellEntry
@@ -198,6 +206,7 @@ def test_side_ring_without_inward_overflow_gets_one_stem_on_its_first_node():
            CellEntry(CellRecipe("leaf", "botanical"), None)]
     c._ensure_contact(1, seq, "side")
     assert [a.motif for a in seq[0].centre.attachments] == ["stem"]
+    assert seq[0].centre.attachments[0].once_per_wedge
     assert seq[0].divider.attachments == [] and seq[1].centre.attachments == []
     assert all(n.provides_contact for e in seq for n in (e.centre, e.divider) if n is not None)
 
@@ -254,6 +263,19 @@ def test_plan_json_round_trips_the_revision_two_fields():
     assert d["base_symmetry"] == p.base_symmetry
     assert all("contact_mode" in r and "side_touch_radial" in r for r in d["rings"])
     assert DesignPlan.from_json(p.to_json()) == p
+
+def test_once_per_wedge_round_trips_and_defaults_false():
+    from composer import CellRecipe
+    stem = CellRecipe("stem", "botanical", provides_contact=True, once_per_wedge=True)
+    assert CellRecipe.from_dict(stem.to_dict()) == stem
+    d = stem.to_dict()
+    del d["once_per_wedge"]
+    assert CellRecipe.from_dict(d).once_per_wedge is False
+
+def test_stem_mode_and_floating_stems_are_per_cell():
+    p = plan_for(force_motif={"name": "diamond", "position": "centre", "role": "base"})
+    for r in p.rings[1:]:
+        assert all(not a.once_per_wedge for n in _base_nodes(r) for a in n.attachments)
 
 def test_old_plan_json_loads_with_defaults():
     from composer import DesignPlan

@@ -20,6 +20,9 @@ class CellRecipe:
     is_fallback: bool = False
     provides_contact: bool = False
     dropped: bool = False
+    # An attachment drawn in one cell per wedge only (cell_index % (divisions // base_symmetry) == 0):
+    # the single stem of a side-touch ring, whose cells already form one connected band.
+    once_per_wedge: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -30,6 +33,7 @@ class CellRecipe:
             "is_fallback": self.is_fallback,
             "provides_contact": self.provides_contact,
             "dropped": self.dropped,
+            "once_per_wedge": self.once_per_wedge,
         }
 
     @classmethod
@@ -43,6 +47,7 @@ class CellRecipe:
             is_fallback=d.get("is_fallback", False),
             provides_contact=d.get("provides_contact", False),
             dropped=d.get("dropped", False),
+            once_per_wedge=d.get("once_per_wedge", False),
         )
 
 
@@ -602,10 +607,12 @@ class Composer:
             return bool(self._registry_entry(node)["spans_cell"])
 
         if contact_mode == "side":
-            # The ring is one connected band, so one inward contact per sequence is enough:
-            # overflow where a base has it, else a single stem on the first node.
+            # The ring is one connected band, so one inward contact per wedge is enough:
+            # overflow where a base has it, else a single stem on the first node, drawn once per wedge.
             if nodes and not any(has_inward(n) or n.attachments for n in nodes):
-                nodes[0].attachments.append(self._stem_recipe())
+                stem = self._stem_recipe()
+                stem.once_per_wedge = True
+                nodes[0].attachments.append(stem)
             for node in nodes:
                 node.provides_contact = True
             return
