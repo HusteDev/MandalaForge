@@ -123,15 +123,20 @@ class DesignPlan:
         return cls.from_dict(json.loads(text))
 
 
-def node_rng(seed: int, ring_index: int, seq_pos: int, depth: int, position: str) -> random.Random:
-    """Independent, reproducible stream for one node of the plan tree."""
-    return random.Random(
+def node_seed(seed: int, ring_index: int, seq_pos: int, depth: int, position: str) -> int:
+    """Integer seed of one node's stream, kept so the node can be regenerated later."""
+    return (
         seed * 1_000_003
         + ring_index * 10_007
         + seq_pos * 101
         + depth * 11
         + (0 if position == "centre" else 1)
     )
+
+
+def node_rng(seed: int, ring_index: int, seq_pos: int, depth: int, position: str) -> random.Random:
+    """Independent, reproducible stream for one node of the plan tree."""
+    return random.Random(node_seed(seed, ring_index, seq_pos, depth, position))
 
 
 BOTH_MIN_CELL_WIDTH_PX = 2 * 14.0
