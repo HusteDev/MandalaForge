@@ -72,10 +72,48 @@ def test_forced_slot_motif_that_never_fits_fails():
 
 
 def test_slot_job_is_gated_on_the_frames_measured_slot():
-    # The petal frame drawn in each forced (24,24,24) ring declares a slot too small for a diamond and two strokes.
-    job = ("diamond", "geometric", (24, 24, 24), 0.15, 10, "centre", "slot", 20260821, False)
+    # At min size 25 the petal frame drawn in each forced (24,24,24) ring declares no slot or one too small for a
+    # diamond and two strokes. (The gate measures side-mode frames with their ring's side-touch radial, as the
+    # assembler draws them; those span the whole cell, so at min size 10 the slot now admits the diamond.)
+    job = ("diamond", "geometric", (24, 24, 24), 0.15, 25, "centre", "slot", 20260821, False)
     outcome = run_case(job)
     assert outcome["status"] == "SKIP" and "slot" in outcome["detail"]
+    # The gate's verdict is the assembler's: run as a probe, the job never places the child.
+    probe = run_case(job[:-1] + (True,))
+    assert probe["status"] == "FAIL" and "never placed" in probe["detail"]
+
+
+def test_case_label_carries_the_base_symmetry():
+    # The base symmetry of an explicit division list is its gcd.
+    assert "_B4_" in run_case(("diamond", "geometric", (8, 8, 8, 12), 0.5, 10, "centre", "base", 1, False))["label"]
+    assert "_B1_" in run_case(("diamond", "geometric", (7, 12), 0.5, 10, "centre", "base", 1, False))["label"]
+
+
+def test_slot_gate_draws_the_frame_the_assembler_draws():
+    # The gate plans the fixture as the generator does and builds each forced ring's frame context from that plan:
+    # the planned division count, centre share and, in a side-mode ring, the ring's side-touch radial.
+    import io
+    from contextlib import redirect_stdout
+    from coloring_generator import DesignGenerator
+    from qa_patterns import _fixture_plan, _frame_context
+    with redirect_stdout(io.StringIO()):
+        g = DesignGenerator(seed=20260821, num_rings=4, num_divisions=8, complexity=0.5, min_pattern_size=10,
+                            categories=["geometric"], ring_divisions=[8, 8, 8, 12],
+                            force_motif={"name": "diamond", "position": "both", "role": "slot"})
+        plan = _fixture_plan(g)
+        g.generate()
+    # Assembly may replace nodes in the generator's plan; the ring-level draws are the plan's own.
+    ring_fields = ("divisions", "centre_share", "side_touch_radial")
+    assert ([[getattr(r, f) for f in ring_fields] for r in plan.rings]
+            == [[getattr(r, f) for f in ring_fields] for r in g.plan.rings])
+    assert any(r.centre_share < 1.0 for r in plan.rings[1:])
+    assert any(r.contact_mode == "side" for r in plan.rings[1:])
+    fields = ("wedge_angle", "position", "angular_limits", "side_touch_radial", "inner_radius", "outer_radius")
+    for ring_plan in plan.rings[1:]:
+        ours = _frame_context(g, ring_plan, "both")
+        frame = next(n for n in g.assembled.nodes if n.ring_index == ring_plan.ring_index
+                     and n.cell_index == 0 and n.position == "centre" and n.parent is None)
+        assert [getattr(ours, f) for f in fields] == [getattr(frame.context, f) for f in fields]
 
 
 def test_slot_gate_measures_every_forced_rings_real_frame():

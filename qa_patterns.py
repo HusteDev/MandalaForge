@@ -30,7 +30,7 @@ from contextlib import redirect_stdout
 
 from assembler import stroke_width_for
 from coloring_generator import DesignGenerator
-from composer import node_rng
+from composer import Composer, ComposerSettings, node_rng
 from motifs import MOTIFS, find_motif, safe_motif
 from motifs.contract import MotifError
 from motifs.geometry import CellPoint, MotifContext
@@ -41,7 +41,9 @@ ROLES = ('base', 'slot', 'contact')
 DEFAULT_SEED = 20260821
 
 # (8, 8, 8, 12) is the fixture of the original sketch; (24, 24, 24) is the dense
-# case where cells are narrowest. Ring count follows the tuple length.
+# case where cells are narrowest. Ring count follows the tuple length, and the
+# base symmetry B is the gcd of the counts (4, 1, 6 and 24), so the fixtures
+# cover both a design with no rotational repetition and fully uniform rings.
 RING_DIVISIONS = ((8, 8, 8, 12), (7, 12), (6, 6), (24, 24, 24))
 MATRIX_SMOKE = {
     'ring_divisions': RING_DIVISIONS,
@@ -60,9 +62,6 @@ MATRIX_FULL = {
 
 # A job role and the role name the registry uses for it.
 REGISTRY_ROLE = {'base': 'base', 'slot': 'slot', 'contact': 'attachment'}
-# Share of a cell a node gets when centre and divider both carry one (the
-# composer's share varies per ring; this is the middle of its range).
-BOTH_BUDGET = 0.6
 # A design must carry at least this share of one face per cell outside ring 0.
 REGION_FLOOR = 0.75
 
@@ -79,19 +78,37 @@ def _supports(entry, position, role):
 SLOT_FRAME = 'petal'
 
 
-def _gate_skip(entry, generator, ring_divisions, position, role='base'):
+def _fixture_plan(generator):
+    """
+    The plan the generator will draw for this fixture: a composer with the
+    generator's own settings, as `generate()` builds it (planning draws
+    nothing). The gates read each forced ring's division count, centre share,
+    contact mode and side-touch radial from it.
+    """
+    settings = ComposerSettings(
+        num_divisions=generator.num_divisions, vary_divisions=generator.vary_divisions,
+        ring_divisions=generator.ring_divisions, complexity=generator.complexity,
+        min_pattern_size=generator.min_pattern_size, categories=generator.categories,
+        force_motif=generator.force_motif, ring_seeds=generator.ring_seeds,
+    )
+    return Composer(generator.seed, generator.rings, settings).plan()
+
+
+def _gate_skip(entry, generator, position, role='base'):
     """
     Reason the declared gates exclude the fixture, or None. Ring 0 is never
-    forced. A slot child is gated on the slots the frame really declares in the
-    forced rings (see `_frame_slot_px`), not on the whole cell.
+    forced. A node's share of its cell is the planned ring's centre share (1.0
+    unless centre and divider both carry a node). A slot child is gated on the
+    slots the frame really declares in the forced rings (see `_frame_slot_px`),
+    not on the whole cell.
     """
-    budget = BOTH_BUDGET if position == 'both' else 1.0
+    plan = _fixture_plan(generator)
     if role == 'slot':
-        return _slot_gate_skip(entry, generator, ring_divisions, position, budget)
+        return _slot_gate_skip(entry, generator, plan, position)
     cells, depths = [], []
-    for ring, divisions in list(zip(generator.rings, ring_divisions))[1:]:
+    for ring, ring_plan in list(zip(generator.rings, plan.rings))[1:]:
         mid = (ring['inner_radius'] + ring['outer_radius']) / 2.0
-        cells.append(mid * math.radians(360.0 / divisions) * budget)
+        cells.append(mid * math.radians(360.0 / ring_plan.divisions) * ring_plan.centre_share)
         depths.append(ring['outer_radius'] - ring['inner_radius'])
     if not cells:
         return "no ring past the centre to force"
@@ -103,27 +120,39 @@ def _gate_skip(entry, generator, ring_divisions, position, role='base'):
     return None
 
 
-def _frame_slot_px(generator, ring_divisions, ring_index, position, budget):
+def _frame_context(generator, ring_plan, position):
     """
-    Width and depth in pixels of the slot the frame declares in ring
-    `ring_index`, drawn as the assembler draws the frame of the ring's first
-    sequence entry in pass one: that ring's geometry and the node stream
-    `node_rng(seed, ring_index, 0, 0, position)`. In "both" mode the centre
-    frame is measured with `budget`. None when the frame declares no slot or
-    cannot be drawn.
+    The context the assembler gives the frame of the planned ring's first
+    sequence entry in pass one: that ring's geometry and division count, the
+    node stream `node_rng(ring_seed, ring_index, 0, 0, position)`, the ring's
+    centre share as the angular budget, and, when the ring is in side mode,
+    its side-touch radial (a side-touching frame spans its whole budget).
     """
     frame = find_motif(SLOT_FRAME)
+    ring_index = ring_plan.ring_index
     ring = generator.rings[ring_index]
+    # A divider frame has its cell to itself; a centre frame shares it in "both" mode.
     frame_position = 'divider' if position == 'divider' else 'centre'
-    context = MotifContext(
+    return MotifContext(
         inner_radius=ring['inner_radius'], outer_radius=ring['outer_radius'],
-        wedge_angle=360.0 / ring_divisions[ring_index], center=generator.center,
+        wedge_angle=360.0 / ring_plan.divisions, center=generator.center,
         stroke_width=stroke_width_for(generator.complexity), complexity=generator.complexity,
         min_white_space=generator.min_pattern_size,
-        rng=node_rng(generator.seed, ring_index, 0, 0, frame_position),
-        position=frame_position, angular_limits=budget,
+        rng=node_rng(ring_plan.ring_seed, ring_index, 0, 0, frame_position),
+        position=frame_position, angular_limits=ring_plan.centre_share,
         radial_limits=(-frame['max_overflow_inward'], 1.0 + frame['max_overflow_outward']),
+        side_touch_radial=ring_plan.side_touch_radial if ring_plan.contact_mode == 'side' else None,
     )
+
+
+def _frame_slot_px(generator, ring_plan, position):
+    """
+    Width and depth in pixels of the slot the frame declares in the planned
+    ring `ring_plan`, drawn with `_frame_context`. None when the frame
+    declares no slot or cannot be drawn.
+    """
+    frame = find_motif(SLOT_FRAME)
+    context = _frame_context(generator, ring_plan, position)
     try:
         slot = frame['generator'](context).declaration.slot
     except MotifError:
@@ -152,22 +181,22 @@ def _slot_refusal(entry, measured):
     return None
 
 
-def _slot_gate_skip(entry, generator, ring_divisions, position, budget):
+def _slot_gate_skip(entry, generator, plan, position):
     """
     SKIP reason only when no forced ring's real frame slot admits the child.
     The gate mirrors the FAIL rule: one admitting ring is enough for the child
     to be placed somewhere, so if any ring admits it the job runs and a child
     that is never placed is a genuine failure.
     """
-    if len(ring_divisions) < 2:
+    if len(plan.rings) < 2:
         return "no ring past the centre to force"
     refusals = []
-    for ring_index in range(1, len(ring_divisions)):
-        measured = _frame_slot_px(generator, ring_divisions, ring_index, position, budget)
+    for ring_plan in plan.rings[1:]:
+        measured = _frame_slot_px(generator, ring_plan, position)
         refusal = _slot_refusal(entry, measured)
         if refusal is None:
             return None
-        refusals.append(f"ring {ring_index}: {refusal}")
+        refusals.append(f"ring {ring_plan.ring_index}: {refusal}")
     return "no forced ring admits the child; " + "; ".join(refusals)
 
 
@@ -183,7 +212,10 @@ def _placed_count(generator, name, role):
 
 def run_case(job):
     name, category, ring_divisions, complexity, min_white, position, role, seed, probe = job
-    label = f"div{'-'.join(map(str, ring_divisions))}_c{complexity}_mws{min_white}_{position}_{role}"
+    # An explicit division list's base symmetry is its gcd (spec 13.1).
+    symmetry = Composer.base_symmetry(ring_divisions[0], False, list(ring_divisions), None)
+    label = (f"div{'-'.join(map(str, ring_divisions))}_B{symmetry}_c{complexity}"
+             f"_mws{min_white}_{position}_{role}")
 
     def result(status, detail='', dropped=0):
         return {'name': name, 'label': label, 'status': status, 'detail': detail[:200], 'dropped': dropped}
@@ -203,7 +235,7 @@ def run_case(job):
                 force_motif={'name': name, 'position': position, 'role': role},
             )
             if not probe:
-                reason = _gate_skip(entry, generator, ring_divisions, position, role)
+                reason = _gate_skip(entry, generator, position, role)
                 if reason:
                     return result('SKIP', reason)
             generator.generate()
@@ -380,7 +412,7 @@ def main():
         for name in failed:
             for result in by_motif.get(name, []):
                 if result['status'] not in ('PASS', 'SKIP'):
-                    print(f"  {result['name']:14} {result['label']:44} "
+                    print(f"  {result['name']:14} {result['label']:48} "
                           f"[{result['status']}] {result['detail']}")
 
     print("-" * len(header))

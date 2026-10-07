@@ -197,6 +197,8 @@ document.addEventListener('DOMContentLoaded', () => {
             `categories=${(payload.categories || []).join('+')}`,
         ];
         if (payload.vary_divisions) parts.push('vary=true');
+        // Base symmetry: every ring's division count is a multiple of it.
+        if (data.plan && data.plan.base_symmetry) parts.push(`B=${data.plan.base_symmetry}`);
         if (data.validation) {
             parts.push(`valid=${data.validation.is_valid}`);
             if (!data.validation.is_valid) parts.push(`issues=${data.validation.issue_count}`);
@@ -268,10 +270,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (baseRecipe && baseRecipe.motif) {
                 // The motif name is the most useful thing to know before re-rolling a ring
                 const pretty = baseRecipe.motif.replace(/_/g, ' ');
-                button.title = `Ring ${ringIndex + 1}: ${pretty}`;
+                // How the ring connects inward: side, overflow or stem
+                const mode = planRing.contact_mode ? ` \u00b7 ${planRing.contact_mode}` : '';
+                button.title = `Ring ${ringIndex + 1}: ${pretty}${mode}`;
                 const tag = document.createElement('span');
                 tag.className = 'ring-pattern-name';
-                tag.textContent = pretty;
+                tag.textContent = `${pretty}${mode}`;
                 button.appendChild(tag);
             }
             button.setAttribute('aria-pressed', 'false');

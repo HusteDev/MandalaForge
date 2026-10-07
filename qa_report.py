@@ -109,6 +109,7 @@ def run_one(job):
             'categories': categories, 'vary': vary, 'status': 'ERROR',
             'error': f"{type(exc).__name__}: {exc}"[:300],
             'stats': {}, 'issues': [], 'fallbacks': 0, 'patterns': [], 'reaches': 0,
+            'base_symmetry': None, 'side_touch_rings': 0,
         }
 
     report = generator.last_validation_result
@@ -137,6 +138,8 @@ def run_one(job):
         'fallbacks': sum(1 for node in nodes if node.is_fallback),
         'patterns': sorted({node.motif for node in nodes}),
         'reaches': len(assembled.reaches),
+        'base_symmetry': generator.plan.base_symmetry,
+        'side_touch_rings': sum(1 for ring in generator.plan.rings if ring.contact_mode == 'side'),
     }
 
 
@@ -179,12 +182,13 @@ def main():
     else:
         results = [run_one(job) for job in jobs]
 
-    print(f"{'DESIGN':38} {'STATUS':6} {'VARY':>4} {'REGIONS':>7} {'DANGL':>6} {'FLOAT':>5} "
+    print(f"{'DESIGN':38} {'STATUS':6} {'VARY':>4} {'B':>3} {'REGIONS':>7} {'DANGL':>6} {'FLOAT':>5} "
           f"{'UNCOL':>5} {'LANE':>4} {'REACH':>5} {'FB':>3}")
-    print("-" * 94)
+    print("-" * 98)
     for result in results:
         stats = result['stats']
-        print(f"{result['label']:38} {result['status']:6} {int(result['vary']):>4} "
+        symmetry = result['base_symmetry'] if result['base_symmetry'] is not None else '-'
+        print(f"{result['label']:38} {result['status']:6} {int(result['vary']):>4} {symmetry:>3} "
               f"{stats.get('num_regions', 0):>7} {stats.get('num_dangles', 0):>6} "
               f"{stats.get('num_floating_open', 0):>5} "
               f"{stats.get('num_uncolorable_regions', 0):>5} "
@@ -202,7 +206,7 @@ def main():
 
     fallback_total = sum(r['fallbacks'] for r in results)
     reach_total = sum(r['reaches'] for r in results)
-    print("-" * 94)
+    print("-" * 98)
     print(f"{len(results) - len(bad)}/{len(results)} designs passed. "
           f"Reaches: {reach_total}. Safe-fallback cells used: {fallback_total}.")
     if overlay_mode != 'never':
