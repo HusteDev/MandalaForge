@@ -108,11 +108,14 @@ def test_stems_end_in_their_inward_neighbour_ring_or_their_own(vary):
         g = DesignGenerator(seed=seed, num_rings=4, num_divisions=12, complexity=0.9,
                             categories=["botanical", "geometric"], vary_divisions=vary)
         g.generate()
-        for reach in g.assembled.reaches:
+        radius = lambda point: math.hypot(point[0] - g.center[0], point[1] - g.center[1])
+        stems = [reach for reach in g.assembled.reaches
+                 if reach.ring_index > 0 and radius(reach.coords[-1]) < radius(reach.coords[0])]
+        assert stems
+        for reach in stems:
             floor = g.rings[reach.ring_index - 1]["inner_radius"]
-            end = reach.coords[-1]
             # A landing may bend onto ink up to the touch gap beside its ray.
-            assert math.hypot(end[0] - g.center[0], end[1] - g.center[1]) >= floor - TOUCH_GAP_PX - 1e-6
+            assert radius(reach.coords[-1]) >= floor - TOUCH_GAP_PX - 1e-6
 
 
 @pytest.mark.parametrize("vary", [False, True])
@@ -141,6 +144,33 @@ def test_touch_restored_onto_a_vertex_within_float_noise_is_exact():
                         categories=["botanical", "geometric"], vary_divisions=True)
     g.generate()
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+
+
+@pytest.mark.parametrize("seed", [95, 116])
+def test_members_float_noise_does_not_fail_the_final_check(seed):
+    # A member's boundary-exact tip read as a -5.7e-14 overflow run that its representative's did not, and the
+    # final check, judging every member, raised "still crosses or crowds" (fix round 2).
+    g = DesignGenerator(seed=seed, num_rings=4, num_divisions=12, complexity=0.7,
+                        categories=["botanical", "geometric"], vary_divisions=True)
+    g.generate()
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+
+
+def test_guarded_tips_are_touched_from_the_other_side():
+    # Seed 83 (B = 3): a ring-2 leaf pulled back to 1.0 and a ring-3 leaf pulled back to 0.0 crossed at the boundary
+    # 0.2px apart; both apexes are shared with their midribs, so neither could move onto the other. The ring-3
+    # leaf's outline now comes to the ring-2 apex instead.
+    g = DesignGenerator(seed=83, num_rings=4, num_divisions=12, complexity=0.7,
+                        categories=["botanical", "geometric"], vary_divisions=True)
+    g.generate()
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+    nodes = g.assembled.nodes
+    outer = [n.paths[0] for n in nodes if n.ring_index == 3 and n.recipe.motif == "leaf" and n.parent is None]
+    inner = [n.paths[0] for n in nodes if n.ring_index == 2 and n.recipe.motif == "leaf" and n.parent is None]
+    assert inner and outer
+    for outline in inner:
+        apex = outline.coords[max(range(len(outline.radials)), key=lambda i: outline.radials[i])]
+        assert any(apex in other.coords for other in outer)
 
 
 def test_varied_division_design_is_deterministic():

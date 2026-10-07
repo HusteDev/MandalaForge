@@ -1,3 +1,4 @@
+from collections import Counter
 import math
 from shapely.geometry import LineString
 from assembler import Assembler, AssemblyError
@@ -544,22 +545,26 @@ def rotated(coords, degrees, center=CENTER):
 
 
 def assert_symmetric(paths, degrees, center=CENTER):
-    """Every path rotated by `degrees` about the centre matches some path within 1e-6, as sorted rounded coordinates."""
+    """
+    The paths rotated by `degrees` about the centre are the same multiset of paths, each compared as its sorted
+    coordinates rounded to 6 decimals; a key that misses only because a coordinate sits within float noise of a
+    rounding boundary is paired with a distinct leftover path within 2e-6 (one rounding step).
+    """
     def key(coords):
         return tuple(sorted((round(x, 6), round(y, 6)) for x, y in coords))
 
-    keys = {key(p.coords) for p in paths}
-    by_length = {}
+    mine = Counter(key(p.coords) for p in paths)
+    turned = {}
     for p in paths:
-        by_length.setdefault(len(p.coords), []).append(sorted(p.coords))
-    for p in paths:
-        turned = rotated(p.coords, degrees, center)
-        if key(turned) in keys:
-            continue
-        # A coordinate within float noise of a rounding boundary: compare within the tolerance instead.
-        mine = sorted(turned)
-        assert any(all(abs(x0 - x1) <= 1e-6 and abs(y0 - y1) <= 1e-6 for (x0, y0), (x1, y1) in zip(mine, other))
-                   for other in by_length.get(len(turned), [])), (p.ring_index, p.cell_index, p.role)
+        turned.setdefault(key(rotated(p.coords, degrees, center)), []).append(p)
+    missing = Counter({k: len(v) for k, v in turned.items()}) - mine
+    spare = list((mine - Counter({k: len(v) for k, v in turned.items()})).elements())
+    for k in missing.elements():
+        match = next((s for s in spare if len(s) == len(k)
+                      and all(abs(a[0] - b[0]) <= 2e-6 and abs(a[1] - b[1]) <= 2e-6 for a, b in zip(k, s))), None)
+        p = turned[k][0]
+        assert match is not None, (p.ring_index, p.cell_index, p.role)
+        spare.remove(match)
 
 
 def test_manual_plan_with_base_symmetry_resolves_symmetrically():

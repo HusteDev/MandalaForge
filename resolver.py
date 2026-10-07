@@ -16,6 +16,10 @@ exactly `B`-fold symmetric. With `B = 1` every node is its own group.
 A touch is always exact: the touching end is a vertex of its own path and the
 point it lands on is inserted as a vertex into the path it touches, so nothing
 relies on a snap tolerance to read as connected.
+
+Every mutation of a path's coords or radials in pass two must be followed by
+the matching `Assembler` mirror call (`commit_group`, `mirror_insert`,
+`mirror_move`, a reach copy, or `snapshot`/`restore` for an undo).
 """
 
 from __future__ import annotations
@@ -34,7 +38,7 @@ from shapely.ops import nearest_points
 import assembler
 from motifs.contract import MotifError, ReachEnd
 from motifs.geometry import MotifContext, PointTuple
-from placement import PlacedPath, path_geometry, path_overflow
+from placement import OVERFLOW_EPSILON, PlacedPath, path_geometry, path_overflow
 from topology_validator import PEN_RADIUS_PX, TopologyValidator, structural_components
 
 if TYPE_CHECKING:
@@ -403,10 +407,12 @@ def _regenerate_and_commit(asm: Assembler, node: PlacedNode, side: str, limits: 
 def _restore_touches(asm: Assembler, node: PlacedNode) -> None:
     """
     Make every vertex of other rings' ink that lies on the node's new ink a
-    vertex of it too. When the node's own vertex within `SAME_VERTEX_PX` takes
+    vertex of it too, and, the other way round, every vertex of the node's new
+    ink that lies on other rings' ink a vertex of that ink (a guarded tip
+    touched from the other side). When a vertex within `SAME_VERTEX_PX` takes
     the touch (a petal base meeting a leaf apex on the ring boundary, each traced
-    in its own ring, can differ by float noise), the other ink's vertex is moved
-    onto it, so the touch is the same point in both lines.
+    in its own ring, can differ by float noise), the other vertex is moved onto
+    it where it is not guarded, so the touch is the same point in both lines.
     """
     for member in asm.subtree(node):
         for path in member.paths:
@@ -424,6 +430,26 @@ def _restore_touches(asm: Assembler, node: PlacedNode) -> None:
                             asm.reindex(other)
                             asm.mirror_move(other, vertex, landed)
                         touched = True
+                other_geometry = path_geometry(other)
+                if other_geometry.distance(geometry) > ON_INK_PX:
+                    continue
+                for vertex in list(path.coords):
+                    if vertex in other.coords or other_geometry.distance(Point(vertex)) > ON_INK_PX:
+                        continue
+                    landed = insert_vertex(other, vertex)
+                    asm.reindex(other)
+                    asm.mirror_insert(other, landed)
+                    if landed != vertex:
+                        if not _shared_with_other_ink(asm, path, vertex):
+                            path.coords[:] = [landed if point == vertex else point for point in path.coords]
+                            asm.reindex(path)
+                            asm.mirror_move(path, vertex, landed)
+                        elif not _shared_with_other_ink(asm, other, landed):
+                            other.coords[:] = [vertex if point == landed else point for point in other.coords]
+                            asm.reindex(other)
+                            asm.mirror_move(other, landed, vertex)
+                    other_geometry = path_geometry(other)
+                    touched = True
             if touched:
                 asm.reindex(path)
 
@@ -453,19 +479,22 @@ def _redraw_reaches(asm: Assembler, node: PlacedNode, old_ids: Set[int]) -> None
         _resolve_pending(asm, pending)
 
 
-def _touch(asm: Assembler, node: PlacedNode, side: str, neighbour: int) -> None:
+def _touch(asm: Assembler, node: PlacedNode, side: str, neighbour: int) -> Optional[PlacedPath]:
     """
-    Move the node's extreme vertex on `side` onto neighbour ink within
-    `TOUCH_GAP_PX`. A vertex shared with any other path is left where it is:
-    moving it would detach what ends there (a leaf's midrib on its apex, a
-    reach's start, a touch already made).
+    Make the node's extreme vertex on `side` touch neighbour ink within
+    `TOUCH_GAP_PX`; returns the path that moved, or None when nothing did.
+
+    The tip moves onto the ink. A tip shared with other ink is guarded: moving
+    it would detach what ends there (a leaf's midrib on its apex, a reach's
+    start). Then the neighbour's ink comes to the tip instead (spec 13.3, fix
+    round): the tip's projection is inserted into it as a vertex, which moves
+    onto the tip, bending that ink by at most `TOUCH_GAP_PX`. When that vertex
+    is guarded too, the near miss is accepted.
     """
     extreme = _extreme_vertex(node, side)
     if extreme is None:
-        return
+        return None
     _, path, i = extreme
-    if _shared_with_other_ink(asm, path, path.coords[i]):
-        return
     vertex = Point(path.coords[i])
 
     nearest: Optional[Tuple[float, PlacedPath]] = None
@@ -476,8 +505,10 @@ def _touch(asm: Assembler, node: PlacedNode, side: str, neighbour: int) -> None:
         if distance <= TOUCH_GAP_PX and (nearest is None or distance < nearest[0]):
             nearest = (distance, other)
     if nearest is None:
-        return
+        return None
     other = nearest[1]
+    if _shared_with_other_ink(asm, path, path.coords[i]):
+        return _touch_from_the_other_side(asm, path.coords[i], other)
     projected = nearest_points(path_geometry(other), vertex)[0]
     landed = insert_vertex(other, (projected.x, projected.y))
     asm.reindex(other)
@@ -492,6 +523,45 @@ def _touch(asm: Assembler, node: PlacedNode, side: str, neighbour: int) -> None:
         path.radials[index] = _radial(node.context, landed)
     asm.reindex(path)
     asm.mirror_move(path, old, landed)
+    return path
+
+
+def _touch_from_the_other_side(asm: Assembler, tip: PointTuple, other: PlacedPath) -> Optional[PlacedPath]:
+    """
+    Bring `other` to a guarded `tip`: insert the tip's projection into it and
+    move that vertex onto the tip. Returns `other`, or None when the tip is
+    already its vertex or the vertex the projection lands on is guarded.
+    """
+    if tip in other.coords:
+        return None  # already a touch
+    projected = nearest_points(path_geometry(other), Point(tip))[0]
+    count = len(other.coords)
+    landed = insert_vertex(other, (projected.x, projected.y))
+    if landed == tip:  # the tip lay on the ink: the inserted vertex is the touch
+        asm.reindex(other)
+        asm.mirror_insert(other, landed)
+        return other
+    if _shared_with_other_ink(asm, other, landed):
+        if len(other.coords) > count:  # take back the vertex just inserted
+            j = other.coords.index(landed)
+            del other.coords[j], other.radials[j]
+        return None
+    asm.reindex(other)
+    asm.mirror_insert(other, landed)
+    radial = _ring_radial(asm, other.ring_index, tip)
+    for j, point in enumerate(other.coords):
+        if point == landed:
+            other.coords[j], other.radials[j] = tip, radial
+    asm.reindex(other)
+    asm.mirror_move(other, landed, tip)
+    return other
+
+
+def _ring_radial(asm: Assembler, ring_index: int, point: PointTuple) -> float:
+    """The radial of a page point in ring `ring_index`."""
+    geometry = asm.ring_geometry[ring_index]
+    radius = math.hypot(point[0] - asm.center[0], point[1] - asm.center[1])
+    return (radius - geometry["inner_radius"]) / (geometry["outer_radius"] - geometry["inner_radius"])
 
 
 def final_touches(asm: Assembler) -> None:
@@ -527,11 +597,11 @@ def final_touches(asm: Assembler) -> None:
             touched = [path] + [other for other in asm.index.candidates(Point(before).buffer(TOUCH_GAP_PX))
                                 if other.ring_index == neighbour]
             saved = asm.snapshot(touched)
-            _touch(asm, node, side, neighbour)
-            if path.coords[i] == before:
-                continue  # nothing within reach
+            moved = _touch(asm, node, side, neighbour)
+            if moved is None:
+                continue  # nothing within reach, or a near miss no touch can close
             landed = Point(path.coords[i])
-            if (_touch_conflicts(asm, node, path, [side])
+            if (_touch_conflicts(asm, node, moved, [side])
                     or _uncolourable_face_at(asm, outermost, landed, landed.bounds)):
                 asm.restore(saved)
 
@@ -541,7 +611,8 @@ def _outermost(asm: Assembler) -> int:
 
 
 def _overflows(node: PlacedNode, side: str) -> bool:
-    return any(radial < 0.0 if side == "inward" else radial > 1.0 for path in node.paths for radial in path.radials)
+    return any(radial < -OVERFLOW_EPSILON if side == "inward" else radial > 1.0 + OVERFLOW_EPSILON
+               for path in node.paths for radial in path.radials)
 
 
 def _extreme_vertex(node: PlacedNode, side: str) -> Optional[Tuple[float, PlacedPath, int]]:
@@ -876,11 +947,14 @@ def pass_two(asm: Assembler) -> None:
         _resolve_ring(asm, ring)
     asm.current_ring = None
     final_touches(asm)
+    # Judged on the representatives' ink, as every predicate of pass two is (spec 13.1): the members are
+    # their turned copies, and judging them again would only judge their float noise.
+    subjects = [path for path in asm.paths if path.cell_index < asm.wedge_cells(path.ring_index)]
     for ring in asm.plan.rings:
         inner = _neighbour(asm, ring.ring_index, "inward")
         if inner is None:
             continue
-        if _rings_conflict(asm, asm.paths, ring.ring_index, inner):
+        if _rings_conflict(asm, subjects, ring.ring_index, inner):
             raise assembler.AssemblyError(
                 f"ring {ring.ring_index} still crosses or crowds ring {inner} after {MAX_PULL_BACKS} pull-backs per side"
             )

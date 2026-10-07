@@ -56,6 +56,10 @@ def path_geometry(path: PlacedPath) -> BaseGeometry:
     return LineString(path.coords) if len(path.coords) > 1 else Point(path.coords[0])
 
 
+# A run whose radials go less than this far past 0 or 1 is float noise on a boundary-exact vertex, not overflow.
+OVERFLOW_EPSILON = 1e-9
+
+
 def _overflow_side(radial: float) -> Optional[str]:
     if radial < 0.0:
         return "inward"
@@ -101,7 +105,8 @@ def path_overflow(path: PlacedPath, center: PointTuple) -> List[Tuple[str, LineS
     """
     Each maximal run of coordinates past the inner (`inward`) or outer
     (`outward`) ring boundary, extended at each end to the point where the path
-    crosses that boundary.
+    crosses that boundary. A run that goes less than `OVERFLOW_EPSILON` past
+    the boundary is float noise on a vertex that lies on it, and is left out.
     """
     coords, radials = path.coords, path.radials
     last = len(coords) - 1
@@ -121,8 +126,14 @@ def path_overflow(path: PlacedPath, center: PointTuple) -> List[Tuple[str, LineS
         side, first, _ = runs.pop()
         runs[0] = [side, first, runs[0][2]]
 
+    def excursion(side: str, first: int, final: int) -> float:
+        indices = range(first, final + 1) if first <= final else [*range(first, last + 1), *range(0, final + 1)]
+        return max(-radials[i] if side == "inward" else radials[i] - 1.0 for i in indices)
+
     parts: List[Tuple[str, LineString]] = []
     for side, first, final in runs:
+        if excursion(side, first, final) < OVERFLOW_EPSILON:
+            continue
         if first <= final:
             points = list(coords[first:final + 1])
         else:  # wrapped through the closing point
