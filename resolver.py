@@ -486,9 +486,12 @@ def _touch(asm: Assembler, node: PlacedNode, side: str, neighbour: int) -> None:
 def final_touches(asm: Assembler) -> None:
     """
     Within a pen's width of ink a tip touches it or keeps clear. Once every
-    ring is resolved, each node side that overflows has its extreme vertex
-    moved onto neighbour ink within `TOUCH_GAP_PX`: tips that were never pulled
-    back, and tips whose touched ink changed afterwards. A tip already shared
+    ring is resolved, each base's extreme vertex on each side that has a
+    neighbour ring, whether or not it overflows (spec 13.3: a tip on the ring
+    boundary meets the next ring's bases there), is moved onto neighbour ink
+    within `TOUCH_GAP_PX`: tips that were never pulled back, and tips whose
+    touched ink changed afterwards. A slot child lies inside its parent, so
+    only its overflow (it has none) would be considered. A tip already shared
     with other ink (a touch, or a reach's start) is left alone, so nothing
     attached to it comes loose. A touch is undone when it would make the two
     rings cross or crowd each other, or close off a face too thin or small to
@@ -503,7 +506,7 @@ def final_touches(asm: Assembler) -> None:
             continue
         for side in ("inward", "outward"):
             neighbour = _neighbour(asm, node.ring_index, side)
-            if neighbour is None or not _overflows(node, side):
+            if neighbour is None or (node.parent is not None and not _overflows(node, side)):
                 continue
             extreme = _extreme_vertex(node, side)
             if extreme is None:
@@ -893,6 +896,13 @@ def _resolve_ring(asm: Assembler, ring: RingPlan) -> None:
         changed = {seq_pos for seq_pos, _ in targets}
         changed.update(s for s, entry in enumerate(ring.sequence) if entry.to_dict() != before[s])
         asm.replace_cells(ring, sorted(changed))
+        # The neighbours' facing sides were pulled back against ink that is gone: they get a fresh budget.
+        for side in ("inward", "outward"):
+            neighbour = _neighbour(asm, ring.ring_index, side)
+            facing = "outward" if side == "inward" else "inward"
+            for node in asm.nodes:
+                if node.ring_index == neighbour and facing in node.pull_backs:
+                    node.pull_backs[facing] = 0
 
 
 def _resolve_ring_ink(asm: Assembler, ring_index: int) -> None:

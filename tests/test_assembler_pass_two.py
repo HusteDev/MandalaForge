@@ -591,3 +591,77 @@ def test_mirrored_touches_share_their_vertices_exactly():
     for reach in design.reaches:
         assert any(reach.coords[0] in p.coords for p in others) and any(reach.coords[-1] in p.coords for p in others)
     assert validate(design).stats["num_dangles"] == 0
+
+
+def _base_at_the_boundary(a):
+    """The cell-0 petal redrawn with no inward overflow: its base vertex sits on ring 1's inner boundary, home ink."""
+    petal = next(n for n in a.nodes if n.recipe.motif == "petal" and n.cell_index == 0)
+    a.commit(a.regenerate(petal, (0.0, 1.3)))
+    base = lowest_vertex(petal.paths[0])
+    assert min(petal.paths[0].radials) == 0.0 and not resolver._overflows(petal, "inward")
+    return petal, base
+
+
+def test_final_touch_snaps_a_tip_on_the_boundary_that_does_not_overflow():
+    # Spec 13.3: tips sit on the ring boundary and meet the next ring's ink there. A base at radial 0 (no
+    # overflow) within the touch gap of ring-0 ink is moved onto it with a shared vertex.
+    a = placed(shallow_plan())
+    petal, base = _base_at_the_boundary(a)
+    cx, cy = CENTER
+    radius = math.hypot(base[0] - cx, base[1] - cy)
+    ux, uy = (base[0] - cx) / radius, (base[1] - cy) / radius
+    foot = (cx + ux * (radius - 3.0), cy + uy * (radius - 3.0))
+    ink = add_ink(a, 0, [(foot[0] - uy * 2.0, foot[1] + ux * 2.0), (foot[0] + uy * 2.0, foot[1] - ux * 2.0)])
+    resolver.final_touches(a)
+    tip = lowest_vertex(petal.paths[0])
+    assert tip in ink.coords and math.isclose(math.hypot(tip[0] - foot[0], tip[1] - foot[1]), 0.0, abs_tol=1e-6)
+
+
+def test_home_ink_near_neighbour_ink_is_not_a_conflict():
+    # Clearance is about overflow: home ink running within a pen's width of the next ring's ink, with no touch
+    # to resolve it, is accepted; overflow doing the same is not.
+    a = placed(shallow_plan())
+    petal, base = _base_at_the_boundary(a)
+    cx, cy = CENTER
+    radius = math.hypot(base[0] - cx, base[1] - cy)
+    ux, uy = (base[0] - cx) / radius, (base[1] - cy) / radius
+    # Ring-0 ink 2px inside the boundary, square to the base's radius and beside it for 12px each way.
+    foot = (cx + ux * (radius - 2.0), cy + uy * (radius - 2.0))
+    add_ink(a, 0, [(foot[0] - uy * 12.0, foot[1] + ux * 12.0), (foot[0] + uy * 12.0, foot[1] - ux * 12.0)])
+    assert not resolver._too_close(a, petal.paths, 0, "inward")
+    assert not resolver._conflicts(a, petal.paths, 0, "inward")
+    assert not resolver._rings_conflict(a, petal.paths + [p for p in a.paths if p.ring_index == 0], 1, 0)
+    # Ink as near an overflow run (a neighbouring petal's flank below the boundary, outside its tip's disc) crowds it.
+    flank = next(n for n in a.nodes if n.recipe.motif == "petal" and n.cell_index == 1).paths[0]
+    tip = lowest_vertex(flank)
+    i = next(i for i in range(1, len(flank.coords) - 1) if flank.radials[i] < 0.0
+             and math.dist(flank.coords[i], tip) > resolver.touch_disc_px(a) + 2.0)
+    (x0, y0), (x, y), (x1, y1) = flank.coords[i - 1:i + 2]
+    tx, ty = (x1 - x0) / math.dist((x0, y0), (x1, y1)), (y1 - y0) / math.dist((x0, y0), (x1, y1))
+    nx, ny = -ty, tx
+    middle = LineString(flank.coords).centroid
+    if (x + nx - middle.x) ** 2 + (y + ny - middle.y) ** 2 < (x - middle.x) ** 2 + (y - middle.y) ** 2:
+        nx, ny = -nx, -ny  # point away from the petal
+    near = (x + 2.0 * nx, y + 2.0 * ny)
+    add_ink(a, 0, [(near[0] - tx, near[1] - ty), (near[0] + tx, near[1] + ty)])
+    assert resolver._too_close(a, [flank], 0, "inward")
+
+
+def test_replaced_cells_give_the_neighbours_facing_sides_a_fresh_pull_back_budget(monkeypatch):
+    # The neighbours' facing sides were pulled back against ink a contact round replaces; without a fresh
+    # budget they could not answer the new ink (a (24, 24, 24) slot fixture raised "still crosses").
+    a = Assembler(shallow_plan(), GEOM, CENTER, 0.5, 10.0, composer_for(GEOM))
+    a.pass_one()
+    resolver._resolve_ring(a, a.plan.rings[0])
+    for band in (n for n in a.nodes if n.ring_index == 0):
+        band.pull_backs["outward"] = resolver.MAX_PULL_BACKS
+    calls = []
+    real = resolver.floating_base_cells
+
+    def floating_once(asm, ring_index=None):
+        calls.append(ring_index)
+        return [(1, 0, "centre")] if len(calls) == 1 else real(asm, ring_index)
+
+    monkeypatch.setattr(resolver, "floating_base_cells", floating_once)
+    resolver._resolve_ring(a, a.plan.rings[1])
+    assert all(n.pull_backs["outward"] == 0 for n in a.nodes if n.ring_index == 0)
