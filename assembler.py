@@ -36,7 +36,7 @@ MAX_BASE_REPLACEMENTS = 3
 # Attachment i draws from stream depth ATTACHMENT_DEPTH + i; slot nesting only uses depths 0 to 2.
 ATTACHMENT_DEPTH = 10
 
-# A ring's once-per-wedge contact is drawn in at least this many cells, evenly spaced, so a design with a base
+# A ring's once-per-wedge contact is drawn in at least this many cells, spaced round the ring, so a design with a base
 # symmetry of 1 or 2 never joins a ring to the one inside it at a single point (the band between would be one
 # face running all the way round the centre).
 MIN_RING_CONTACTS = 3
@@ -350,6 +350,9 @@ class Assembler:
         for path in paths:
             self.paths.append(path)
             self.index.add(path)
+        for path in paths:
+            # Cells traced with an inexact rotation (360 / 7) meet their neighbours' side vertices only to float noise.
+            self.snap_to_ink(path)
         self._record_reaches(ring, node, rotation)
         return node
 
@@ -381,8 +384,9 @@ class Assembler:
         """
         Whether the node's cell draws its once-per-wedge attachments: the first
         cell of each wedge of `360 / B` degrees, or, while that gives fewer than
-        `MIN_RING_CONTACTS` in the ring (B of 1 or 2), evenly spaced cells, at
-        least `ceil(MIN_RING_CONTACTS / B)` per wedge. Only cells holding the
+        `MIN_RING_CONTACTS` in the ring (B of 1 or 2), cells spaced through each
+        wedge, at least `ceil(MIN_RING_CONTACTS / B)` per wedge where the wedge
+        holds that many cells of the node's entry. Only cells holding the
         node's sequence entry carry the attachment, so the spacing counts those:
         the m = wedge / len(sequence) of them in each wedge, every k-th one with
         k = max(1, m // per-wedge count). The rule depends only on a cell's place
@@ -522,8 +526,12 @@ class Assembler:
         """
         Make every vertex of `path` within `SAME_VERTEX_PX` of a vertex of other
         ink exactly that vertex, and reindex it. A turned copy differs from ink
-        drawn in its own cell by float noise, and a touch is only read as one by
-        the validator when the shared vertex is the same point in both lines.
+        drawn in its own cell by float noise, as does a cell traced with an
+        inexact rotation from its neighbour at their shared side vertex, and a
+        touch is only read as one by the validator when the shared vertex is the
+        same point in both lines (else a third line through it can overlap one of
+        them along a sub-micron segment). Every placed, committed or mirrored
+        path is snapped.
         """
         tolerance = resolver.SAME_VERTEX_PX
         others = [other for other in self.index.candidates(path_geometry(path).buffer(tolerance)) if other is not path]
@@ -576,10 +584,6 @@ class Assembler:
         self.commit(regenerated)
         for copy in copies:
             self.commit(copy)
-        for copy in copies:
-            for *_, paths in copy:
-                for path in paths:
-                    self.snap_to_ink(path)
 
     def snapshot(self, paths: Iterable[PlacedPath]) -> List[Tuple[PlacedPath, List[PointTuple], List[float]]]:
         """The coordinates and radials of `paths` and all their counterparts, for `restore`."""
@@ -668,6 +672,8 @@ class Assembler:
         self.paths[at:at] = new_paths
         for path in new_paths:
             self.index.add(path)
+        for path in new_paths:
+            self.snap_to_ink(path)
 
     def replace_cells(self, ring: RingPlan, seq_positions: Iterable[int]) -> None:
         """

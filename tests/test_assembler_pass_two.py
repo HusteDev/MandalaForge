@@ -520,7 +520,7 @@ def test_only_side_ring_bases_get_the_side_touch_radial(monkeypatch):
 
 
 @pytest.mark.parametrize("symmetry, cells", [(4, [0, 3, 6, 9]), (2, [0, 3, 6, 9]), (1, [0, 4, 8])])
-def test_once_per_wedge_attachment_is_recorded_in_the_first_cell_of_each_wedge(symmetry, cells):
+def test_once_per_wedge_attachment_is_spread_to_at_least_three_cells_per_ring(symmetry, cells):
     # One per wedge of 360 / B degrees, but never fewer than three evenly spaced per ring: B = 2 draws two per
     # wedge (so both members of a group carry it) and B = 1 three in the ring.
     plan = symmetric_plan(symmetry)
@@ -697,6 +697,18 @@ def test_replaced_cells_give_the_neighbours_facing_sides_a_fresh_pull_back_budge
     monkeypatch.setattr(resolver, "floating_base_cells", floating_once)
     resolver._resolve_ring(a, a.plan.rings[1])
     assert all(n.pull_backs["outward"] == 0 for n in a.nodes if n.ring_index == 0)
+
+
+def test_pass_one_cells_share_their_side_vertices_exactly():
+    # Seven cells are traced with an inexact 360 / 7 rotation, so neighbouring bands met at side vertices 4e-14
+    # apart; a third line touching one of them then overlapped the other along a sub-micron segment, which the
+    # validator reads as an overflow crossing (seed 8, ring_divisions (7, 12)). Placed ink is snapped exactly.
+    a = placed(manual_plan(divs=(7, 12)))
+    vertices = [(point, id(path)) for path in a.paths for point in path.coords]
+    for k, (point, owner) in enumerate(vertices):
+        for other, other_owner in vertices[k + 1:]:
+            if other_owner != owner and point != other:
+                assert math.dist(point, other) > resolver.SAME_VERTEX_PX
 
 
 def test_floating_groups_are_replaced_once_per_sequence_entry(monkeypatch):

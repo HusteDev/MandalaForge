@@ -195,6 +195,15 @@ def test_base_symmetry_one_still_gets_three_inward_contacts_per_ring():
     assert stems[2] == [0, 3, 6, 9]
 
 
+def test_neighbouring_cells_of_an_inexact_rotation_share_side_vertices_exactly():
+    # Seed 8 with (7, 12): ring-0 bands of cells 2 and 3 met 4e-14 apart; a ring-1 petal restored onto one of the
+    # two overlapped the other's edge along a sub-micron segment, "Overflow crosses ring 0".
+    g = DesignGenerator(seed=8, ring_divisions=[7, 12], complexity=0.5, min_pattern_size=10,
+                        categories=["botanical", "geometric"])
+    g.generate()
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+
+
 def test_base_symmetry_four_keeps_one_inward_contact_per_wedge():
     g = DesignGenerator(seed=20260821, ring_divisions=[8, 12], complexity=0.5, min_pattern_size=10,
                         categories=["botanical", "geometric"])

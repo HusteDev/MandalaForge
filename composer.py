@@ -181,10 +181,9 @@ def _base_nodes(sequence: List[CellEntry]) -> List[CellRecipe]:
 
 def _side_touch_capable(entry: Dict) -> bool:
     """
-    Whether a base motif can meet its ring neighbours at a shared side vertex.
-
-    The registry gains a `side_touch` key in Task 18; until then the motifs that will support it
-    are the cell-spanning bands (scallop, ring_band, the safe band) plus petal and leaf.
+    Whether a base motif can meet its ring neighbours at a shared side vertex, as its registry
+    entry's `side_touch` key declares. An entry without the key (none in the registry) counts the
+    cell-spanning bands plus petal and leaf.
     """
     return bool(entry.get("side_touch", entry["spans_cell"] or entry["name"] in ("petal", "leaf")))
 
