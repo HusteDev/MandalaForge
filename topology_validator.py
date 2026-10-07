@@ -736,6 +736,7 @@ class TopologyValidator:
         """
         if not polygons:
             return []
+        polygons = _valid_faces(polygons)
 
         order = sorted(range(len(polygons)), key=lambda i: polygons[i].area)
         tree = STRtree([polygons[i] for i in order])
@@ -782,6 +783,32 @@ class TopologyValidator:
 
 
 # ---------------------------------------------------------------- adapters
+
+def _valid_faces(polygons: Sequence[Polygon]) -> List[Polygon]:
+    """
+    The faces with any invalid one repaired. Snap-rounded linework can still
+    polygonize into a self-intersecting face, which the containment and
+    difference steps cannot measure (GEOS raises a side location conflict).
+    `make_valid` repairs it; every polygon part it yields is kept, largest
+    first, so no face is lost. Valid faces pass through unchanged.
+    """
+    found: List[Polygon] = []
+    for polygon in polygons:
+        if polygon.is_valid:
+            found.append(polygon)
+            continue
+        parts: List[Polygon] = []
+        pending = [_shapely.make_valid(polygon)]
+        while pending:
+            geometry = pending.pop()
+            if isinstance(geometry, Polygon):
+                if not geometry.is_empty:
+                    parts.append(geometry)
+            elif hasattr(geometry, 'geoms'):
+                pending.extend(geometry.geoms)
+        found.extend(sorted(parts, key=lambda part: -part.area))
+    return found
+
 
 def _near_vertex(point: ShPoint, coords, tolerance: float = 1e-6) -> bool:
     return any(math.hypot(point.x - x, point.y - y) <= tolerance for x, y in coords)

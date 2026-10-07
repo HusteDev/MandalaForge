@@ -1,4 +1,4 @@
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Polygon
 from topology_validator import TopologyValidator, structural_components
 
 SQ = lambda x: [(x, 0), (x + 10, 0), (x + 10, 10), (x, 10), (x, 0)]
@@ -71,3 +71,12 @@ def test_pen_test_erodes_faces_in_floating_precision():
     assert not face.is_too_thin and not face.is_uncolorable
     report = TopologyValidator().analyze([GRID_COLLAPSE_LOOP])
     assert not report.tiny_regions
+
+
+def test_resolve_faces_repairs_an_invalid_face_without_losing_it():
+    # polygonize can return a self-intersecting face; measuring it raised a GEOS side location conflict.
+    bow_tie = Polygon([(0, 0), (10, 10), (10, 0), (0, 10)])
+    square = Polygon([(20, 0), (30, 0), (30, 10), (20, 10)])
+    assert not bow_tie.is_valid
+    regions = TopologyValidator()._resolve_faces([bow_tie, square])
+    assert len(regions) >= 2

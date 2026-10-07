@@ -204,6 +204,16 @@ def test_neighbouring_cells_of_an_inexact_rotation_share_side_vertices_exactly()
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
 
 
+@pytest.mark.parametrize("seed", [9, 69])
+def test_validator_measures_a_face_polygonize_returns_invalid(seed):
+    # Snap-rounded linework polygonized into a self-intersecting face and the face measurement raised a GEOS
+    # "side location conflict"; the validator now repairs such a face before measuring it.
+    g = DesignGenerator(seed=seed, ring_divisions=[7, 12], complexity=0.5, min_pattern_size=10,
+                        categories=["botanical", "geometric"])
+    g.generate()
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+
+
 def test_base_symmetry_four_keeps_one_inward_contact_per_wedge():
     g = DesignGenerator(seed=20260821, ring_divisions=[8, 12], complexity=0.5, min_pattern_size=10,
                         categories=["botanical", "geometric"])
