@@ -209,15 +209,15 @@ def test_composer_plans_assemble_deterministically():
     report = validate(a)
     assert report.stats["num_dangles"] == 0 and report.stats["num_floating_base"] == 0
 
-def test_inward_reach_that_finds_no_ink_within_its_length_draws_nothing():
-    # Revision 1 ran a short inward reach on toward the centre until it found ink; a stem now casts only its
-    # declared length (spec 13.2) and one that misses leaves the cell to the contact check.
+def test_inward_reach_casts_to_the_neighbour_boundary_whatever_its_declared_length():
+    # A stem casts exactly to the inward neighbour ring's inner boundary (spec 13.2, fix round): a declared
+    # 1px length does not stop it short of ring 0's band.
     a = placed(shallow_plan())
     node, end, point, rotation = a.pending_reaches[0]
     short = ReachEnd(end.point, end.direction, 1.0, end.style)
-    before = [list(p.coords) for p in a.paths]
-    assert a.resolve_reach(node, short, point, rotation) is None
-    assert [list(p.coords) for p in a.paths] == before and not any(p.role == "reach" for p in a.paths)
+    reach = a.resolve_reach(node, short, point, rotation)
+    assert reach is not None and reach.coords[0] in node.paths[0].coords
+    assert any(reach.coords[-1] in p.coords for p in a.paths if p.ring_index == 0)
 
 def test_outward_reach_keeps_its_declared_length():
     a = placed(manual_plan())
@@ -653,12 +653,12 @@ def test_home_ink_near_neighbour_ink_is_not_a_conflict():
 
 
 def test_stem_casts_no_further_than_the_inward_neighbours_inner_boundary():
-    # Spec 13.2: a stem stays in the neighbour ring. With ring 0's band gone from its path, ink inside ring 0's
-    # inner boundary (r < 40) lies within the stem's declared 63px but past the boundary: the stem misses.
+    # Spec 13.2: a stem stays in the neighbour ring and never recasts. With ring 0's band gone from its path,
+    # ink inside ring 0's inner boundary (r < 40) is past the boundary, however long the stem's declared
+    # length: the stem misses.
     a = placed(shallow_plan())
     node, end, point, rotation = stem_of_cell_zero(a)
-    anchor = lowest_vertex(node.paths[0])
-    assert math.hypot(anchor[0] - CENTER[0], anchor[1] - CENTER[1]) - end.max_length_px < 30.0
+    end = ReachEnd(end.point, end.direction, 1000.0, end.style)
     for band in [p for p in a.paths if p.ring_index == 0]:
         a.paths.remove(band)
         a.index.remove(band)

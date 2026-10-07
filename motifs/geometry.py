@@ -221,3 +221,20 @@ def side_touch_radial_within(context: MotifContext, low: float, high: float) -> 
     if radial is None or context.slot:
         return None
     return radial if low < radial < high else None
+
+
+# A band's side edge reaches at least this far past the side-touch radial on each side.
+SIDE_EDGE_MARGIN = 0.05
+
+
+def side_edge_containing_touch(context: MotifContext, low: float, high: float) -> Tuple[float, float]:
+    """
+    A side edge `(low, high)` widened so the side-touch radial lies strictly inside it, at least
+    `SIDE_EDGE_MARGIN` from each end, clamped to the radial limits; unchanged when side touch does
+    not apply. Bands drawn from different sequence entries then all carry the shared side vertex.
+    """
+    radial = context.side_touch_radial
+    if radial is None or context.slot:
+        return low, high
+    lowest, highest = context.radial_limits
+    return max(lowest, min(low, radial - SIDE_EDGE_MARGIN)), min(highest, max(high, radial + SIDE_EDGE_MARGIN))

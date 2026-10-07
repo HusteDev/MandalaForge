@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Dict, List
 
 from motifs.contract import MotifInstance, build_instance
-from motifs.geometry import CellPoint, MotifContext, SmartVector, side_touch_radial_within
+from motifs.geometry import CellPoint, MotifContext, SmartVector, side_edge_containing_touch, side_touch_radial_within
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
 
 
@@ -34,7 +34,9 @@ def generate_ring_band(context: MotifContext) -> MotifInstance:
     r1 = context.rng.uniform(0.30, 0.45)
     r2 = context.rng.uniform(0.55, 0.70)
     limit = context.angular_limits
-    # Side touch adds the shared vertex on each side edge when it falls inside that edge.
+    # Side touch (spec 13.2): the side edges widen to contain the ring's side-touch radial, and the
+    # shared vertex is added on each.
+    r1, r2 = side_edge_containing_touch(context, r1, r2)
     touch = side_touch_radial_within(context, r1, r2)
     outline = [
         CellPoint(r1, -limit),

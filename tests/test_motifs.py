@@ -217,16 +217,31 @@ def test_every_side_touch_entry_meets_the_budget_at_the_side_touch_radial(entry,
         assert all(abs(p.angular) <= 0.5 + 1e-12 for v in inst.vectors for p in v.points)
 
 
-def test_scallop_side_vertex_falls_back_to_the_nearest_end_of_its_side_edge(cell_kwargs):
+def test_scallop_side_vertex_falls_back_to_the_nearest_end_when_the_limits_clamp_its_edge(cell_kwargs):
+    # The side edge widens to contain the side-touch radial, but never past the radial limits; when they
+    # clamp it short of the radial, the edge's nearest end serves as the side vertex.
     gen = find_motif("scallop")["generator"]
     for seed in range(10):
-        plain = gen(make_ctx(cell_kwargs, seed)).vectors[0].points
-        top = max(p.radial for p in plain)
-        low_inst = gen(make_ctx(cell_kwargs, seed, side_touch_radial=0.05))
-        high_inst = gen(make_ctx(cell_kwargs, seed, side_touch_radial=0.95))
-        assert has_vertex(high_inst, top, 1.0) and has_vertex(high_inst, top, -1.0)
-        assert has_vertex(low_inst, top - 0.2, 1.0) and has_vertex(low_inst, top - 0.2, -1.0)
-        assert low_inst.vectors[0].points == plain and high_inst.vectors[0].points == plain
+        for limits, radial in (((0.0, 0.55), 0.95), ((0.25, 1.0), 0.05)):
+            plain = gen(make_ctx(cell_kwargs, seed, radial_limits=limits)).vectors[0].points
+            inst = gen(make_ctx(cell_kwargs, seed, radial_limits=limits, side_touch_radial=radial))
+            side = [p.radial for p in inst.vectors[0].points if abs(p.angular - 1.0) <= 1e-12]
+            assert not min(side) < radial < max(side)
+            assert has_vertex(inst, max(side) if radial > 0.5 else min(side), 1.0)
+
+
+@pytest.mark.parametrize("name", ["ring_band", "botanical_safe_band", "scallop"])
+def test_band_side_edges_contain_the_side_touch_radial_strictly(name, cell_kwargs):
+    # Spec 13.2 (fix round): every band's side edge contains the ring's side-touch radial, so bands drawn
+    # from different sequence entries share the side vertex.
+    entry = find_motif(name) or safe_motif("botanical")
+    for radial in (0.35, 0.4, 0.45, 0.5, 0.55, 0.6):
+        for seed in range(20):
+            inst = entry["generator"](make_ctx(cell_kwargs, seed, side_touch_radial=radial))
+            for limit in (1.0, -1.0):
+                side = [p.radial for p in inst.vectors[0].points if abs(p.angular - limit) <= 1e-12]
+                assert min(side) < radial < max(side), (radial, seed, side)
+                assert has_vertex(inst, radial, limit)
 
 
 def test_petals_from_different_seeds_share_the_side_vertex(cell_kwargs):

@@ -124,6 +124,25 @@ def test_review_seeds_generate_and_validate(seed, vary):
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
 
 
+def test_seed_15_assembles_with_stems_cast_to_the_neighbour_boundary():
+    # Ring 0 is 83px deep with its band mid-ring; ring 1's floating cells got a stem whose declared 46px fell
+    # about 2px short of the band, so every contact round failed until stems cast to the neighbour boundary.
+    g = DesignGenerator(seed=15, num_rings=4, num_divisions=12, complexity=0.5,
+                        categories=["botanical", "geometric"], vary_divisions=False)
+    g.generate()
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+
+
+def test_touch_restored_onto_a_vertex_within_float_noise_is_exact():
+    # Seed 1 (vary on, c0.9): a ring-2 petal base touched a ring-1 leaf apex on the boundary; the leaf was then
+    # redrawn and its own apex, 5e-14 away, took the restored touch, so the petal's float-noise overflow run
+    # overlapped the leaf and the validator read a crossing.
+    g = DesignGenerator(seed=1, num_rings=4, num_divisions=12, complexity=0.9,
+                        categories=["botanical", "geometric"], vary_divisions=True)
+    g.generate()
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+
+
 def test_varied_division_design_is_deterministic():
     def run():
         g = DesignGenerator(seed=777, num_rings=4, num_divisions=12, complexity=0.5,

@@ -12,6 +12,7 @@ from motifs.geometry import (
     SmartVector,
     mirror_points,
     quad_points,
+    side_edge_containing_touch,
     side_touch_radial_within,
 )
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
@@ -223,12 +224,15 @@ def generate_scallop(context: MotifContext) -> MotifInstance:
     limit = context.angular_limits
     top = min(high, top)
     side_bottom = max(low, top - 0.2)
+    # Side touch (spec 13.2): the side edges widen to contain the ring's side-touch radial.
+    side_bottom, top = side_edge_containing_touch(context, side_bottom, top)
     lowest = max(low, -dip)
     # The curve's midpoint is (start + 2 * control + end) / 4, so this control lands it on `lowest`.
     control = CellPoint(2.0 * lowest - side_bottom, 0.0)
     arc = quad_points(CellPoint(side_bottom, limit), control, CellPoint(side_bottom, -limit), QUAD_STEPS)
     # The side edges already span the full budget. Side touch adds the shared vertex on each when it
-    # falls inside the edge; otherwise the edge's nearest end already is that vertex.
+    # falls inside the edge (it always does unless the radial limits clamp the edge short of it);
+    # otherwise the edge's nearest end already is that vertex.
     touch = side_touch_radial_within(context, side_bottom, top)
     right_side = [CellPoint(touch, limit)] if touch is not None else []
     left_side = [CellPoint(touch, -limit)] if touch is not None else []

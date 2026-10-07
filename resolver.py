@@ -401,7 +401,13 @@ def _regenerate_and_commit(asm: Assembler, node: PlacedNode, side: str, limits: 
 
 
 def _restore_touches(asm: Assembler, node: PlacedNode) -> None:
-    """Make every vertex of other rings' ink that lies on the node's new ink a vertex of it too."""
+    """
+    Make every vertex of other rings' ink that lies on the node's new ink a
+    vertex of it too. When the node's own vertex within `SAME_VERTEX_PX` takes
+    the touch (a petal base meeting a leaf apex on the ring boundary, each traced
+    in its own ring, can differ by float noise), the other ink's vertex is moved
+    onto it, so the touch is the same point in both lines.
+    """
     for member in asm.subtree(node):
         for path in member.paths:
             geometry = path_geometry(path)
@@ -411,7 +417,12 @@ def _restore_touches(asm: Assembler, node: PlacedNode) -> None:
                     continue
                 for vertex in list(other.coords):
                     if geometry.distance(Point(vertex)) <= ON_INK_PX:
-                        asm.mirror_insert(path, insert_vertex(path, vertex))
+                        landed = insert_vertex(path, vertex)
+                        asm.mirror_insert(path, landed)
+                        if landed != vertex:
+                            other.coords[:] = [landed if point == vertex else point for point in other.coords]
+                            asm.reindex(other)
+                            asm.mirror_move(other, vertex, landed)
                         touched = True
             if touched:
                 asm.reindex(path)
@@ -572,9 +583,12 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     direction = (sign * dx / norm, sign * dy / norm)
     anchor = _anchor(node, page_point, direction)
     start = page_point if anchor is None else anchor[1]
-    length = reach_end.max_length_px
+    # An inward reach (a stem) casts exactly to the inward neighbour's inner boundary, whatever its declared
+    # length; an outward reach keeps its declared length.
     if reach_end.direction == "inward":
-        length = min(length, _distance_to_floor(asm, node.ring_index, start))
+        length = _distance_to_floor(asm, node.ring_index, start)
+    else:
+        length = reach_end.max_length_px
     if length <= ON_INK_PX:
         return None, None
     far = (start[0] + direction[0] * length, start[1] + direction[1] * length)
@@ -629,9 +643,9 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
 
 def _distance_to_floor(asm: Assembler, ring_index: int, start: PointTuple) -> float:
     """
-    How far an inward reach from `start` may cast: to the inward neighbour
-    ring's inner boundary (spec 13.2: a stem stays in the neighbour ring), or to
-    the centre when the ring has no inward neighbour.
+    How far an inward reach from `start` casts: exactly to the inward neighbour
+    ring's inner boundary (spec 13.2: a stem stays in the neighbour ring, and
+    reaches all of it), or to the centre when the ring has no inward neighbour.
     """
     inner = _neighbour(asm, ring_index, "inward")
     floor = 0.0 if inner is None else asm.ring_geometry[inner]["inner_radius"]
