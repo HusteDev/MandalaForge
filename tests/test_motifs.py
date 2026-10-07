@@ -175,3 +175,142 @@ def test_leaf_midrib_is_dropped_outside_a_slot_when_the_halves_are_too_thin(cell
     thin = gen(make_ctx(cell_kwargs, 7, angular_limits=0.1))
     assert len(thin.vectors) == 1 and thin.vectors[0].closed
     assert len(gen(make_ctx(cell_kwargs, 7)).vectors) == 2
+
+
+# ----- revision 2: side touch and ring fill ---------------------------------
+
+SIDE_TOUCH_NAMES = {"petal", "leaf", "scallop", "ring_band", "botanical_safe_band"}
+
+
+def has_vertex(inst, radial, angular, tol=1e-9):
+    return any(
+        abs(p.radial - radial) <= tol and abs(p.angular - angular) <= tol
+        for p in inst.vectors[0].points
+    )
+
+
+def test_registry_declares_side_touch_on_every_entry():
+    declared = {e["name"]: e["side_touch"] for e in all_entries()}
+    assert declared == {
+        "petal": True, "leaf": True, "scallop": True, "stem": False,
+        "diamond": False, "ring_band": True, "botanical_safe_band": True,
+    }
+
+
+@pytest.mark.parametrize("name", ["petal", "leaf"])
+def test_side_touch_puts_vertices_at_the_side_touch_radial(name, cell_kwargs):
+    gen = find_motif(name)["generator"]
+    for seed in range(15):
+        for limit in (1.0, 0.6, 0.5):
+            inst = gen(make_ctx(cell_kwargs, seed, complexity=1.0, angular_limits=limit, side_touch_radial=0.5))
+            assert has_vertex(inst, 0.5, limit) and has_vertex(inst, 0.5, -limit)
+            widest = max(abs(p.angular) for p in inst.vectors[0].points)
+            assert widest <= limit + 1e-12
+
+
+@pytest.mark.parametrize("entry", [e for e in all_entries() if e["side_touch"]], ids=lambda e: e["name"])
+def test_every_side_touch_entry_meets_the_budget_at_the_side_touch_radial(entry, cell_kwargs):
+    for seed in range(10):
+        ctx = make_ctx(cell_kwargs, seed, complexity=1.0, angular_limits=0.5, side_touch_radial=0.5)
+        inst = entry["generator"](ctx)
+        assert has_vertex(inst, 0.5, 0.5) and has_vertex(inst, 0.5, -0.5)
+        assert all(abs(p.angular) <= 0.5 + 1e-12 for v in inst.vectors for p in v.points)
+
+
+def test_scallop_side_vertex_falls_back_to_the_nearest_end_of_its_side_edge(cell_kwargs):
+    gen = find_motif("scallop")["generator"]
+    for seed in range(10):
+        plain = gen(make_ctx(cell_kwargs, seed)).vectors[0].points
+        top = max(p.radial for p in plain)
+        low_inst = gen(make_ctx(cell_kwargs, seed, side_touch_radial=0.05))
+        high_inst = gen(make_ctx(cell_kwargs, seed, side_touch_radial=0.95))
+        assert has_vertex(high_inst, top, 1.0) and has_vertex(high_inst, top, -1.0)
+        assert has_vertex(low_inst, top - 0.2, 1.0) and has_vertex(low_inst, top - 0.2, -1.0)
+        assert low_inst.vectors[0].points == plain and high_inst.vectors[0].points == plain
+
+
+def test_petals_from_different_seeds_share_the_side_vertex(cell_kwargs):
+    gen = find_motif("petal")["generator"]
+    a = gen(make_ctx(cell_kwargs, 1, angular_limits=0.8, side_touch_radial=0.5))
+    b = gen(make_ctx(cell_kwargs, 2, angular_limits=0.8, side_touch_radial=0.5))
+    assert a.vectors[0].points != b.vectors[0].points
+    for angular in (0.8, -0.8):
+        assert has_vertex(a, 0.5, angular) and has_vertex(b, 0.5, angular)
+
+
+def test_centre_and_divider_petals_meet_at_the_same_page_point(cell_kwargs):
+    from motifs.geometry import cell_rotation_deg
+    gen = find_motif("petal")["generator"]
+    centre_ctx = make_ctx(cell_kwargs, 4, position="centre", angular_limits=0.6, side_touch_radial=0.5)
+    divider_ctx = make_ctx(cell_kwargs, 8, position="divider", angular_limits=0.4, side_touch_radial=0.5)
+    centre, divider = gen(centre_ctx), gen(divider_ctx)
+    assert has_vertex(centre, 0.5, 0.6) and has_vertex(divider, 0.5, -0.4)
+    right = centre_ctx.to_cartesian(CellPoint(0.5, 0.6), cell_rotation_deg(0, 12, "centre"))
+    left = divider_ctx.to_cartesian(CellPoint(0.5, -0.4), cell_rotation_deg(0, 12, "divider"))
+    assert math.hypot(right[0] - left[0], right[1] - left[1]) < 1e-6
+
+
+def test_slot_children_ignore_side_touch(cell_kwargs):
+    for name in ("petal", "leaf"):
+        for seed in range(25):
+            slot = parent_slot(cell_kwargs, seed)
+            if slot is None:
+                continue
+            plain_ctx = make_ctx(cell_kwargs, seed, complexity=1.0)
+            touch_ctx = make_ctx(cell_kwargs, seed, complexity=1.0, side_touch_radial=0.5)
+            plain_ctx.slot = touch_ctx.slot = slot
+            try:
+                plain = find_motif(name)["generator"](plain_ctx)
+            except MotifError:
+                continue
+            touched = find_motif(name)["generator"](touch_ctx)
+            assert [v.points for v in plain.vectors] == [v.points for v in touched.vectors]
+
+
+@pytest.mark.parametrize("entry", all_entries(), ids=lambda e: e["name"])
+def test_side_touch_is_deterministic(entry, cell_kwargs):
+    a = generate(entry, make_ctx(cell_kwargs, 11, side_touch_radial=0.45), cell_kwargs)
+    b = generate(entry, make_ctx(cell_kwargs, 11, side_touch_radial=0.45), cell_kwargs)
+    assert [v.points for v in a.vectors] == [v.points for v in b.vectors]
+
+
+def test_petal_tips_reach_the_next_ring_with_default_limits(cell_kwargs):
+    gen = find_motif("petal")["generator"]
+    for seed in range(40):
+        for touch in (None, 0.5):
+            inst = gen(make_ctx(cell_kwargs, seed, side_touch_radial=touch))
+            assert max(p.radial for p in inst.vectors[0].points) >= 0.95
+
+
+def test_leaf_apex_reaches_the_ring_boundary_with_default_limits(cell_kwargs):
+    gen = find_motif("leaf")["generator"]
+    for seed in range(40):
+        inst = gen(make_ctx(cell_kwargs, seed))
+        assert max(p.radial for p in inst.vectors[0].points) >= 1.0 - 1e-12
+
+
+def test_ring_fill_overflow_allowances():
+    assert find_motif("petal")["max_overflow_inward"] == 0.5
+    assert find_motif("petal")["max_overflow_outward"] == 0.3
+    assert find_motif("leaf")["max_overflow_outward"] == 0.2
+    assert find_motif("scallop")["max_overflow_inward"] == 0.4
+
+
+def test_petal_and_scallop_dip_below_the_ring_with_room_to(cell_kwargs):
+    wide = (-0.5, 1.3)
+    petal_dips = [min(p.radial for p in find_motif("petal")["generator"](
+        make_ctx(cell_kwargs, s, radial_limits=wide)).vectors[0].points) for s in range(60)]
+    scallop_dips = [min(p.radial for p in find_motif("scallop")["generator"](
+        make_ctx(cell_kwargs, s, radial_limits=wide)).vectors[0].points) for s in range(60)]
+    assert min(petal_dips) < -0.25 and min(petal_dips) >= -0.5
+    assert min(scallop_dips) < -0.3 and min(scallop_dips) >= -0.4
+
+
+@pytest.mark.parametrize("name", ["petal", "diamond", "leaf"])
+def test_slot_child_stays_within_radial_limits_when_the_slot_dips_below_them(name, cell_kwargs):
+    # A deep-dipping petal declares a slot that reaches below radial 0, but its child is placed with (0, 1).
+    for seed in range(10):
+        ctx = make_ctx(cell_kwargs, seed)
+        ctx.slot = [CellPoint(-0.2, -0.4), CellPoint(-0.2, 0.4), CellPoint(0.8, 0.4), CellPoint(0.8, -0.4)]
+        inst = find_motif(name)["generator"](ctx)
+        assert min(p.radial for v in inst.vectors for p in v.points) >= 0.0

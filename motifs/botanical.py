@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from motifs.contract import MotifError, MotifInstance, ReachEnd, build_instance
-from motifs.geometry import CellPoint, MotifContext, SmartVector, mirror_points, quad_points
+from motifs.geometry import (
+    CellPoint,
+    MotifContext,
+    SmartVector,
+    mirror_points,
+    quad_points,
+    side_touch_radial_within,
+)
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
 
 QUAD_STEPS = 8
+# A side-touching leaf's base corners sit at this fraction of the angular budget.
+LEAF_SIDE_TOUCH_BASE = 0.6
 
 
 def _petal_outline(
@@ -19,14 +28,25 @@ def _petal_outline(
     waist: float,
     wave: float,
     angular_bound: float,
+    widest_radial: Optional[float] = None,
 ) -> List[CellPoint]:
-    """One closed, mirror-symmetric outline: right side base to tip, then the left side back."""
+    """
+    One closed, mirror-symmetric outline: right side base to tip, then the left side back.
+
+    `widest_radial` pins the widest vertex there instead of at `waist`, and drops the lower run's
+    shoulder bulge so no sample of that run is wider than the widest vertex (side touch).
+    """
     base = CellPoint(base_radial, 0.0)
     tip = CellPoint(tip_radial, 0.0)
-    widest = CellPoint(base.radial + (tip.radial - base.radial) * waist, half_width)
+    if widest_radial is None:
+        widest = CellPoint(base.radial + (tip.radial - base.radial) * waist, half_width)
+        shoulder = half_width * 1.15
+    else:
+        widest = CellPoint(widest_radial, half_width)
+        shoulder = half_width
     lower = quad_points(
         base,
-        CellPoint(base.radial + (widest.radial - base.radial) * 0.5, half_width * 1.15),
+        CellPoint(base.radial + (widest.radial - base.radial) * 0.5, shoulder),
         widest,
         QUAD_STEPS,
     )
@@ -59,8 +79,9 @@ def generate_petal(context: MotifContext) -> MotifInstance:
     rng = context.rng
     # Every parameter is drawn before any limit is applied, so tightening the
     # limits changes what is kept but never what the rng produced.
-    length = rng.uniform(0.75, 1.25)
-    dip = rng.uniform(0.0, 0.25)
+    # Ring fill (spec 13.3): the tip reaches the next ring or past it, and the base may dip below.
+    length = rng.uniform(0.95, 1.3)
+    dip = rng.uniform(0.0, 0.5)
     half_width = context.angular_limits * rng.uniform(0.55, 0.95)
     waist = rng.uniform(0.35, 0.6)
     wave = rng.uniform(0.0, context.complexity * 0.06)
@@ -88,19 +109,51 @@ def generate_petal(context: MotifContext) -> MotifInstance:
 
         outline = fit_inside_slot(context, "petal", build)
     else:
+        base_radial = max(low, -dip)
+        tip_radial = min(high, length)
+        # Side touch (spec 13.2): full angular budget, widest vertex exactly on the shared side vertex.
+        touch = side_touch_radial_within(context, base_radial, tip_radial)
+        if touch is not None:
+            half_width = context.angular_limits
         outline = _petal_outline(
-            max(low, -dip), min(high, length), half_width, waist, wave, context.angular_limits
+            base_radial, tip_radial, half_width, waist, wave, context.angular_limits, widest_radial=touch
         )
     return build_instance(context, [SmartVector(outline, closed=True)], slot_outline=outline)
 
 
-def _leaf_vectors(base_radial: float, apex_radial: float, half_width: float, roundness: float) -> List[SmartVector]:
-    """A closed leaf outline plus a midrib whose ends are outline vertices."""
+def _leaf_vectors(
+    base_radial: float,
+    apex_radial: float,
+    half_width: float,
+    roundness: float,
+    side_radial: Optional[float] = None,
+) -> List[SmartVector]:
+    """
+    A closed leaf outline plus a midrib whose ends are outline vertices.
+
+    With `side_radial`, `half_width` is the angular budget: the base corners sit at
+    LEAF_SIDE_TOUCH_BASE of it and each edge runs corner, side vertex `(side_radial, half_width)`,
+    apex, in two curves whose controls are no wider than the budget, so neither run is wider either.
+    """
     middle = (base_radial + apex_radial) / 2.0
     apex = CellPoint(apex_radial, 0.0)
-    right = quad_points(
-        CellPoint(base_radial, half_width), CellPoint(middle, half_width * roundness), apex, QUAD_STEPS
-    )
+    if side_radial is None:
+        right = quad_points(
+            CellPoint(base_radial, half_width), CellPoint(middle, half_width * roundness), apex, QUAD_STEPS
+        )
+    else:
+        corner = CellPoint(base_radial, half_width * LEAF_SIDE_TOUCH_BASE)
+        side = CellPoint(side_radial, half_width)
+        lower = quad_points(
+            corner, CellPoint(base_radial + (side_radial - base_radial) * 0.5, half_width), side, QUAD_STEPS
+        )
+        upper = quad_points(
+            side,
+            CellPoint(side_radial + (apex_radial - side_radial) * 0.5, half_width * min(1.0, roundness)),
+            apex,
+            QUAD_STEPS,
+        )
+        right = lower + upper[1:]
     left = mirror_points(right)[:-1][::-1]
     # The base vertex sits on the straight base edge so the midrib's lower end touches outline ink.
     outline = [CellPoint(base_radial, 0.0), *right, *left]
@@ -121,7 +174,8 @@ def _drop_thin_midrib(context: MotifContext, vectors: List[SmartVector]) -> List
 
 def generate_leaf(context: MotifContext) -> MotifInstance:
     rng = context.rng
-    length = rng.uniform(0.85, 1.15)
+    # Ring fill (spec 13.3): the apex reaches the ring boundary or a little past it.
+    length = rng.uniform(1.0, 1.2)
     half_width = context.angular_limits * rng.uniform(0.45, 0.85)
     roundness = rng.uniform(0.25, 1.1)
 
@@ -150,7 +204,12 @@ def generate_leaf(context: MotifContext) -> MotifInstance:
         fit_inside_slot(context, "leaf", build)
         vectors = built[-1]
     else:
-        vectors = _leaf_vectors(0.0, min(high, length), half_width, roundness)
+        apex_radial = min(high, length)
+        # Side touch (spec 13.2): the leaf bulges out to the full budget at the shared side vertex.
+        touch = side_touch_radial_within(context, 0.0, apex_radial)
+        if touch is not None:
+            half_width = context.angular_limits
+        vectors = _leaf_vectors(0.0, apex_radial, half_width, roundness, side_radial=touch)
     vectors = _drop_thin_midrib(context, vectors)
     return build_instance(context, vectors, base_point=vectors[0].points[0])
 
@@ -158,7 +217,7 @@ def generate_leaf(context: MotifContext) -> MotifInstance:
 def generate_scallop(context: MotifContext) -> MotifInstance:
     rng = context.rng
     top = rng.uniform(0.5, 0.6)
-    dip = rng.uniform(0.1, 0.3)
+    dip = rng.uniform(0.1, 0.4)
 
     low, high = context.radial_limits
     limit = context.angular_limits
@@ -168,7 +227,12 @@ def generate_scallop(context: MotifContext) -> MotifInstance:
     # The curve's midpoint is (start + 2 * control + end) / 4, so this control lands it on `lowest`.
     control = CellPoint(2.0 * lowest - side_bottom, 0.0)
     arc = quad_points(CellPoint(side_bottom, limit), control, CellPoint(side_bottom, -limit), QUAD_STEPS)
-    outline = [CellPoint(top, -limit), CellPoint(top, limit), *arc]
+    # The side edges already span the full budget. Side touch adds the shared vertex on each when it
+    # falls inside the edge; otherwise the edge's nearest end already is that vertex.
+    touch = side_touch_radial_within(context, side_bottom, top)
+    right_side = [CellPoint(touch, limit)] if touch is not None else []
+    left_side = [CellPoint(touch, -limit)] if touch is not None else []
+    outline = [CellPoint(top, -limit), CellPoint(top, limit), *right_side, *arc, *left_side]
     return build_instance(context, [SmartVector(outline, closed=True)])
 
 
@@ -190,11 +254,12 @@ BOTANICAL_MOTIFS: List[Dict] = [
         "positions": ["centre", "divider"],
         "roles": ["base", "slot"],
         "touch": True,
+        "side_touch": True,
         "spans_cell": False,
         "min_cell_width_px": 14.0,
         "min_ring_depth_px": 18.0,
-        "max_overflow_inward": 0.25,
-        "max_overflow_outward": 0.25,
+        "max_overflow_inward": 0.5,
+        "max_overflow_outward": 0.3,
         "slot_estimate": (0.5, 0.5),
     },
     {
@@ -204,11 +269,12 @@ BOTANICAL_MOTIFS: List[Dict] = [
         "positions": ["centre"],
         "roles": ["base", "slot"],
         "touch": True,
+        "side_touch": True,
         "spans_cell": False,
         "min_cell_width_px": 14.0,
         "min_ring_depth_px": 20.0,
         "max_overflow_inward": 0.0,
-        "max_overflow_outward": 0.15,
+        "max_overflow_outward": 0.2,
         "slot_estimate": None,
     },
     {
@@ -218,10 +284,11 @@ BOTANICAL_MOTIFS: List[Dict] = [
         "positions": ["divider"],
         "roles": ["base"],
         "touch": True,
+        "side_touch": True,
         "spans_cell": True,
         "min_cell_width_px": 12.0,
         "min_ring_depth_px": 16.0,
-        "max_overflow_inward": 0.3,
+        "max_overflow_inward": 0.4,
         "max_overflow_outward": 0.0,
         "slot_estimate": None,
     },
@@ -232,6 +299,7 @@ BOTANICAL_MOTIFS: List[Dict] = [
         "positions": ["centre", "divider"],
         "roles": ["attachment"],
         "touch": True,
+        "side_touch": False,
         "spans_cell": False,
         "min_cell_width_px": 0.0,
         "min_ring_depth_px": 0.0,

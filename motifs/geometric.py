@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Dict, List
 
 from motifs.contract import MotifInstance, build_instance
-from motifs.geometry import CellPoint, MotifContext, SmartVector
+from motifs.geometry import CellPoint, MotifContext, SmartVector, side_touch_radial_within
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
 
 
@@ -34,13 +34,17 @@ def generate_ring_band(context: MotifContext) -> MotifInstance:
     r1 = context.rng.uniform(0.30, 0.45)
     r2 = context.rng.uniform(0.55, 0.70)
     limit = context.angular_limits
+    # Side touch adds the shared vertex on each side edge when it falls inside that edge.
+    touch = side_touch_radial_within(context, r1, r2)
     outline = [
         CellPoint(r1, -limit),
         CellPoint(r1, 0.0),
         CellPoint(r1, limit),
+        *([CellPoint(touch, limit)] if touch is not None else []),
         CellPoint(r2, limit),
         CellPoint(r2, 0.0),
         CellPoint(r2, -limit),
+        *([CellPoint(touch, -limit)] if touch is not None else []),
     ]
     vectors = [SmartVector(outline, closed=True)]
     if context.complexity >= 0.5:
@@ -56,6 +60,7 @@ GEOMETRIC_MOTIFS: List[Dict] = [
         "positions": ["centre"],
         "roles": ["slot"],
         "touch": False,
+        "side_touch": False,
         "spans_cell": False,
         "min_cell_width_px": 10.0,
         "min_ring_depth_px": 10.0,
@@ -70,6 +75,7 @@ GEOMETRIC_MOTIFS: List[Dict] = [
         "positions": ["centre", "divider"],
         "roles": ["base"],
         "touch": True,
+        "side_touch": True,
         "spans_cell": True,
         "min_cell_width_px": 0.0,
         "min_ring_depth_px": 0.0,

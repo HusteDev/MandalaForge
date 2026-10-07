@@ -35,7 +35,8 @@ class SlotBox:
 def fit_slot_box(context: MotifContext, motif_name: str) -> SlotBox:
     """
     Bounding box of `context.slot` less a stroke-width margin. The slot is already inset from its parent's ink by the
-    white-space clearance, so a child may sit a stroke width inside its edge.
+    white-space clearance, so a child may sit a stroke width inside its edge. The radial range is also clamped to
+    `context.radial_limits`: a parent that overflows its ring can declare a slot reaching past the child's limits.
 
     Raises `MotifError` when there is no slot, or when less than `MIN_FIT_PX` is
     left across the radial half-span or the angular half-width.
@@ -52,8 +53,9 @@ def fit_slot_box(context: MotifContext, motif_name: str) -> SlotBox:
 
     margin_radial = context.px_to_radial(context.stroke_width)
     margin_angular = context.px_to_angular(context.stroke_width, mid_radial)
-    base = radial_min + margin_radial
-    tip = radial_max - margin_radial
+    low, high = context.radial_limits
+    base = max(low, radial_min + margin_radial)
+    tip = min(high, radial_max - margin_radial)
     half_width = (angular_max - angular_min) / 2.0 - margin_angular
 
     if (

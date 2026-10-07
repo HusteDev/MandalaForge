@@ -51,6 +51,8 @@ class MotifContext:
     angular_limits: float = 1.0
     radial_limits: Tuple[float, float] = (0.0, 1.0)
     slot: Optional[List[CellPoint]] = None
+    # Radial of the shared side vertex for base motifs in a side-touch ring (spec 13.2); None draws the plain shape.
+    side_touch_radial: Optional[float] = None
 
     @property
     def ring_depth(self) -> float:
@@ -206,3 +208,16 @@ def quad_points(
 def mirror_points(points: List[CellPoint]) -> List[CellPoint]:
     """Reflect a run across the cell centerline, preserving order."""
     return [CellPoint(point.radial, -point.angular) for point in points]
+
+
+def side_touch_radial_within(context: MotifContext, low: float, high: float) -> Optional[float]:
+    """
+    The context's side-touch radial when it applies and lies strictly inside `(low, high)`, else None.
+
+    Side touch applies to base motifs only: a slot child never uses it. A side edge whose radial
+    range misses the value already ends at its nearest vertex, so it needs nothing extra.
+    """
+    radial = context.side_touch_radial
+    if radial is None or context.slot:
+        return None
+    return radial if low < radial < high else None
