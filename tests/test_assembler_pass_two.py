@@ -519,11 +519,14 @@ def test_only_side_ring_bases_get_the_side_touch_radial(monkeypatch):
     assert {value for motif, value in seen if motif != "petal"} == {None}
 
 
-def test_once_per_wedge_attachment_is_recorded_in_the_first_cell_of_each_wedge():
-    plan = symmetric_plan(4)
+@pytest.mark.parametrize("symmetry, cells", [(4, [0, 3, 6, 9]), (2, [0, 3, 6, 9]), (1, [0, 4, 8])])
+def test_once_per_wedge_attachment_is_recorded_in_the_first_cell_of_each_wedge(symmetry, cells):
+    # One per wedge of 360 / B degrees, but never fewer than three evenly spaced per ring: B = 2 draws two per
+    # wedge (so both members of a group carry it) and B = 1 three in the ring.
+    plan = symmetric_plan(symmetry)
     plan.rings[1].sequence[0].centre.attachments[0].once_per_wedge = True
     a = placed(plan)
-    assert sorted(node.cell_index for node, *_ in a.pending_reaches) == [0, 3, 6, 9]
+    assert sorted(node.cell_index for node, *_ in a.pending_reaches) == cells
 
 
 def test_symmetry_groups_relate_cells_by_the_base_rotation():

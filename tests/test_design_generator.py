@@ -173,6 +173,38 @@ def test_guarded_tips_are_touched_from_the_other_side():
         assert any(apex in other.coords for other in outer)
 
 
+def _once_per_wedge_stems(g):
+    """{ring index: sorted cells of drawn reaches} for every ring whose plan carries a once-per-wedge stem."""
+    rings = [ring.ring_index for ring in g.plan.rings
+             if any(a.once_per_wedge for e in ring.sequence for n in (e.centre, e.divider) if n for a in n.attachments)]
+    return {r: sorted(p.cell_index for p in g.assembled.reaches if p.ring_index == r) for r in rings}
+
+
+def test_base_symmetry_one_still_gets_three_inward_contacts_per_ring():
+    # With ring_divisions (7, 12) the base symmetry is 1, so "once per wedge" meant one stem for the whole ring and
+    # the band between rings could be one face running round the centre. Ring 2's stem sits on the first of its
+    # three sequence entries, so the contacts are spaced among the four cells holding it.
+    g = DesignGenerator(seed=20260821, ring_divisions=[7, 12], complexity=0.5, min_pattern_size=10,
+                        categories=["botanical", "geometric"])
+    g.generate()
+    report = g.last_validation_result
+    assert g.plan.base_symmetry == 1
+    assert report.is_valid and report.stats["num_encircling_regions"] == 0, report.issues[:5]
+    stems = _once_per_wedge_stems(g)
+    assert stems and all(len(cells) >= 3 for cells in stems.values())
+    assert stems[2] == [0, 3, 6, 9]
+
+
+def test_base_symmetry_four_keeps_one_inward_contact_per_wedge():
+    g = DesignGenerator(seed=20260821, ring_divisions=[8, 12], complexity=0.5, min_pattern_size=10,
+                        categories=["botanical", "geometric"])
+    g.generate()
+    report = g.last_validation_result
+    assert g.plan.base_symmetry == 4
+    assert report.is_valid and report.stats["num_encircling_regions"] == 0, report.issues[:5]
+    assert _once_per_wedge_stems(g) == {1: [0, 3, 6, 9]}
+
+
 def test_varied_division_design_is_deterministic():
     def run():
         g = DesignGenerator(seed=777, num_rings=4, num_divisions=12, complexity=0.5,

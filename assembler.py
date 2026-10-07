@@ -36,6 +36,11 @@ MAX_BASE_REPLACEMENTS = 3
 # Attachment i draws from stream depth ATTACHMENT_DEPTH + i; slot nesting only uses depths 0 to 2.
 ATTACHMENT_DEPTH = 10
 
+# A ring's once-per-wedge contact is drawn in at least this many cells, evenly spaced, so a design with a base
+# symmetry of 1 or 2 never joins a ring to the one inside it at a single point (the band between would be one
+# face running all the way round the centre).
+MIN_RING_CONTACTS = 3
+
 PendingReach = Tuple["PlacedNode", ReachEnd, PointTuple, float]
 
 # One regenerated node: the node, its new instance (None once it no longer fits), context and paths.
@@ -353,12 +358,12 @@ class Assembler:
         Generate each attachment with the node's context and keep only its reach
         ends. Called once the node itself is placed; an attachment that fails is
         dropped and counted, never treated as a failure of the node. A
-        once-per-wedge attachment is generated and recorded only in the first
-        cell of each wedge of `360 / B` degrees.
+        once-per-wedge attachment is generated and recorded only in the cells
+        `_draws_once_per_wedge` picks.
         """
-        first_of_wedge = node.cell_index % (ring.divisions // self.symmetry) == 0
+        draws_once = self._draws_once_per_wedge(ring, node)
         for offset, attachment in enumerate(node.recipe.attachments):
-            if attachment.once_per_wedge and not first_of_wedge:
+            if attachment.once_per_wedge and not draws_once:
                 continue
             seed = node_seed(ring.ring_seed, ring.ring_index, node.node_path[0], ATTACHMENT_DEPTH + offset, node.position)
             node.attachment_seeds.append(seed)
@@ -371,6 +376,23 @@ class Assembler:
             for reach_end in declaration.reach_ends:
                 page_point = node.context.to_cartesian(reach_end.point, rotation)
                 self.pending_reaches.append((node, reach_end, page_point, rotation))
+
+    def _draws_once_per_wedge(self, ring: RingPlan, node: PlacedNode) -> bool:
+        """
+        Whether the node's cell draws its once-per-wedge attachments: the first
+        cell of each wedge of `360 / B` degrees, or, while that gives fewer than
+        `MIN_RING_CONTACTS` in the ring (B of 1 or 2), evenly spaced cells, at
+        least `ceil(MIN_RING_CONTACTS / B)` per wedge. Only cells holding the
+        node's sequence entry carry the attachment, so the spacing counts those:
+        the m = wedge / len(sequence) of them in each wedge, every k-th one with
+        k = max(1, m // per-wedge count). The rule depends only on a cell's place
+        in its wedge, so every symmetry group draws it in all its members or none.
+        """
+        wedge = ring.divisions // self.symmetry
+        holding = max(1, wedge // len(ring.sequence))
+        per_wedge = math.ceil(MIN_RING_CONTACTS / self.symmetry)
+        step = max(1, holding // per_wedge)
+        return ((node.cell_index % wedge) // len(ring.sequence)) % step == 0
 
     # ------------------------------------------------- regeneration (pass two)
 
