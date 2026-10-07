@@ -14,6 +14,17 @@ def validate(design):
         design.polylines(), center=CENTER, base_mask=design.base_mask(),
         ring_ids=design.ring_ids(), overflow_parts=design.overflow_parts())
 
+# Revision 2 petals dip up to half a ring depth (allowance (-0.5, 1.3)), and the manual plan's petal (ring seed 1)
+# dips 0.43 of one, through ring 0's band, so it touches the band itself and its stem draws nothing. Ring seed 7
+# draws a petal that dips 0.25 of a ring depth, as the revision-1 limit did, leaving a 6.9px gap above the band:
+# overflow clear of its neighbour, and a stem to draw across the gap.
+PETAL_LIMITS = (-0.5, 1.3)
+
+def shallow_plan(**kwargs):
+    plan = manual_plan(**kwargs)
+    plan.rings[1].ring_seed = 7
+    return plan
+
 def test_stems_land_on_inner_ring_ink():
     design = assemble(manual_plan())
     assert len(design.reaches) == 12
@@ -467,3 +478,116 @@ def test_pull_back_touch_never_detaches_a_leafs_midrib():
     assert apex in (midrib.coords[0], midrib.coords[-1])
     report = TopologyValidator(snap_tolerance=2.5, whisker_tolerance=5.0).analyze([p.coords for p in a.paths])
     assert report.stats["num_dangles"] == 0
+
+
+# ----- revision 2: side-touch wiring, once-per-wedge attachments, symmetry groups -----
+
+import assembler as assembler_module
+
+
+def symmetric_plan(symmetry=4):
+    plan = shallow_plan()
+    plan.base_symmetry = symmetry
+    return plan
+
+
+def test_only_side_ring_bases_get_the_side_touch_radial(monkeypatch):
+    plan = manual_plan()
+    plan.rings[1].contact_mode, plan.rings[1].side_touch_radial = "side", 0.42
+    seen = []
+    entry = assembler_module._registry_entry
+
+    def recording(recipe):
+        found = dict(entry(recipe))
+        generator = found["generator"]
+        found["generator"] = lambda context: seen.append((recipe.motif, context.side_touch_radial)) or generator(context)
+        return found
+
+    monkeypatch.setattr(assembler_module, "_registry_entry", recording)
+    a = placed(plan)
+    for node in a.nodes:
+        expected = 0.42 if node.ring_index == 1 and node.parent is None else None
+        assert node.context.side_touch_radial == expected
+    # The petal base gets it; its diamond slot child and its stem attachment never do; ring 0 is not in side mode.
+    assert {value for motif, value in seen if motif == "petal"} == {0.42}
+    assert {value for motif, value in seen if motif != "petal"} == {None}
+
+
+def test_once_per_wedge_attachment_is_recorded_in_the_first_cell_of_each_wedge():
+    plan = symmetric_plan(4)
+    plan.rings[1].sequence[0].centre.attachments[0].once_per_wedge = True
+    a = placed(plan)
+    assert sorted(node.cell_index for node, *_ in a.pending_reaches) == [0, 3, 6, 9]
+
+
+def test_symmetry_groups_relate_cells_by_the_base_rotation():
+    a = placed(symmetric_plan(4))
+    groups = a.symmetry_groups(1)
+    bases = [[n.cell_index for n in g] for g in groups if g[0].parent is None]
+    assert bases == [[0, 3, 6, 9], [1, 4, 7, 10], [2, 5, 8, 11]]
+    assert all(len(g) == 4 and len({(n.position, n.node_path) for n in g}) == 1 for g in groups)
+    assert [[n.cell_index for n in g] for g in a.symmetry_groups(0)] == [[0, 2, 4, 6], [1, 3, 5, 7]]
+    # Without a usable base symmetry every node is its own group.
+    assert all(len(g) == 1 for g in placed(manual_plan()).symmetry_groups(1))
+
+
+def rotated(coords, degrees, center=CENTER):
+    t = math.radians(degrees)
+    c, s = math.cos(t), math.sin(t)
+    return [(center[0] + (x - center[0]) * c - (y - center[1]) * s,
+             center[1] + (x - center[0]) * s + (y - center[1]) * c) for x, y in coords]
+
+
+def assert_symmetric(paths, degrees, center=CENTER):
+    """Every path rotated by `degrees` about the centre matches some path within 1e-6, as sorted rounded coordinates."""
+    def key(coords):
+        return tuple(sorted((round(x, 6), round(y, 6)) for x, y in coords))
+
+    keys = {key(p.coords) for p in paths}
+    by_length = {}
+    for p in paths:
+        by_length.setdefault(len(p.coords), []).append(sorted(p.coords))
+    for p in paths:
+        turned = rotated(p.coords, degrees, center)
+        if key(turned) in keys:
+            continue
+        # A coordinate within float noise of a rounding boundary: compare within the tolerance instead.
+        mine = sorted(turned)
+        assert any(all(abs(x0 - x1) <= 1e-6 and abs(y0 - y1) <= 1e-6 for (x0, y0), (x1, y1) in zip(mine, other))
+                   for other in by_length.get(len(turned), [])), (p.ring_index, p.cell_index, p.role)
+
+
+def test_manual_plan_with_base_symmetry_resolves_symmetrically():
+    design = assemble(symmetric_plan(4))
+    assert design.reaches
+    assert_symmetric(design.paths, 90.0)
+    assert validate(design).is_valid
+
+
+def test_pull_backs_are_judged_on_representatives_and_mirrored_to_their_groups():
+    # On DEEP every petal dips through ring 0's band and is pulled back. Only the first wedge's petals are
+    # resolved (one counter per group); the other wedges get turned copies of their ink, radials included.
+    plan = manual_plan()
+    plan.base_symmetry = 4
+    a = Assembler(plan, DEEP, CENTER, 0.5, 10.0, composer_for(DEEP))
+    design = a.assemble()
+    petals = {n.cell_index: n for n in a.nodes if n.recipe.motif == "petal"}
+    assert [c for c, n in sorted(petals.items()) if n.pull_backs] == [0, 1, 2]
+    for cell, petal in petals.items():
+        rep = petals[cell % 3]
+        expected = rotated(rep.paths[0].coords, 90.0 * (cell // 3))
+        assert all(math.isclose(x0, x1, abs_tol=1e-9) and math.isclose(y0, y1, abs_tol=1e-9)
+                   for (x0, y0), (x1, y1) in zip(petal.paths[0].coords, expected))
+        assert petal.paths[0].radials == rep.paths[0].radials
+    assert_symmetric(design.paths, 90.0)
+    assert validate(design).is_valid
+
+
+def test_mirrored_touches_share_their_vertices_exactly():
+    # A turned copy differs from ink traced in its own cell by float noise; the validator only reads a touch
+    # where the shared vertex is the same point in both lines, so every mirrored end is snapped onto it.
+    design = assemble(symmetric_plan(4))
+    others = [p for p in design.paths if p.role != "reach"]
+    for reach in design.reaches:
+        assert any(reach.coords[0] in p.coords for p in others) and any(reach.coords[-1] in p.coords for p in others)
+    assert validate(design).stats["num_dangles"] == 0

@@ -7,6 +7,12 @@ innermost first; within a ring, inward overflow, then outward overflow, then the
 ring's pending reaches, then the contact check, which replaces floating cells
 and resolves the ring again.
 
+Pass two resolves one wedge of `360 / B` degrees (spec 13.1): it works on the
+representative of each symmetry group (`Assembler.symmetry_groups`), judges
+every predicate on it, and mirrors every change it makes to ink onto the other
+members by rotation (the `Assembler` mirroring methods), so the design is
+exactly `B`-fold symmetric. With `B = 1` every node is its own group.
+
 A touch is always exact: the touching end is a vertex of its own path and the
 point it lands on is inserted as a vertex into the path it touches, so nothing
 relies on a snap tolerance to read as connected.
@@ -313,6 +319,8 @@ def _settle(asm: Assembler, work: List[Tuple[PlacedNode, str]]) -> None:
     in the neighbouring rings are queued to be checked again, as they would have
     been had the motif been drawn this way in pass one. A worklist rather than
     recursion, and `MAX_PULL_BACKS` per node side, bound the whole exchange.
+    Nodes are group representatives (spec 13.1): a pull-back is mirrored to the
+    rest of the group, and only representatives are queued.
     """
     queue = deque(work)
     while queue:
@@ -323,7 +331,8 @@ def _settle(asm: Assembler, work: List[Tuple[PlacedNode, str]]) -> None:
         for near_side in ("inward", "outward"):
             neighbour = _neighbour(asm, node.ring_index, near_side)
             facing = "outward" if near_side == "inward" else "inward"
-            queue.extend((other, facing) for other in asm.nodes if other.ring_index == neighbour)
+            queue.extend((other, facing) for other in asm.nodes
+                         if other.ring_index == neighbour and asm.is_representative(other))
 
 
 def _pull_back(asm: Assembler, node: PlacedNode, side: str) -> bool:
@@ -331,6 +340,8 @@ def _pull_back(asm: Assembler, node: PlacedNode, side: str) -> bool:
     One pull-back of `node`'s overflow on `side`, without marking the side
     resolved. False, changing nothing, when its ink does not cross the
     neighbouring ring there or the side has used up its `MAX_PULL_BACKS`.
+    `node` is its group's representative: the counter is the group's, the
+    predicates are judged on it alone, and every change is mirrored.
     """
     neighbour = _neighbour(asm, node.ring_index, side)
     if neighbour is None or node.pull_backs.get(side, 0) >= MAX_PULL_BACKS:
@@ -338,6 +349,8 @@ def _pull_back(asm: Assembler, node: PlacedNode, side: str) -> bool:
     old_paths = _subtree_paths(asm, node)
     if not _conflicts(asm, old_paths, neighbour, side):
         return False
+    old_ids = {id(path) for path in old_paths}
+    old_ids.update(id(path) for _, member in asm.node_counterparts(node) for path in _subtree_paths(asm, member))
 
     bound = 0 if side == "inward" else 1
     limits = node.context.radial_limits
@@ -368,7 +381,7 @@ def _pull_back(asm: Assembler, node: PlacedNode, side: str) -> bool:
         if other_side in node.pull_backs:
             _touch(asm, node, other_side, _neighbour(asm, node.ring_index, other_side))
     _restore_touches(asm, node)
-    _redraw_reaches(asm, node, {id(path) for path in old_paths})
+    _redraw_reaches(asm, node, old_ids)
     return True
 
 
@@ -384,7 +397,7 @@ def _regenerate_and_commit(asm: Assembler, node: PlacedNode, side: str, limits: 
             f"ring {node.ring_index} cell {node.cell_index} ({node.position}): "
             f"{node.recipe.motif} fails with {side} overflow limited: {error}"
         ) from error
-    asm.commit(regenerated)
+    asm.commit_group(regenerated)
 
 
 def _restore_touches(asm: Assembler, node: PlacedNode) -> None:
@@ -398,24 +411,35 @@ def _restore_touches(asm: Assembler, node: PlacedNode) -> None:
                     continue
                 for vertex in list(other.coords):
                     if geometry.distance(Point(vertex)) <= ON_INK_PX:
-                        insert_vertex(path, vertex)
+                        asm.mirror_insert(path, insert_vertex(path, vertex))
                         touched = True
             if touched:
                 asm.reindex(path)
 
 
 def _redraw_reaches(asm: Assembler, node: PlacedNode, old_ids: Set[int]) -> None:
-    """Draw again every resolved reach that started on the node or ended on its old ink."""
-    stale = [record for record in asm.resolved_reaches
-             if record.pending[0] is node or (record.target is not None and id(record.target) in old_ids)]
-    for record in stale:
+    """
+    Draw again every resolved reach that started on the node's group or ended
+    on its old ink (`old_ids`, the whole group's): each such reach's group is
+    removed and its representative drawn again, mirrored.
+    """
+    group = {id(node)} | {id(member) for _, member in asm.node_counterparts(node)}
+    representatives: List[PendingReach] = []
+    for record in asm.resolved_reaches:
+        if id(record.pending[0]) in group or (record.target is not None and id(record.target) in old_ids):
+            pending = asm.representative_pending(record.pending)
+            if not any(pending is other for other in representatives):
+                representatives.append(pending)
+    drop = {id(pending) for pending in representatives}
+    drop.update(id(other) for pending in representatives for _, other in asm.pending_counterparts(pending))
+    for record in [r for r in asm.resolved_reaches if id(r.pending) in drop]:
         asm.resolved_reaches = [r for r in asm.resolved_reaches if r is not record]
         if record.path is not None:
             asm.paths = [path for path in asm.paths if path is not record.path]
             asm.reaches = [path for path in asm.reaches if path is not record.path]
             asm.index.remove(record.path)
-    for record in stale:
-        _resolve_pending(asm, record.pending)
+    for pending in representatives:
+        _resolve_pending(asm, pending)
 
 
 def _touch(asm: Assembler, node: PlacedNode, side: str, neighbour: int) -> None:
@@ -445,15 +469,18 @@ def _touch(asm: Assembler, node: PlacedNode, side: str, neighbour: int) -> None:
     other = nearest[1]
     projected = nearest_points(path_geometry(other), vertex)[0]
     landed = insert_vertex(other, (projected.x, projected.y))
+    asm.reindex(other)
+    asm.mirror_insert(other, landed)
 
+    old = path.coords[i]
     moved = [i]
     if path.closed and i in (0, len(path.coords) - 1):
         moved = [0, len(path.coords) - 1]
     for index in moved:
         path.coords[index] = landed
         path.radials[index] = _radial(node.context, landed)
-    asm.reindex(other)
     asm.reindex(path)
+    asm.mirror_move(path, old, landed)
 
 
 def final_touches(asm: Assembler) -> None:
@@ -467,26 +494,32 @@ def final_touches(asm: Assembler) -> None:
     rings cross or crowd each other, or close off a face too thin or small to
     colour. Both directions count: the moved tip is the neighbour's ink too, and
     can come within clearance of the neighbour's own overflow on the facing side.
+    Representatives are touched and judged; the touch is mirrored to their
+    groups, and undone in all of them.
     """
     outermost = _outermost(asm)
-    for node in list(asm.nodes):
+    for node in [node for node in asm.nodes if asm.is_representative(node)]:
+        if not _is_placed(asm, node):
+            continue
         for side in ("inward", "outward"):
             neighbour = _neighbour(asm, node.ring_index, side)
             if neighbour is None or not _overflows(node, side):
                 continue
-            _, path, i = _extreme_vertex(node, side)
-            touched = [path] + [other for other in asm.index.candidates(Point(path.coords[i]).buffer(TOUCH_GAP_PX))
+            extreme = _extreme_vertex(node, side)
+            if extreme is None:
+                continue
+            _, path, i = extreme
+            before = path.coords[i]
+            touched = [path] + [other for other in asm.index.candidates(Point(before).buffer(TOUCH_GAP_PX))
                                 if other.ring_index == neighbour]
-            saved = [(other, list(other.coords), list(other.radials)) for other in touched]
+            saved = asm.snapshot(touched)
             _touch(asm, node, side, neighbour)
-            if path.coords[i] == saved[0][1][i]:
+            if path.coords[i] == before:
                 continue  # nothing within reach
             landed = Point(path.coords[i])
             if (_touch_conflicts(asm, node, path, [side])
                     or _uncolourable_face_at(asm, outermost, landed, landed.bounds)):
-                for other, coords, radials in saved:
-                    other.coords[:], other.radials[:] = coords, radials
-                    asm.reindex(other)
+                asm.restore(saved)
 
 
 def _outermost(asm: Assembler) -> int:
@@ -553,8 +586,10 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     if anchor is not None:
         start = insert_vertex(anchor[0], start)
         asm.reindex(anchor[0])
+        asm.mirror_insert(anchor[0], start)
     end = insert_vertex(target, hit_point)
     asm.reindex(target)
+    asm.mirror_insert(target, end)
     if math.hypot(end[0] - start[0], end[1] - start[1]) <= ON_INK_PX:
         return None, target  # the start already lies on other ink: a touch, with a vertex on both
     if (anchor is not None and math.hypot(end[0] - start[0], end[1] - start[1]) < CLEARANCE_PX
@@ -630,12 +665,13 @@ def _snap_anchor(asm: Assembler, node: PlacedNode, anchor: PlacedPath, start: Po
     """
     if _shared_with_other_ink(asm, anchor, start):
         return False
-    saved_coords, saved_radials = list(anchor.coords), list(anchor.radials)
+    saved = asm.snapshot([anchor])
     moved = [i for i, point in enumerate(anchor.coords) if point == start]
     for i in moved:
         anchor.coords[i] = end
         anchor.radials[i] = _radial(node.context, end)
     asm.reindex(anchor)
+    asm.mirror_move(anchor, start, end)
     own = {id(path) for member in asm.subtree(node) for path in member.paths}
     geometry = path_geometry(anchor)
     crosses = any(
@@ -644,8 +680,7 @@ def _snap_anchor(asm: Assembler, node: PlacedNode, anchor: PlacedPath, start: Po
     )
     crowds = _touch_conflicts(asm, node, anchor, ("inward", "outward"))
     if crosses or crowds or _uncolourable_face_at(asm, _outermost(asm), Point(end), Point(end).bounds):
-        anchor.coords[:], anchor.radials[:] = saved_coords, saved_radials
-        asm.reindex(anchor)
+        asm.restore(saved)
         return False
     return True
 
@@ -862,19 +897,21 @@ def _resolve_ring(asm: Assembler, ring: RingPlan) -> None:
 
 def _resolve_ring_ink(asm: Assembler, ring_index: int) -> None:
     """
-    Overflow inward then outward for every node of the ring, then its
+    Overflow inward then outward for every group of the ring, then its
     unresolved reaches. The inward ring's outward overflow was resolved against
     this ring's ink as pass one drew it; replaced cells change that ink, so it
-    is checked again first.
+    is checked again first. Only representatives are resolved; every change is
+    mirrored to their groups.
     """
     inner = _neighbour(asm, ring_index, "inward")
-    _settle(asm, [(node, "outward") for node in asm.nodes if node.ring_index == inner])
-    nodes = [node for node in asm.nodes if node.ring_index == ring_index]
+    _settle(asm, [(node, "outward") for node in asm.nodes
+                  if node.ring_index == inner and asm.is_representative(node)])
+    nodes = [node for node in asm.nodes if node.ring_index == ring_index and asm.is_representative(node)]
     for side in ("inward", "outward"):
         for node in nodes:
             if side not in node.resolved_sides and _is_placed(asm, node):
                 resolve_overflow(asm, node, side)
-    for pending in [p for p in asm.pending_reaches if p[0].ring_index == ring_index]:
+    for pending in [p for p in asm.pending_reaches if p[0].ring_index == ring_index and asm.is_representative(p[0])]:
         if any(record.pending is pending for record in asm.resolved_reaches):
             continue
         _resolve_pending(asm, pending)
@@ -886,6 +923,22 @@ def _is_placed(asm: Assembler, node: PlacedNode) -> bool:
 
 
 def _resolve_pending(asm: Assembler, pending: PendingReach) -> None:
+    """
+    Draw a representative's reach and mirror it: each member of the group gets
+    the turned copy of the drawn path (or none) and ends on the turned target.
+    """
     node, reach_end, page_point, _ = pending
+    counterparts = asm.pending_counterparts(pending)
     path, target = _draw_reach(asm, node, reach_end, page_point)
+    targets = dict(asm.path_counterparts(target)) if target is not None else {}
     asm.resolved_reaches.append(ResolvedReach(pending, path, target))
+    for k, other in counterparts:
+        copy = None
+        if path is not None:
+            copy = PlacedPath(path.ring_index, other[0].cell_index, path.position, path.node_path, "reach",
+                              asm.turn(path.coords, k), list(path.radials), False, path.stroke_width)
+            asm.paths.append(copy)
+            asm.reaches.append(copy)
+            asm.index.add(copy)
+            asm.snap_to_ink(copy)
+        asm.resolved_reaches.append(ResolvedReach(other, copy, targets.get(k)))

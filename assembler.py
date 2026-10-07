@@ -13,16 +13,18 @@ and its parent, so any node can be regenerated exactly with different limits.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import math
 import random
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+import numpy as np
 from shapely.geometry import LineString
 
 from composer import CellRecipe, Composer, DesignPlan, RingPlan, node_seed
 from motifs import find_motif, safe_motif
 from motifs.contract import MotifError, MotifInstance, ReachEnd
 from motifs.geometry import MotifContext, PointTuple, cell_rotation_deg
-from placement import InkIndex, PlacedPath, path_overflow, trace
+from placement import InkIndex, PlacedPath, path_geometry, path_overflow, trace
 import resolver
 
 
@@ -284,7 +286,8 @@ class Assembler:
         self._place_slot_children(ring, child)
 
     def _context(self, ring: RingPlan, position: str, rng_seed: int, radial_limits: Tuple[float, float],
-                 slot: Optional[list]) -> MotifContext:
+                 slot: Optional[list], is_base: bool = False) -> MotifContext:
+        """A node's context; a base motif of a side-touch ring gets the ring's side-touch radial (spec 13.2)."""
         geometry = self.ring_geometry[ring.ring_index]
         return MotifContext(
             inner_radius=geometry["inner_radius"],
@@ -299,6 +302,7 @@ class Assembler:
             angular_limits=_angular_limit(ring, position),
             radial_limits=radial_limits,
             slot=slot,
+            side_touch_radial=ring.side_touch_radial if is_base and ring.contact_mode == "side" else None,
         )
 
     def _trace_node(self, ring_index: int, cell_index: int, position: str, node_path: Tuple[int, ...],
@@ -327,7 +331,7 @@ class Assembler:
         """Generate one node, place and index its ink, and record its attachments' reach ends."""
         depth = len(node_path) - 1
         rng_seed = node_seed(ring.ring_seed, ring.ring_index, node_path[0], depth, position)
-        context = self._context(ring, position, rng_seed, radial_limits, slot)
+        context = self._context(ring, position, rng_seed, radial_limits, slot, is_base=parent is None)
         instance = _registry_entry(recipe)["generator"](context)
 
         rotation = cell_rotation_deg(cell_index, ring.divisions, position)
@@ -348,12 +352,17 @@ class Assembler:
         """
         Generate each attachment with the node's context and keep only its reach
         ends. Called once the node itself is placed; an attachment that fails is
-        dropped and counted, never treated as a failure of the node.
+        dropped and counted, never treated as a failure of the node. A
+        once-per-wedge attachment is generated and recorded only in the first
+        cell of each wedge of `360 / B` degrees.
         """
+        first_of_wedge = node.cell_index % (ring.divisions // self.symmetry) == 0
         for offset, attachment in enumerate(node.recipe.attachments):
+            if attachment.once_per_wedge and not first_of_wedge:
+                continue
             seed = node_seed(ring.ring_seed, ring.ring_index, node.node_path[0], ATTACHMENT_DEPTH + offset, node.position)
             node.attachment_seeds.append(seed)
-            context = replace(node.context, radial_limits=(0.0, 1.0), rng=random.Random(seed))
+            context = replace(node.context, radial_limits=(0.0, 1.0), rng=random.Random(seed), side_touch_radial=None)
             try:
                 declaration = _registry_entry(attachment)["generator"](context).declaration
             except MotifError:
@@ -367,6 +376,202 @@ class Assembler:
 
     def ring_plan(self, ring_index: int) -> RingPlan:
         return next(ring for ring in self.plan.rings if ring.ring_index == ring_index)
+
+    # ------------------------------------------------------------ symmetry
+
+    @property
+    def symmetry(self) -> int:
+        """
+        The plan's base symmetry `B` (spec 13.1), or 1 when some ring does not
+        repeat whole in each of `B` wedges (a hand-made plan), so no
+        operation is ever mirrored onto a cell that differs from its group.
+        """
+        symmetry = max(1, self.plan.base_symmetry)
+        for ring in self.plan.rings:
+            if ring.divisions % symmetry or (ring.sequence and (ring.divisions // symmetry) % len(ring.sequence)):
+                return 1
+        return symmetry
+
+    def wedge_cells(self, ring_index: int) -> int:
+        """Cells of the ring in one wedge of `360 / B` degrees."""
+        return self.ring_plan(ring_index).divisions // self.symmetry
+
+    def symmetry_groups(self, ring_index: int) -> List[List[PlacedNode]]:
+        """
+        The ring's nodes in groups of `B` related by rotation `360 / B`: in a
+        ring of N cells, cell i with cells i + k * N / B, same position and node
+        path. Members are in cell order, so the first, the group's
+        representative, lies in the first wedge. Groups follow their
+        representatives' order in `nodes`.
+        """
+        wedge = self.wedge_cells(ring_index)
+        groups: Dict[Tuple[int, str, Tuple[int, ...]], List[PlacedNode]] = {}
+        for node in self.nodes:
+            if node.ring_index == ring_index:
+                groups.setdefault((node.cell_index % wedge, node.position, node.node_path), []).append(node)
+        order = {id(node): i for i, node in enumerate(self.nodes)}
+        found = [sorted(group, key=lambda node: node.cell_index) for group in groups.values()]
+        return sorted(found, key=lambda group: order[id(group[0])])
+
+    def is_representative(self, node: PlacedNode) -> bool:
+        """Whether the node is its symmetry group's representative: its cell lies in the first wedge."""
+        return node.cell_index < self.wedge_cells(node.ring_index)
+
+    # Mirroring (spec 13.1). Pass two works on representatives; each change it makes to ink is
+    # repeated for every shift k = 1 .. B - 1: on the counterpart of each changed path, the path of
+    # the same node path and index in the cell k * N / B on (N the cells of that path's ring), with
+    # coordinates turned by k * 360 / B about the centre and radials copied. A counterpart of a
+    # path in a later wedge wraps round, so an edit to any member of a group reaches all of them.
+
+    def turn(self, coords: Sequence[PointTuple], k: int) -> List[PointTuple]:
+        """`coords` turned about the centre by `k * 360 / B` degrees, the turn from a cell to its k-th counterpart."""
+        angle = math.radians(k * 360.0 / self.symmetry)
+        c, s = math.cos(angle), math.sin(angle)
+        cx, cy = self.center
+        return [(cx + (x - cx) * c - (y - cy) * s, cy + (x - cx) * s + (y - cy) * c) for x, y in coords]
+
+    def shifts(self) -> range:
+        """The shifts `k` from a node to the other members of its group."""
+        return range(1, self.symmetry)
+
+    def _node_lookup(self) -> Dict[Tuple[int, int, str, Tuple[int, ...]], PlacedNode]:
+        return {(n.ring_index, n.cell_index, n.position, n.node_path): n for n in self.nodes}
+
+    def _shifted_key(self, item, k: int) -> Tuple[int, int, str, Tuple[int, ...]]:
+        divisions = self.ring_plan(item.ring_index).divisions
+        cell = (item.cell_index + k * (divisions // self.symmetry)) % divisions
+        return item.ring_index, cell, item.position, item.node_path
+
+    def node_counterparts(self, node: PlacedNode) -> List[Tuple[int, PlacedNode]]:
+        """`(k, member)` for every other member of the node's group, by shift."""
+        lookup = self._node_lookup() if self.symmetry > 1 else {}
+        found = [(k, lookup.get(self._shifted_key(node, k))) for k in self.shifts()]
+        return [(k, member) for k, member in found if member is not None]
+
+    def pending_counterparts(self, pending: PendingReach) -> List[Tuple[int, PendingReach]]:
+        """`(k, pending)`: the same reach end of each other member of the pending reach's node's group."""
+        node = pending[0]
+        index = [i for i, other in enumerate(p for p in self.pending_reaches if p[0] is node) if other is pending]
+        if not index:
+            return []
+        found = []
+        for k, member in self.node_counterparts(node):
+            own = [p for p in self.pending_reaches if p[0] is member]
+            if index[0] < len(own):
+                found.append((k, own[index[0]]))
+        return found
+
+    def representative_pending(self, pending: PendingReach) -> PendingReach:
+        """The pending reach of the group's representative that `pending` mirrors (itself for a representative)."""
+        node = pending[0]
+        if self.is_representative(node):
+            return pending
+        wedge = self.wedge_cells(node.ring_index)
+        owner = self._node_lookup().get((node.ring_index, node.cell_index % wedge, node.position, node.node_path))
+        mine = [p for p in self.pending_reaches if p[0] is node]
+        index = next(i for i, other in enumerate(mine) if other is pending)
+        own = [p for p in self.pending_reaches if p[0] is owner]
+        return own[index] if owner is not None and index < len(own) else pending
+
+    def path_counterparts(self, path: PlacedPath) -> List[Tuple[int, PlacedPath]]:
+        """`(k, path)` for each counterpart of `path`; ink no node owns (none in a design) has none."""
+        if self.symmetry == 1:
+            return []
+        if path.role == "reach":
+            record = next((r for r in self.resolved_reaches if r.path is path), None)
+            if record is None:
+                return []
+            drawn = {id(r.pending): r.path for r in self.resolved_reaches}
+            return [(k, drawn[id(pending)]) for k, pending in self.pending_counterparts(record.pending)
+                    if drawn.get(id(pending)) is not None]
+        lookup = self._node_lookup()
+        owner = lookup.get((path.ring_index, path.cell_index, path.position, path.node_path))
+        index = next((i for i, own in enumerate(owner.paths) if own is path), None) if owner else None
+        if index is None:
+            return []
+        found = []
+        for k in self.shifts():
+            member = lookup.get(self._shifted_key(owner, k))
+            if member is not None and index < len(member.paths):
+                found.append((k, member.paths[index]))
+        return found
+
+    def snap_to_ink(self, path: PlacedPath) -> None:
+        """
+        Make every vertex of `path` within `SAME_VERTEX_PX` of a vertex of other
+        ink exactly that vertex, and reindex it. A turned copy differs from ink
+        drawn in its own cell by float noise, and a touch is only read as one by
+        the validator when the shared vertex is the same point in both lines.
+        """
+        tolerance = resolver.SAME_VERTEX_PX
+        others = [other for other in self.index.candidates(path_geometry(path).buffer(tolerance)) if other is not path]
+        vertices = [point for other in others for point in other.coords]
+        if vertices:
+            grid = np.asarray(vertices, dtype=float)
+            for i, (x, y) in enumerate(path.coords):
+                distances = np.hypot(grid[:, 0] - x, grid[:, 1] - y)
+                j = int(np.argmin(distances))
+                if distances[j] <= tolerance:
+                    path.coords[i] = vertices[j]
+        self.reindex(path)
+
+    def mirror_insert(self, path: PlacedPath, point: PointTuple) -> None:
+        """Repeat the insertion of vertex `point` into `path` on each counterpart, at the turned point."""
+        for k, other in self.path_counterparts(path):
+            resolver.insert_vertex(other, self.turn([point], k)[0])
+            if len(other.radials) == len(path.radials):
+                other.radials[:] = path.radials
+            self.snap_to_ink(other)
+
+    def mirror_move(self, path: PlacedPath, old: PointTuple, new: PointTuple) -> None:
+        """Repeat moving `path`'s vertices at `old` onto `new` on each counterpart, with the radial `path` gave them."""
+        radial = next(r for point, r in zip(path.coords, path.radials) if point == new)
+        for k, other in self.path_counterparts(path):
+            (turned_old, turned_new) = self.turn([old, new], k)
+            for i, point in enumerate(other.coords):
+                if math.hypot(point[0] - turned_old[0], point[1] - turned_old[1]) <= resolver.SAME_VERTEX_PX:
+                    other.coords[i] = turned_new
+                    other.radials[i] = radial
+            self.snap_to_ink(other)
+
+    def commit_group(self, regenerated: List[Regenerated]) -> None:
+        """`commit` for a representative, then for each member its turned copy of the same regenerated ink."""
+        copies = []
+        for k in self.shifts():
+            lookup = self._node_lookup()
+            copy: List[Regenerated] = []
+            for node, instance, context, paths in regenerated:
+                member = lookup.get(self._shifted_key(node, k))
+                if member is None:
+                    break
+                copy.append((member, instance, context, [
+                    PlacedPath(path.ring_index, member.cell_index, path.position, path.node_path, path.role,
+                               self.turn(path.coords, k), list(path.radials), path.closed, path.stroke_width)
+                    for path in paths
+                ]))
+            else:
+                copies.append(copy)
+        self.commit(regenerated)
+        for copy in copies:
+            self.commit(copy)
+        for copy in copies:
+            for *_, paths in copy:
+                for path in paths:
+                    self.snap_to_ink(path)
+
+    def snapshot(self, paths: Iterable[PlacedPath]) -> List[Tuple[PlacedPath, List[PointTuple], List[float]]]:
+        """The coordinates and radials of `paths` and all their counterparts, for `restore`."""
+        seen: Dict[int, PlacedPath] = {}
+        for path in paths:
+            seen.setdefault(id(path), path)
+            for _, other in self.path_counterparts(path):
+                seen.setdefault(id(other), other)
+        return [(path, list(path.coords), list(path.radials)) for path in seen.values()]
+
+    def restore(self, saved: List[Tuple[PlacedPath, List[PointTuple], List[float]]]) -> None:
+        for path, coords, radials in saved:
+            path.coords[:], path.radials[:] = coords, radials
+            self.reindex(path)
 
     def subtree(self, node: PlacedNode) -> List[PlacedNode]:
         """`node` and its placed slot descendants, parents first."""

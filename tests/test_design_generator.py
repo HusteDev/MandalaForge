@@ -73,3 +73,47 @@ def test_clearance_exempts_every_vertex_a_run_shares_with_other_ink():
     report = g.last_validation_result
     assert report.is_valid, report.issues[:5]
     assert not [region for region in report.regions if region.is_uncolorable]
+
+
+# ----- revision 2: symmetry groups and bounded stems -----
+
+import math
+
+import pytest
+
+from resolver import TOUCH_GAP_PX
+from tests.test_assembler_pass_two import assert_symmetric
+
+REVIEW_SEEDS = (42, 777, 12345, 254302, 955789, 984322)
+
+
+def test_twelve_fold_design_is_exactly_twelve_fold_symmetric():
+    g = DesignGenerator(seed=42, num_rings=4, num_divisions=12, complexity=0.5, categories=["botanical", "geometric"])
+    g.generate()
+    assert g.plan.base_symmetry == 12 and [r.divisions for r in g.plan.rings] == [12, 12, 12, 12]
+    assert_symmetric(g.assembled.paths, 30.0, g.center)
+    assert g.last_validation_result.is_valid
+
+
+def test_sketch_fixture_is_four_fold_symmetric():
+    g = gen()
+    g.generate()
+    assert g.plan.base_symmetry == 4
+    assert_symmetric(g.assembled.paths, 90.0, g.center)
+
+
+@pytest.mark.parametrize("vary", [False, True])
+@pytest.mark.parametrize("seed", REVIEW_SEEDS)
+def test_review_seeds_generate_and_validate(seed, vary):
+    g = DesignGenerator(seed=seed, num_rings=4, num_divisions=12, complexity=0.5,
+                        categories=["botanical", "geometric"], vary_divisions=vary)
+    g.generate()
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+
+
+def test_varied_division_design_is_deterministic():
+    def run():
+        g = DesignGenerator(seed=777, num_rings=4, num_divisions=12, complexity=0.5,
+                            categories=["botanical", "geometric"], vary_divisions=True)
+        return g.generate()
+    assert run() == run()
