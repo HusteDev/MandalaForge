@@ -79,19 +79,25 @@ def test_slot_job_is_gated_on_the_frames_measured_slot():
 
 
 def test_slot_gate_measures_every_forced_rings_real_frame():
-    # At min size 25 the frames the assembler really draws in rings 1 to 3 (their own node streams) declare
-    # slots under 8px deep, so no ring admits a diamond: SKIP, where measuring one stand-in petal admitted it
-    # and the full tier reported "never placed".
-    job = ("diamond", "geometric", (8, 8, 8, 12), 0.15, 25, "centre", "slot", 20260821, False)
+    # At min size 30 the frames the assembler really draws in rings 1 to 3 (their own node streams) declare no
+    # slot, one too narrow and one too shallow for a diamond and two strokes, so no ring admits it: SKIP, where
+    # measuring one stand-in petal admitted it and the full tier reported "never placed". (Revision 2's longer
+    # petals declare deeper slots, so min size 25 now admits a diamond in ring 2.)
+    job = ("diamond", "geometric", (8, 8, 8, 12), 0.15, 30, "centre", "slot", 20260821, False)
     outcome = run_case(job)
     assert outcome["status"] == "SKIP" and "no forced ring admits" in outcome["detail"]
+    # The gate's verdict is the assembler's: run as a probe, the job never places the child.
+    probe = run_case(job[:-1] + (True,))
+    assert probe["status"] == "FAIL" and "never placed" in probe["detail"]
 
 
 def test_partial_slot_drops_pass_and_are_reported():
     # A forced ring's frame slot admits the child but some cells' real slots are smaller: the spec drops the
     # child there gracefully, so the job passes and carries its counts for the table's DROP column. With base
     # symmetry every cell of a uniform ring shares one recipe, so here one ring places and the other drops.
-    job = ("diamond", "geometric", (24, 24, 24), 0.9, 5, "centre", "slot", 1, False)
+    # (Side-touching revision-2 petal frames span their whole cell, so (24, 24, 24) at min size 5 now fits
+    # the child everywhere; (20, 20, 20) at min size 15 still drops it in one ring.)
+    job = ("diamond", "geometric", (20, 20, 20), 0.9, 15, "centre", "slot", 1, False)
     outcome = run_case(job)
     assert outcome["status"] == "PASS"
-    assert outcome["detail"] == "24 placed, 24 dropped" and outcome["dropped"] == 24
+    assert outcome["detail"] == "20 placed, 20 dropped" and outcome["dropped"] == 20

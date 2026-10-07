@@ -572,16 +572,17 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     direction = (sign * dx / norm, sign * dy / norm)
     anchor = _anchor(node, page_point, direction)
     start = page_point if anchor is None else anchor[1]
-    far = (start[0] + direction[0] * reach_end.max_length_px, start[1] + direction[1] * reach_end.max_length_px)
+    length = reach_end.max_length_px
+    if reach_end.direction == "inward":
+        length = min(length, _distance_to_floor(asm, node.ring_index, start))
+    if length <= ON_INK_PX:
+        return None, None
+    far = (start[0] + direction[0] * length, start[1] + direction[1] * length)
     exclude = lambda path: id(path) in subtree_ids
     ray = LineString([start, far])
     hit = _landing(asm, ray, exclude)
-    if hit is None and reach_end.direction == "inward":
-        # The innermost ring is a closed band of ink, so an inward reach always lands
-        # somewhere; past its declared length it runs on toward the centre.
-        ray = LineString([start, asm.center])
-        hit = _landing(asm, ray, exclude)
     if hit is None:
+        # A stem that misses draws nothing; the contact check decides what the cell needs (spec 13.2).
         return None, None
     target, hit_point, along = hit
     lead_point = ray.interpolate(along)
@@ -624,6 +625,17 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     asm.reaches.append(path)
     asm.index.add(path)
     return path, target
+
+
+def _distance_to_floor(asm: Assembler, ring_index: int, start: PointTuple) -> float:
+    """
+    How far an inward reach from `start` may cast: to the inward neighbour
+    ring's inner boundary (spec 13.2: a stem stays in the neighbour ring), or to
+    the centre when the ring has no inward neighbour.
+    """
+    inner = _neighbour(asm, ring_index, "inward")
+    floor = 0.0 if inner is None else asm.ring_geometry[inner]["inner_radius"]
+    return max(0.0, math.hypot(start[0] - asm.center[0], start[1] - asm.center[1]) - floor)
 
 
 def _wavy_clear_of_ink(asm: Assembler, start: PointTuple, end: PointTuple,
@@ -876,7 +888,13 @@ def check_contact(asm: Assembler) -> None:
 
 
 def _resolve_ring(asm: Assembler, ring: RingPlan) -> None:
-    """Resolve the ring's ink; replace floating cells and resolve again, up to `MAX_CONTACT_ROUNDS` times."""
+    """
+    Resolve the ring's ink; replace floating cells and resolve again, up to
+    `MAX_CONTACT_ROUNDS` times. Bases float in whole symmetry groups, so the
+    fallback runs per group: once for each floating group's sequence entry,
+    groups that share an entry sharing the call (a second call would advance
+    that entry's fallback chain again for the same floating band).
+    """
     for round_number in range(MAX_CONTACT_ROUNDS + 1):
         _resolve_ring_ink(asm, ring.ring_index)
         floating = floating_base_cells(asm, ring.ring_index)
@@ -887,7 +905,9 @@ def _resolve_ring(asm: Assembler, ring: RingPlan) -> None:
                 f"ring {ring.ring_index}: bases {floating} still float after {MAX_CONTACT_ROUNDS} replacement rounds"
             )
         before = [entry.to_dict() for entry in ring.sequence]
-        targets = sorted({(cell % len(ring.sequence), position) for _, cell, position in floating})
+        wedge = asm.wedge_cells(ring.ring_index)
+        groups = sorted({(cell % wedge, position) for _, cell, position in floating})
+        targets = sorted({(cell % len(ring.sequence), position) for cell, position in groups})
         for seq_pos, position in targets:
             if not asm.composer.replace_node(ring, seq_pos, position, "floating"):
                 raise assembler.AssemblyError(

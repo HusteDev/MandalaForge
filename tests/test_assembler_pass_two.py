@@ -26,7 +26,7 @@ def shallow_plan(**kwargs):
     return plan
 
 def test_stems_land_on_inner_ring_ink():
-    design = assemble(manual_plan())
+    design = assemble(shallow_plan())
     assert len(design.reaches) == 12
     for reach in design.reaches:
         end = reach.coords[-1]
@@ -48,7 +48,7 @@ def test_coprime_counts_still_assemble_and_validate():
     assert report.stats["num_dangles"] == 0 and report.stats["num_floating_base"] == 0
 
 def test_touch_inserts_vertex_into_target_path():
-    design = assemble(manual_plan())
+    design = assemble(shallow_plan())
     reach = design.reaches[0]
     hit = reach.coords[-1]
     assert any(any(math.isclose(x, hit[0], abs_tol=1e-6) and math.isclose(y, hit[1], abs_tol=1e-6)
@@ -107,11 +107,11 @@ def test_crossing_overflow_is_pulled_back_to_touch_the_band():
     assert len(a.index) == len(a.paths)
 
 def test_overflow_clear_of_neighbour_is_left_alone():
-    a = placed(manual_plan())
+    a = placed(shallow_plan())
     petal = next(n for n in a.nodes if n.recipe.motif == "petal")
     before = list(petal.paths[0].coords)
     a.resolve_overflow(petal, "inward")
-    assert petal.paths[0].coords == before and petal.context.radial_limits == (-0.25, 1.25)
+    assert petal.paths[0].coords == before and petal.context.radial_limits == PETAL_LIMITS
 
 def test_innermost_inward_and_outermost_outward_are_kept():
     a = placed(manual_plan())
@@ -119,7 +119,7 @@ def test_innermost_inward_and_outermost_outward_are_kept():
     petal = next(n for n in a.nodes if n.recipe.motif == "petal")
     a.resolve_overflow(band, "inward")
     a.resolve_overflow(petal, "outward")
-    assert band.context.radial_limits == (0.0, 1.0) and petal.context.radial_limits == (-0.25, 1.25)
+    assert band.context.radial_limits == (0.0, 1.0) and petal.context.radial_limits == PETAL_LIMITS
 
 def test_regeneration_carries_the_slot_child_along():
     a = placed(manual_plan(), DEEP)
@@ -141,7 +141,7 @@ def test_commit_drops_a_child_that_no_longer_fits():
     assert len(a.index) == len(a.paths)
 
 def test_reach_starts_on_its_own_motif():
-    design = assemble(manual_plan())
+    design = assemble(shallow_plan())
     petals = [n for n in design.nodes if n.recipe.motif == "petal"]
     for reach in design.reaches:
         petal = next(n for n in petals if n.cell_index == reach.cell_index)
@@ -149,20 +149,22 @@ def test_reach_starts_on_its_own_motif():
 
 def test_wavy_reach_ends_exactly_on_ink():
     composer = composer_for(GEOM)
-    design = Assembler(manual_plan(), GEOM, CENTER, 0.9, 10.0, composer).assemble()
+    design = Assembler(shallow_plan(), GEOM, CENTER, 0.9, 10.0, composer).assemble()
+    assert design.reaches
     for reach in design.reaches:
         others = [p for p in design.paths if p is not reach]
         assert any(reach.coords[0] in p.coords for p in others)
         assert any(reach.coords[-1] in p.coords for p in others)
 
 def test_reach_radials_are_in_its_own_ring():
-    design = assemble(manual_plan())
+    design = assemble(shallow_plan())
+    assert design.reaches
     for reach in design.reaches:
         for (x, y), radial in zip(reach.coords, reach.radials):
             assert math.isclose(100.0 + 70.0 * radial, math.hypot(x - CENTER[0], y - CENTER[1]), abs_tol=1e-9)
 
 def test_floating_base_cells_lists_unconnected_bases():
-    a = placed(manual_plan())
+    a = placed(shallow_plan())
     a.current_ring = 1
     assert a.floating_base_cells() == [(1, c, "centre") for c in range(12)]
     a.current_ring = 0
@@ -207,16 +209,15 @@ def test_composer_plans_assemble_deterministically():
     report = validate(a)
     assert report.stats["num_dangles"] == 0 and report.stats["num_floating_base"] == 0
 
-def test_inward_reach_runs_on_past_its_length_to_find_ink():
-    a = placed(manual_plan())
+def test_inward_reach_that_finds_no_ink_within_its_length_draws_nothing():
+    # Revision 1 ran a short inward reach on toward the centre until it found ink; a stem now casts only its
+    # declared length (spec 13.2) and one that misses leaves the cell to the contact check.
+    a = placed(shallow_plan())
     node, end, point, rotation = a.pending_reaches[0]
     short = ReachEnd(end.point, end.direction, 1.0, end.style)
-    reach = a.resolve_reach(node, short, point, rotation)
-    assert reach is not None
-    petal = next(n for n in a.nodes if n is node)
-    assert reach.coords[0] in petal.paths[0].coords
-    hit = reach.coords[-1]
-    assert any(hit in p.coords for p in a.paths if p.ring_index == 0)
+    before = [list(p.coords) for p in a.paths]
+    assert a.resolve_reach(node, short, point, rotation) is None
+    assert [list(p.coords) for p in a.paths] == before and not any(p.role == "reach" for p in a.paths)
 
 def test_outward_reach_keeps_its_declared_length():
     a = placed(manual_plan())
@@ -246,7 +247,7 @@ from placement import InkIndex, PlacedPath
 def stem_of_cell_zero(a):
     node, end, point, rotation = a.pending_reaches[0]
     assert node.cell_index == 0 and node.recipe.motif == "petal"
-    return node, ReachEnd(end.point, end.direction, 1.0, end.style), point, rotation
+    return node, end, point, rotation
 
 def add_ink(a, ring_index, coords):
     path = PlacedPath(ring_index, 5, "centre", (0,), "base", list(coords), [0.5] * len(coords), False, 1.0)
@@ -267,10 +268,10 @@ def test_side_at_its_pull_back_cap_is_left_alone():
     petal.pull_backs["inward"] = resolver.MAX_PULL_BACKS
     before = list(petal.paths[0].coords)
     a.resolve_overflow(petal, "inward")
-    assert petal.paths[0].coords == before and petal.context.radial_limits == (-0.25, 1.25)
+    assert petal.paths[0].coords == before and petal.context.radial_limits == PETAL_LIMITS
 
 def test_reach_is_cast_forward_from_its_anchor():
-    a = placed(manual_plan())
+    a = placed(shallow_plan())
     node, short, point, rotation = stem_of_cell_zero(a)
     anchor = lowest_vertex(node.paths[0])
     between = (anchor[0] + point[0]) / 2.0  # ink behind the anchor, between it and the page point
@@ -281,25 +282,25 @@ def test_reach_is_cast_forward_from_its_anchor():
     assert any(reach.coords[-1] in p.coords for p in a.paths if p.ring_index == 0)
 
 def test_anchor_already_on_other_ink_is_a_touch_without_a_path():
-    a = placed(manual_plan())
+    a = placed(shallow_plan())
     node, short, point, rotation = stem_of_cell_zero(a)
     anchor = lowest_vertex(node.paths[0])
     through = add_ink(a, 0, [(anchor[0], CENTER[1] - 6.0), (anchor[0], CENTER[1] + 6.0)])
     assert a.resolve_reach(node, short, point, rotation) is None
     assert anchor in through.coords and not any(p.role == "reach" for p in a.paths)
 
-def test_recast_onto_own_ring_ink_is_accepted_with_a_vertex():
-    a = placed(manual_plan())
+def test_reach_onto_own_ring_ink_is_accepted_with_a_vertex():
+    a = placed(shallow_plan())
     node, short, point, rotation = stem_of_cell_zero(a)
     anchor = lowest_vertex(node.paths[0])
-    x = anchor[0] - 4.0  # past the 1px cap, before ring 0's band
+    x = anchor[0] - 4.0  # past a pen's width, before ring 0's band
     own_ring = add_ink(a, 1, [(x, CENTER[1] - 6.0), (x, CENTER[1] + 6.0)])
     reach = a.resolve_reach(node, short, point, rotation)
     assert reach.coords[-1] in own_ring.coords
     assert math.isclose(reach.coords[-1][0], x, abs_tol=1e-9)
 
 def test_touch_step_leaves_a_gap_over_the_touch_gap_alone():
-    a = placed(manual_plan())
+    a = placed(shallow_plan())
     petal = next(n for n in a.nodes if n.recipe.motif == "petal")
     band = [p for p in a.paths if p.ring_index == 0]
     gap = min(LineString(p.coords).distance(Point(lowest_vertex(petal.paths[0]))) for p in band)
@@ -326,7 +327,7 @@ def test_wavy_reach_flattens_until_it_keeps_a_pen_width_from_ink():
 
 
 def test_final_contact_check_names_a_base_that_floated_after_its_ring_was_resolved():
-    a = Assembler(manual_plan(), GEOM, CENTER, 0.5, 10.0, composer_for(GEOM))
+    a = Assembler(shallow_plan(), GEOM, CENTER, 0.5, 10.0, composer_for(GEOM))
     a.assemble()
     resolver.check_contact(a)
     reach = a.reaches[0]
@@ -359,7 +360,7 @@ def test_touch_within_the_touch_radius_of_a_vertex_reuses_it():
     assert len(path.coords) == 3
 
 def test_final_touch_pass_snaps_a_tip_within_clearance_that_was_never_pulled_back():
-    a = placed(manual_plan())
+    a = placed(shallow_plan())
     petal = next(n for n in a.nodes if n.recipe.motif == "petal")
     tip = lowest_vertex(petal.paths[0])
     assert min(petal.paths[0].radials) < 0.0 and not petal.pull_backs
@@ -416,7 +417,7 @@ def test_clearance_is_waived_around_a_vertex_the_run_shares_with_other_ink():
     assert resolver._too_close(asm, [run], 1, "outward")
 
 def test_grazing_reach_runs_along_its_ray_then_bends_onto_the_ink():
-    a = placed(manual_plan())
+    a = placed(shallow_plan())
     node, short, point, rotation = stem_of_cell_zero(a)
     anchor = lowest_vertex(node.paths[0])
     # A short stroke 3px beside the reach's ray (which runs toward the centre along y = anchor y), its end 3.9px on.
@@ -430,7 +431,7 @@ def test_grazing_reach_runs_along_its_ray_then_bends_onto_the_ink():
     assert reach.coords[-1] in beside.coords and math.isclose(reach.coords[-1][0], x, abs_tol=1e-9)
 
 def test_reach_shorter_than_a_pen_width_is_a_touch():
-    a = placed(manual_plan())
+    a = placed(shallow_plan())
     node, short, point, rotation = stem_of_cell_zero(a)
     anchor = lowest_vertex(node.paths[0])
     x = anchor[0] - 3.0  # 3px on along the reach's ray, square to it
@@ -456,7 +457,7 @@ def test_pull_back_touch_never_detaches_a_leafs_midrib():
             dict(inner_radius=200, outer_radius=240)]
     plan = DesignPlan(1, {"categories": ["botanical", "geometric"], "positions": "centre"}, [
         RingPlan(0, 8, 1.0, [CellEntry(CellRecipe("ring_band", "geometric", provides_contact=True), None)], 1),
-        RingPlan(1, 12, 1.0, [CellEntry(CellRecipe("leaf", "botanical"), None)], 11),  # apex at radial 1.12
+        RingPlan(1, 12, 1.0, [CellEntry(CellRecipe("leaf", "botanical"), None)], 11),  # apex at radial 1.18
         RingPlan(2, 12, 1.0, [CellEntry(CellRecipe("ring_band", "geometric", provides_contact=True), None)], 1),
     ])
     a = Assembler(plan, geom, CENTER, 0.5, 10.0, composer_for(geom))
@@ -470,14 +471,18 @@ def test_pull_back_touch_never_detaches_a_leafs_midrib():
     radius = math.hypot(apex[0] - cx, apex[1] - cy)
     ux, uy = (apex[0] - cx) / radius, (apex[1] - cy) / radius
     foot = (cx + ux * (radius - 2.0), cy + uy * (radius - 2.0))
-    add_ink(a, 2, [(foot[0] - uy * 15.0, foot[1] + ux * 15.0), (foot[0] + uy * 15.0, foot[1] - ux * 15.0)])
+    stroke = add_ink(a, 2, [(foot[0] - uy * 15.0, foot[1] + ux * 15.0), (foot[0] + uy * 15.0, foot[1] - ux * 15.0)])
     a.resolve_overflow(leaf, "outward")
     assert leaf.pull_backs.get("outward")
     outline, midrib = leaf.paths
     apex = outline.coords[max(range(len(outline.radials)), key=lambda i: outline.radials[i])]
     assert apex in (midrib.coords[0], midrib.coords[-1])
+    # The pulled-back revision-2 leaf (apex drawn at 1.18) no longer meets the hand-placed stroke, whose own two
+    # ends now dangle; nothing else may, the midrib's ends least of all.
     report = TopologyValidator(snap_tolerance=2.5, whisker_tolerance=5.0).analyze([p.coords for p in a.paths])
-    assert report.stats["num_dangles"] == 0
+    loose = [point for point in report.unconnected_shapes
+             if min(point.distance(Point(end)) for end in (stroke.coords[0], stroke.coords[-1])) > 0.1]
+    assert loose == []
 
 
 # ----- revision 2: side-touch wiring, once-per-wedge attachments, symmetry groups -----
@@ -647,6 +652,25 @@ def test_home_ink_near_neighbour_ink_is_not_a_conflict():
     assert resolver._too_close(a, [flank], 0, "inward")
 
 
+def test_stem_casts_no_further_than_the_inward_neighbours_inner_boundary():
+    # Spec 13.2: a stem stays in the neighbour ring. With ring 0's band gone from its path, ink inside ring 0's
+    # inner boundary (r < 40) lies within the stem's declared 63px but past the boundary: the stem misses.
+    a = placed(shallow_plan())
+    node, end, point, rotation = stem_of_cell_zero(a)
+    anchor = lowest_vertex(node.paths[0])
+    assert math.hypot(anchor[0] - CENTER[0], anchor[1] - CENTER[1]) - end.max_length_px < 30.0
+    for band in [p for p in a.paths if p.ring_index == 0]:
+        a.paths.remove(band)
+        a.index.remove(band)
+    beyond = add_ink(a, 0, [(CENTER[0] + 30.0, CENTER[1] - 6.0), (CENTER[0] + 30.0, CENTER[1] + 6.0)])
+    assert a.resolve_reach(node, end, point, rotation) is None
+    assert len(beyond.coords) == 2 and not any(p.role == "reach" for p in a.paths)
+    # Ink just inside the boundary is still within reach.
+    within = add_ink(a, 0, [(CENTER[0] + 44.0, CENTER[1] - 6.0), (CENTER[0] + 44.0, CENTER[1] + 6.0)])
+    reach = a.resolve_reach(node, end, point, rotation)
+    assert reach is not None and reach.coords[-1] in within.coords
+
+
 def test_replaced_cells_give_the_neighbours_facing_sides_a_fresh_pull_back_budget(monkeypatch):
     # The neighbours' facing sides were pulled back against ink a contact round replaces; without a fresh
     # budget they could not answer the new ink (a (24, 24, 24) slot fixture raised "still crosses").
@@ -665,3 +689,19 @@ def test_replaced_cells_give_the_neighbours_facing_sides_a_fresh_pull_back_budge
     monkeypatch.setattr(resolver, "floating_base_cells", floating_once)
     resolver._resolve_ring(a, a.plan.rings[1])
     assert all(n.pull_backs["outward"] == 0 for n in a.nodes if n.ring_index == 0)
+
+
+def test_floating_groups_are_replaced_once_per_sequence_entry(monkeypatch):
+    # In a symmetric ring the bases float in whole groups; the fallback runs per group, and groups sharing a
+    # sequence entry share one call, since a second would advance that entry's chain again.
+    plan = symmetric_plan(4)
+    plan.rings[1].contact_mode = "side"
+    plan.rings[1].sequence[0] = CellEntry(CellRecipe("ring_band", "geometric"), None)
+    composer = composer_for(GEOM)
+    calls = []
+    real = composer.replace_node
+    monkeypatch.setattr(composer, "replace_node", lambda *args: calls.append(args[1:3]) or real(*args))
+    design = Assembler(plan, GEOM, CENTER, 0.5, 10.0, composer).assemble()
+    assert calls and len(calls) == len(set(calls))
+    assert_symmetric(design.paths, 90.0)
+    assert validate(design).stats["num_floating_base"] == 0

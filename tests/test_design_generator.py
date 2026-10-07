@@ -103,6 +103,19 @@ def test_sketch_fixture_is_four_fold_symmetric():
 
 
 @pytest.mark.parametrize("vary", [False, True])
+def test_stems_end_in_their_inward_neighbour_ring_or_their_own(vary):
+    for seed in (3, 11, 42):
+        g = DesignGenerator(seed=seed, num_rings=4, num_divisions=12, complexity=0.9,
+                            categories=["botanical", "geometric"], vary_divisions=vary)
+        g.generate()
+        for reach in g.assembled.reaches:
+            floor = g.rings[reach.ring_index - 1]["inner_radius"]
+            end = reach.coords[-1]
+            # A landing may bend onto ink up to the touch gap beside its ray.
+            assert math.hypot(end[0] - g.center[0], end[1] - g.center[1]) >= floor - TOUCH_GAP_PX - 1e-6
+
+
+@pytest.mark.parametrize("vary", [False, True])
 @pytest.mark.parametrize("seed", REVIEW_SEEDS)
 def test_review_seeds_generate_and_validate(seed, vary):
     g = DesignGenerator(seed=seed, num_rings=4, num_divisions=12, complexity=0.5,
