@@ -209,6 +209,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (payload.vary_divisions) parts.push('vary=true');
         // Base symmetry: every ring's division count is a multiple of it.
         if (data.plan && data.plan.base_symmetry) parts.push(`B=${data.plan.base_symmetry}`);
+        // Rings regenerated on their own: "<ring index>:<seed>", the keys /generate takes as ring_seeds.
+        const ringSeeds = Object.entries(data.ring_seeds || {})
+            .sort(([a], [b]) => parseInt(a, 10) - parseInt(b, 10))
+            .map(([index, seed]) => `${index}:${seed}`);
+        if (ringSeeds.length) parts.push(`ring_seeds=${ringSeeds.join(',')}`);
         if (data.validation) {
             parts.push(`valid=${data.validation.is_valid}`);
             if (!data.validation.is_valid) parts.push(`issues=${data.validation.issue_count}`);
@@ -576,11 +581,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // GALLERY
     // ==========================================================================
 
-    const saveToGallery = (svgContent, params) => {
+    // ring_seeds and plan let a restored design regenerate further rings without
+    // losing the ones regenerated before it was saved.
+    const saveToGallery = (svgContent, params, ringSeeds, plan) => {
         const item = {
             id: Date.now(),
             svg: svgContent,
             params: params,
+            ring_seeds: { ...(ringSeeds || {}) },
+            plan: plan || null,
             timestamp: new Date().toISOString()
         };
 
@@ -619,8 +628,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         categories: availableCategories(item.params.categories),
                         vary_divisions: !!item.params.vary_divisions
                     };
-                    currentPlan = null;
-                    currentRingSeeds = {};
+                    // Entries saved before ring seeds were stored have neither field
+                    currentPlan = item.plan || null;
+                    currentRingSeeds = { ...(item.ring_seeds || {}) };
                     activeSeed = currentDesignParams.seed;
                     syncPendingParameterIndicators();
                 }
@@ -639,7 +649,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 complexity: complexitySlider.value,
                 min_pattern_size: minPatternSizeSlider.value,
                 categories: getSelectedCategories()
-            });
+            }, currentRingSeeds, currentPlan);
 
             // Visual feedback
             const originalText = saveBtn.textContent;
