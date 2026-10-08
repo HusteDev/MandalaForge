@@ -323,6 +323,17 @@ button:disabled {
     border-color: var(--primary-color);
 }
 
+.category-checkboxes .checkbox-group.is-unavailable,
+.category-checkboxes .checkbox-group.is-unavailable:hover {
+    background-color: #f5f5f5;
+    border-color: #eee;
+    opacity: 0.6;
+}
+
+.category-checkboxes .checkbox-group.is-unavailable label {
+    cursor: not-allowed;
+}
+
 .category-desc {
     font-size: 0.75rem;
     color: #666;

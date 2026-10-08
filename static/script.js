@@ -84,6 +84,16 @@ document.addEventListener('DOMContentLoaded', () => {
         return categories;
     };
 
+    // Categories with registered motifs. Celtic, art deco and abstract have none yet, so their
+    // checkboxes are disabled; the API still accepts them and builds safe bands.
+    const AVAILABLE_CATEGORIES = ['botanical', 'geometric'];
+
+    // Drop categories the UI cannot offer, falling back to botanical when nothing remains.
+    const availableCategories = (categories) => {
+        const kept = (categories || []).filter(category => AVAILABLE_CATEGORIES.includes(category));
+        return kept.length ? kept : ['botanical'];
+    };
+
     const validateCategories = () => {
         const categories = getSelectedCategories();
         if (categories.length === 0) {
@@ -547,13 +557,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // Update displays
         sliderControls.forEach(updateSliderDisplay);
 
-        // Randomize categories (ensure at least one is checked)
-        const allCats = [catBotanical, catGeometric, catCeltic, catArtDeco, catAbstract];
-        allCats.forEach(cat => cat.checked = Math.random() > 0.5);
+        // Randomize the categories that have motifs (ensure at least one is checked)
+        const availableCats = [catBotanical, catGeometric];
+        availableCats.forEach(cat => cat.checked = Math.random() > 0.5);
+        [catCeltic, catArtDeco, catAbstract].forEach(cat => cat.checked = false);
 
         // Ensure at least one category
         if (getSelectedCategories().length === 0) {
-            allCats[Math.floor(Math.random() * allCats.length)].checked = true;
+            availableCats[Math.floor(Math.random() * availableCats.length)].checked = true;
         }
 
         activeSeed = createRandomSeed();
@@ -605,7 +616,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         num_divisions: parseInt(item.params.num_divisions),
                         complexity: parseFloat(item.params.complexity),
                         min_pattern_size: parseFloat(item.params.min_pattern_size),
-                        categories: item.params.categories || ['botanical'],
+                        categories: availableCategories(item.params.categories),
                         vary_divisions: !!item.params.vary_divisions
                     };
                     currentPlan = null;

@@ -50,7 +50,7 @@ The authoring guide `docs/motifs.md` explains the motif contract in full; `docs/
 
 `side_touch` is the registry key that says a base draws to its full angular budget with exact vertices at the ring's side-touch radial, so it meets its neighbours there. A ring whose bases all support it is a `side` ring: one connected band that needs only one stem per wedge, and at least `MIN_RING_CONTACTS` (3) in the ring when the base symmetry is 1 or 2, or none when a base overflows inward.
 
-Only botanical and geometric register motifs so far. The UI still offers celtic, art deco and abstract; a design limited to those categories is built from their safe bands.
+Only botanical and geometric register motifs so far. The UI shows celtic, art deco and abstract disabled and unchecked with a "coming soon: no motifs yet" note, Randomise never picks them, and a saved gallery design that included them restores without them (botanical when nothing remains). The API still accepts them; a design limited to those categories is built from their safe bands.
 
 **Adding a motif:** see `docs/motifs.md`. Motifs are authored in normalised cell space as parametric generators; the guide covers cell space and limits, the three-layer model, the measured declaration, positions, closure, the archetypes that satisfy it, the traps, and the registry entry.
 
