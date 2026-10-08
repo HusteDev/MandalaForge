@@ -230,3 +230,18 @@ def test_varied_division_design_is_deterministic():
                             categories=["botanical", "geometric"], vary_divisions=True)
         return g.generate()
     assert run() == run()
+
+
+def test_vary_twenty_two_divisions_uses_symmetry_eleven_and_finishes_quickly():
+    # 22 has no divisor in 3..8; the base symmetry used to fall back to 1, so pass two resolved every cell on its
+    # own. It is now 11, so pass two resolves one wedge of one or two cells per ring.
+    import time
+    start = time.perf_counter()
+    g = DesignGenerator(seed=1, num_rings=7, num_divisions=22, complexity=1.0, min_pattern_size=5,
+                        categories=["botanical", "geometric"], vary_divisions=True)
+    g.generate()
+    elapsed = time.perf_counter() - start
+    assert g.plan.base_symmetry == 11
+    assert all(r.divisions in (11, 22) for r in g.plan.rings)
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+    assert elapsed < 10, f"generation took {elapsed:.1f}s"

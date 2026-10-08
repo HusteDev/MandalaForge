@@ -37,7 +37,7 @@ The app creates circular rings only. `num_rings` sets how many; their radii come
 
 Every choice draws from a stream derived from `(seed, ring_index, sequence_position, tree_depth, position)`, so changing one ring's plan does not reshuffle another's. A design-level style is drawn once per seed: a subset of the enabled categories, which the composer favours 3 to 1 over the others rather than excluding them, and a preferred position mode.
 
-**Base symmetry.** Also once per design, from its own design-level stream, `Composer.symmetry` fixes the base symmetry `B`, stored as `DesignPlan.base_symmetry`. With `vary_divisions` off, `B = num_divisions`. With it on, `B` is drawn from the divisors of `num_divisions` from 3 to 8 (`SYMMETRY_MIN`, `SYMMETRY_MAX`), weighted by their value, or 1 when there is none (11, 13, 17, 19, 22, 23). An explicit `ring_divisions` list gives the greatest common divisor of its counts, which may be 1.
+**Base symmetry.** Also once per design, from its own design-level stream, `Composer.symmetry` fixes the base symmetry `B`, stored as `DesignPlan.base_symmetry`. With `vary_divisions` off, `B = num_divisions`. With it on, `B` is drawn from the divisors of `num_divisions` from 3 to 8 (`SYMMETRY_MIN`, `SYMMETRY_MAX`), weighted by their value. When there is none (11, 13, 17, 19, 22, 23), `B` is the largest divisor of `num_divisions` that is at least 3 and smaller than it (11 for 22), or `num_divisions` itself for a prime, so the vary path never gives 1. An explicit `ring_divisions` list gives the greatest common divisor of its counts, which may be 1; such a list is the only way the composer gives `B = 1`.
 
 For each ring, innermost first:
 

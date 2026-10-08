@@ -60,7 +60,7 @@ Only botanical and geometric register motifs so far. The UI still offers celtic,
 |---|---|---|---|
 | Rings | `num_rings` | 2–7 | 4 |
 | Divisions | `num_divisions` | slider 6–24 in even steps; the API accepts any integer 4–24 | 12 |
-| Vary divisions per ring | `vary_divisions` | boolean: the design draws a base symmetry `B` from the divisors of `num_divisions` between 3 and 8 (or 1 when there is none), and each ring gets a multiple of `B` around `num_divisions`, lower for inner rings. Off, every ring has `num_divisions` cells and `B = num_divisions` | false |
+| Vary divisions per ring | `vary_divisions` | boolean: the design draws a base symmetry `B` from the divisors of `num_divisions` between 3 and 8 (when there is none, the largest smaller divisor of at least 3, such as 11 for 22, or `num_divisions` itself for a prime), and each ring gets a multiple of `B` around `num_divisions`, lower for inner rings. Off, every ring has `num_divisions` cells and `B = num_divisions` | false |
 | — | `ring_divisions` | optional list of exactly `num_rings` integers, each 4–24 (odd allowed); overrides both of the above, otherwise 400. Its base symmetry is the greatest common divisor of the counts, which may be 1 | — |
 | Min pattern size | `min_pattern_size` | 5–50 px; the minimum white space inside and between motifs | 10 in the UI, 8 if omitted |
 | Detail level | `complexity` | 0.0–1.0 | 0.5 |

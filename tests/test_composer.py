@@ -149,7 +149,34 @@ def test_base_symmetry_static_rule():
     assert Composer.base_symmetry(12, True, [6, 9], rng) == 3
     for _ in range(50):
         assert Composer.base_symmetry(24, True, None, rng) in (3, 4, 6, 8)
-    assert Composer.base_symmetry(11, True, None, rng) == 1
+    assert Composer.base_symmetry(11, True, None, rng) == 11
+
+def test_vary_without_a_small_divisor_falls_back_to_the_largest_divisor_of_at_least_three():
+    import random
+    rng = random.Random(0)
+    assert Composer.base_symmetry(22, True, None, rng) == 11
+    for prime in (11, 13, 17, 19, 23):
+        assert Composer.base_symmetry(prime, True, None, rng) == prime
+
+def test_vary_twenty_two_gives_symmetry_eleven_and_multiples_of_eleven():
+    for seed in range(10):
+        p = Composer(seed, GEOM, ComposerSettings(num_divisions=22, vary_divisions=True,
+                                                  categories=["botanical"])).plan()
+        assert p.base_symmetry == 11
+        for r in p.rings:
+            assert 4 <= r.divisions <= 24 and r.divisions in (11, 22)
+
+def test_vary_thirteen_gives_symmetry_thirteen():
+    p = plan_for(num_divisions=13, vary_divisions=True)
+    assert p.base_symmetry == 13
+    assert all(r.divisions == 13 for r in p.rings)
+
+def test_vary_twelve_draws_symmetry_weighted_by_value():
+    import random
+    from collections import Counter
+    draws = Counter(Composer.base_symmetry(12, True, None, random.Random(seed)) for seed in range(50))
+    assert set(draws) <= {3, 4, 6}
+    assert draws.most_common(1)[0][0] == 6
 
 def test_vary_counts_are_multiples_of_base_symmetry():
     symmetries = set()

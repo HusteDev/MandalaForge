@@ -245,7 +245,9 @@ class Composer:
         The design's base symmetry `B` (spec 13.1): every ring's count is a multiple of it.
 
         An explicit list gives its gcd (possibly 1); without vary every ring has `num_divisions`;
-        with vary a divisor of `num_divisions` in 3..8, weighted by its value, or 1 when none exists.
+        with vary a divisor of `num_divisions` in 3..8, weighted by its value. When none exists
+        (11, 13, 17, 19, 22, 23) it is the largest proper divisor of at least 3 (11 for 22), or
+        `num_divisions` itself for a prime, so the vary path never gives 1.
         """
         if ring_divisions:
             return math.gcd(*ring_divisions)
@@ -253,7 +255,8 @@ class Composer:
             return num_divisions
         candidates = [d for d in range(SYMMETRY_MIN, SYMMETRY_MAX + 1) if num_divisions % d == 0]
         if not candidates:
-            return 1
+            larger = [d for d in range(SYMMETRY_MIN, num_divisions) if num_divisions % d == 0]
+            return max(larger) if larger else num_divisions
         return rng.choices(candidates, weights=candidates)[0]
 
     @property
