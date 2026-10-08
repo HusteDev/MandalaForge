@@ -1,3 +1,4 @@
+import pytest
 from qa_patterns import run_case, property_checks, MATRIX_SMOKE
 from motifs import find_motif
 
@@ -139,3 +140,15 @@ def test_partial_slot_drops_pass_and_are_reported():
     outcome = run_case(job)
     assert outcome["status"] == "PASS"
     assert outcome["detail"] == "20 placed, 20 dropped" and outcome["dropped"] == 20
+
+
+@pytest.mark.parametrize("job", [
+    ("petal", "botanical", (24, 24, 24), 0.5, 25, "divider", "base", 20260821, False),
+    ("stem", "botanical", (8, 8, 8, 12), 0.5, 25, "centre", "contact", 20260821, False),
+    ("petal", "botanical", (8, 8, 8, 12), 0.15, 25, "divider", "base", 20260821, False),
+])
+def test_tips_nestled_into_each_others_rings_resolve_with_a_wide_touch_disc(job):
+    # At min white space 25 the touch disc waives clearance around tips nestled across a ring boundary, so only the
+    # crossing test judged them: pull-backs traded the crossing between the rings until both ran out ("still
+    # crosses or crowds"), or left the tips beside each other in a slit no pen fits.
+    assert run_case(job)["status"] == "PASS"

@@ -725,3 +725,36 @@ def test_floating_groups_are_replaced_once_per_sequence_entry(monkeypatch):
     assert calls and len(calls) == len(set(calls))
     assert_symmetric(design.paths, 90.0)
     assert validate(design).stats["num_floating_base"] == 0
+
+
+def test_a_pull_back_never_hands_its_crossing_to_the_neighbour(monkeypatch):
+    # A crossing is blamed on a side within half a pixel of its boundary, so the two sides' margins overlap. A
+    # pull-back that only cleared its own blame moved the crossing just past the edge of its margin, into the
+    # neighbour's; the neighbour's pull-back moved it back one step lower, and both ran out of pull-backs still
+    # crossing (ring 2's petal bases dipping onto ring 1's tips, (24, 24, 24) with a 25px touch disc). A pulled-back
+    # side now crosses the neighbour ring nowhere, or has no overflow left on that side.
+    import io
+    from contextlib import redirect_stdout
+    from coloring_generator import DesignGenerator
+    real = resolver._pull_back
+    pulled = []
+
+    def checked(asm, node, side):
+        if not real(asm, node, side):
+            return False
+        neighbour = resolver._neighbour(asm, node.ring_index, side)
+        bound = 0 if side == "inward" else 1
+        at_bound = node.context.radial_limits[bound] == float(bound)
+        crosses = resolver._ink_crosses(asm, resolver._subtree_paths(asm, node), neighbour)
+        assert at_bound or not crosses, (node.ring_index, node.cell_index, side, node.context.radial_limits)
+        pulled.append(node)
+        return True
+
+    monkeypatch.setattr(resolver, "_pull_back", checked)
+    with redirect_stdout(io.StringIO()):
+        g = DesignGenerator(seed=20260821, num_rings=3, num_divisions=24, complexity=0.5, min_pattern_size=25,
+                            categories=["botanical"], ring_divisions=[24, 24, 24],
+                            force_motif={"name": "petal", "position": "divider", "role": "base"})
+        g.generate()
+    assert pulled
+    assert g.last_validation_result.is_valid

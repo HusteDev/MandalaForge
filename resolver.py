@@ -267,6 +267,23 @@ def _conflicts(asm: Assembler, paths: Sequence[PlacedPath], neighbour: int, side
     return _ink_crosses(asm, paths, neighbour, side) or _too_close(asm, paths, neighbour, side, stale)
 
 
+def _still_conflicts(asm: Assembler, paths: Sequence[PlacedPath], neighbour: int, side: str,
+                     stale: Set[int] = frozenset()) -> bool:
+    """
+    Whether a pulled-back shape is not yet clear on `side`: it conflicts there
+    (`_conflicts`), or it crosses ring `neighbour`'s ink anywhere at all.
+
+    Blame (`_conflicts`) decides which side starts a pull-back, but a pull-back
+    is only done when the crossing is gone. Every crossing of adjacent rings is
+    overflow of one of them, and the boundary margins on either side overlap,
+    so a shape that merely moves a crossing past the edge of its own margin
+    hands it to the neighbour, whose pull-back hands it back one step lower:
+    two tips nestled into each other's rings then trade the crossing for every
+    pull-back either side has and are still crossing when both run out.
+    """
+    return _conflicts(asm, paths, neighbour, side, stale) or _ink_crosses(asm, paths, neighbour)
+
+
 def _rings_conflict(asm: Assembler, paths: Sequence[PlacedPath], outer: int, inner: int) -> bool:
     """
     Whether any of `paths`, ink of adjacent rings `outer` and `inner`, crosses
@@ -364,8 +381,8 @@ def _pull_back(asm: Assembler, node: PlacedNode, side: str) -> bool:
         try:
             regenerated = asm.regenerate(node, _with_limit(limits, bound, mid))
             # The old ink is still indexed; it shares no vertex with the shape tried in its place.
-            crosses = _conflicts(asm, [path for *_, paths in regenerated for path in paths], neighbour, side,
-                                 {id(path) for path in old_paths})
+            crosses = _still_conflicts(asm, [path for *_, paths in regenerated for path in paths], neighbour, side,
+                                       {id(path) for path in old_paths})
         except MotifError:
             crosses = True
         if crosses:
@@ -378,7 +395,7 @@ def _pull_back(asm: Assembler, node: PlacedNode, side: str) -> bool:
     for pulled in ("inward", "outward"):
         if pulled in node.pull_backs:
             _touch(asm, node, pulled, _neighbour(asm, node.ring_index, pulled))
-    if _conflicts(asm, _subtree_paths(asm, node), neighbour, side):
+    if _still_conflicts(asm, _subtree_paths(asm, node), neighbour, side):
         # The touch, or a shape the search never tried, still crosses or crowds: no overflow on this side at all.
         _regenerate_and_commit(asm, node, side, _with_limit(limits, bound, float(bound)))
         other_side = "outward" if side == "inward" else "inward"
