@@ -851,11 +851,6 @@ def structural_components(
     return [ids.setdefault(find(i), len(ids)) for i in range(count)]
 
 
-def polylines_from_shapes(shapes) -> List[List[Coord]]:
-    """Adapt shape_extractor.Shape objects (sampled + rotated) to polylines."""
-    return [[(p.x, p.y) for p in shape.points] for shape in shapes if len(shape.points) >= 2]
-
-
 def debug_overlay_svg(
     report: TopologyReport,
     polylines: Sequence[Sequence[Coord]],

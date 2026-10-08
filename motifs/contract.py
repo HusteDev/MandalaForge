@@ -324,7 +324,7 @@ class MotifAnalyzer:
                 )
         return issues
 
-    # ----- ported helpers (from smart_patterns/core.py) --------------------
+    # ----- ported helpers (from the retired smart-pattern analyzer) --------------------
 
     def _point_touches_segments(self, point: CellPoint, segments: List[Segment]) -> bool:
         return any(

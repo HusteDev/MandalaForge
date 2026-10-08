@@ -1,7 +1,7 @@
 """
 Geometry primitives for the motif engine.
 
-Ported by copying from `smart_patterns/core.py` so this package is
+Ported by copying from the retired smart-pattern analyzer so this package is
 self-contained. Motifs are authored in normalized cell space: `radial` runs 0 to
 1 from the inner to the outer boundary of a ring, and `angular` runs -1 to 1
 across the wedge. `MotifContext` converts that space to canvas pixels.

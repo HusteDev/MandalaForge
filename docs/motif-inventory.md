@@ -1,3 +1,5 @@
+> Note: the smart-pattern layer described here was retired on 2026-10-07 in favour of [docs/motifs.md](motifs.md).
+
 # Motif Inventory (from `examples/`)
 
 Source: visual analysis of 20 reference designs in `examples/` (48 files; the

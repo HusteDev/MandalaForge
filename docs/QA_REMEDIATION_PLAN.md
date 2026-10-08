@@ -1,3 +1,5 @@
+> Note: the smart-pattern layer described here was retired on 2026-10-07 in favour of [docs/motifs.md](motifs.md).
+
 # QA Remediation Plan — Topology Defects by Category
 
 **Status: IMPLEMENTED 2026-08-01. Phases 0-4 complete; corpus is 90/90 green.**

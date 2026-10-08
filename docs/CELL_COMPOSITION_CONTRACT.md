@@ -1,3 +1,5 @@
+> Note: the smart-pattern layer described here was retired on 2026-10-07 in favour of [docs/motifs.md](motifs.md).
+
 # Cell composition and guide-independent linework
 
 Status: design contract and implementation proposal; runtime unchanged.

@@ -1,3 +1,5 @@
+> Note: the smart-pattern layer described here was retired on 2026-10-07 in favour of [docs/motifs.md](motifs.md).
+
 # Pattern Category Audit
 
 This audit separates the active smart-pattern system from the older pattern libraries.

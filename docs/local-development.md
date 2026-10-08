@@ -62,7 +62,7 @@ Expected validation shape:
 ## Compile Check
 
 ```powershell
-python -m compileall app.py coloring_generator.py pattern_generator.py pattern_validator.py smart_patterns
+python -m compileall app.py coloring_generator.py composer.py placement.py assembler.py resolver.py motifs
 ```
 
 ## Generation Stress Check
