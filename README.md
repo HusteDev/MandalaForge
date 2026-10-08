@@ -48,7 +48,7 @@ The authoring guide `docs/motifs.md` explains the motif contract in full; `docs/
 | `ring_band` | geometric | enclosing | base | centre, divider | yes | `spans_cell`, cell-to-cell contact, the innermost ring |
 | `<category>_safe_band` | every category | enclosing | base (fallback) | centre, divider | yes | plain band at radial 0.4 to 0.6, `spans_cell`, valid in any cell |
 
-`side_touch` is the registry key that says a base draws to its full angular budget with exact vertices at the ring's side-touch radial, so it meets its neighbours there. A ring whose bases all support it is a `side` ring: one connected band that needs only one stem per wedge, or none when a base overflows inward.
+`side_touch` is the registry key that says a base draws to its full angular budget with exact vertices at the ring's side-touch radial, so it meets its neighbours there. A ring whose bases all support it is a `side` ring: one connected band that needs only one stem per wedge, and at least `MIN_RING_CONTACTS` (3) in the ring when the base symmetry is 1 or 2, or none when a base overflows inward.
 
 Only botanical and geometric register motifs so far. The UI still offers celtic, art deco and abstract; a design limited to those categories is built from their safe bands.
 
