@@ -56,3 +56,23 @@ def test_regenerate_ring_without_seed_is_400(client):
 def test_regenerate_ring_wrong_length_ring_divisions_is_400(client):
     r = client.post("/regenerate-ring", json={**BASE, "ring_index": 1, "ring_divisions": [8, 8]})
     assert r.status_code == 400 and "ring_divisions" in r.get_json()["error"]
+
+
+VARY_BASE = {**BASE, "num_rings": 4, "num_divisions": 12}
+
+@pytest.mark.parametrize("off", ["false", "0", "", "FALSE", False, 0])
+def test_vary_divisions_false_strings_give_uniform_rings(client, off):
+    r = client.post("/generate", json={**VARY_BASE, "vary_divisions": off})
+    assert r.status_code == 200
+    assert all(ring["divisions"] == 12 for ring in r.get_json()["plan"]["rings"])
+
+@pytest.mark.parametrize("on", ["true", "1", True, 1])
+def test_vary_divisions_true_values_vary_the_rings(client, on):
+    r = client.post("/generate", json={**VARY_BASE, "vary_divisions": on})
+    assert r.status_code == 200
+    assert any(ring["divisions"] != 12 for ring in r.get_json()["plan"]["rings"])
+
+@pytest.mark.parametrize("bad", ["maybe", 1.5, [], {}])
+def test_malformed_vary_divisions_is_400(client, bad):
+    r = client.post("/generate", json={**VARY_BASE, "vary_divisions": bad})
+    assert r.status_code == 400 and "vary_divisions" in r.get_json()["error"]

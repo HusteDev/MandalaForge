@@ -25,7 +25,15 @@ for seed, categories in [(42, ['botanical']), (2025, ['botanical', 'geometric'])
         raise RuntimeError(response.get_json())
     data = response.get_json()
     (OUT / f'mandala-{seed}.svg').write_text(data['svg'], encoding='utf-8')
-    record = dict(params=params, validation=data['validation'], pattern_usage=data['pattern_usage'])
+    # Base motif per ring: the first sequence entry's centre recipe, else its divider.
+    pattern_usage = []
+    for ring in data['plan']['rings']:
+        entry = ring['sequence'][0]
+        recipe = entry['centre'] or entry['divider']
+        pattern_usage.append(dict(ring_index=ring['ring_index'], variation_index=0,
+                                  name=recipe['motif'], category=recipe['category'],
+                                  is_fallback=recipe['is_fallback']))
+    record = dict(params=params, validation=data['validation'], pattern_usage=pattern_usage)
     records.append(record)
     print(json.dumps(dict(seed=seed, validation=data['validation'])))
     if seed == 42:

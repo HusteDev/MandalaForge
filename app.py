@@ -56,6 +56,26 @@ def _parse_ring_seeds(raw, num_rings):
     return {key: value for key, value in seeds.items() if 0 <= key < num_rings}
 
 
+def _parse_bool(raw, name):
+    """
+    Read an optional boolean flag: a real boolean, an integer, or one of the strings
+    "true", "1", "false", "0" and "" (case-insensitive). Anything else raises ValueError.
+    """
+    if raw is None:
+        return False
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, int):
+        return raw != 0
+    if isinstance(raw, str):
+        text = raw.strip().lower()
+        if text in ('false', '0', ''):
+            return False
+        if text in ('true', '1'):
+            return True
+    raise ValueError(f'{name} must be a boolean')
+
+
 def _required_int(params, name):
     """Read a required integer field; a missing or malformed value raises ValueError."""
     try:
@@ -79,7 +99,7 @@ def _generator_kwargs(params, seed):
         'complexity': float(params.get('complexity', 0.5)),
         'min_pattern_size': float(params.get('min_pattern_size', 8)),
         'categories': categories,
-        'vary_divisions': bool(params.get('vary_divisions', False)),
+        'vary_divisions': _parse_bool(params.get('vary_divisions'), 'vary_divisions'),
         'ring_divisions': _parse_ring_divisions(params.get('ring_divisions'), num_rings),
         'ring_seeds': _parse_ring_seeds(params.get('ring_seeds'), num_rings),
     }
@@ -100,11 +120,12 @@ def generate():
     {
         "seed": int or null,
         "num_rings": int (2-7),
-        "num_divisions": int (4-30, even),
+        "num_divisions": int (4-24),
         "complexity": float (0.0-1.0),
         "min_pattern_size": float,
         "categories": list of strings,
-        "vary_divisions": bool (optional, default false),
+        "vary_divisions": bool (optional, default false; also 0/1 or the strings
+                          "true", "1", "false", "0", ""),
         "ring_divisions": list of num_rings ints from 4 to 24, or null (optional),
         "ring_seeds": {"<ring index>": int} or null (optional; applies earlier
                       per-ring regenerations, keys outside the ring range are ignored)
