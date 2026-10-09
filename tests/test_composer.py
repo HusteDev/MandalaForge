@@ -216,7 +216,11 @@ def test_botanical_geometric_rings_are_side_mode_with_one_stem_per_wedge():
                 assert r.contact_mode == "side"
                 entries = [find_motif(n.motif) or safe_motif(n.category) for n in _base_nodes(r)]
                 stems = _stems_in_plan(r)
-                if r.ring_index > 0 and not any(e["max_overflow_inward"] >= CONTACT_OVERFLOW for e in entries):
+                if r.ring_index > 0 and all(e["seams"] for e in entries):
+                    # A seam ring's stems are per cell, one on every node.
+                    assert len(stems) == len(entries) and not any(stem.once_per_wedge for stem in stems)
+                    stemmed += 1
+                elif r.ring_index > 0 and not any(e["max_overflow_inward"] >= CONTACT_OVERFLOW for e in entries):
                     assert len(stems) == 1 and stems[0].once_per_wedge
                     stemmed += 1
                 else:
@@ -229,7 +233,8 @@ def test_botanical_geometric_rings_are_side_mode_with_one_stem_per_wedge():
 def test_side_ring_without_inward_overflow_gets_one_stem_on_its_first_node():
     from composer import CellRecipe, CellEntry
     c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
-    seq = [CellEntry(CellRecipe("ring_band", "geometric"), CellRecipe("ring_band", "geometric")),
+    # Non-seam bases without inward overflow (band is a seam motif now, whose cells each get a stem).
+    seq = [CellEntry(CellRecipe("botanical_safe_band", "botanical"), CellRecipe("botanical_safe_band", "botanical")),
            CellEntry(CellRecipe("leaf", "botanical"), None)]
     c._ensure_contact(1, seq, "side")
     assert [a.motif for a in seq[0].centre.attachments] == ["stem"]
@@ -584,3 +589,17 @@ def test_forced_seam_base_fills_its_whole_position():
         for r in p.rings[1:]:
             assert all(e.centre.motif == "band" and e.divider is None for e in r.sequence)
             assert r.contact_mode == "side"
+
+
+def test_every_cell_of_a_seam_ring_carries_a_stem():
+    # A seam motif's open curves leave the space down to the inner ring one face per stem; a stem in every cell
+    # (not once per wedge) cuts it into a face per cell.
+    seen = 0
+    for p in _seam_plans():
+        for r in p.rings[1:]:
+            nodes = _base_nodes(r)
+            if nodes and {n.motif for n in nodes} <= SEAM_NAMES:
+                seen += 1
+                for n in nodes:
+                    assert [a.motif for a in n.attachments] == ["stem"] and not n.attachments[0].once_per_wedge
+    assert seen > 0

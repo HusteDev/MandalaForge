@@ -694,7 +694,12 @@ class Composer:
             return bool(self._registry_entry(node)["spans_cell"])
 
         if contact_mode == "side":
-            # The ring is one connected band, so one inward contact per wedge is enough:
+            # A seam motif's open curves leave the space down to the inner ring one face per stem, so every
+            # cell of a seam position gets its own stem, cutting that space into a face per cell.
+            for node in nodes:
+                if self._is_seam(node) and not has_inward(node) and not node.attachments:
+                    node.attachments.append(self._stem_recipe())
+            # Otherwise the ring is one connected band, so one inward contact per wedge is enough:
             # overflow where a base has it, else a single stem on the first node, drawn once per wedge.
             if nodes and not any(has_inward(n) or n.attachments for n in nodes):
                 stem = self._stem_recipe()

@@ -174,3 +174,9 @@ def test_run_case_passes_for_band_base():
 @pytest.mark.parametrize("name", ["band", "scallop"])
 def test_property_checks_pass_for_seam_motifs(name):
     assert all(property_checks(find_motif(name)).values())
+
+
+@pytest.mark.parametrize("divisions", [(8, 8, 8, 12), (7, 12)])
+def test_forced_scallop_meets_the_faces_per_cell_floor(divisions):
+    job = ("scallop", "botanical", divisions, 0.5, 10, "divider", "base", 20260821, False)
+    assert run_case(job)["status"] == "PASS"
