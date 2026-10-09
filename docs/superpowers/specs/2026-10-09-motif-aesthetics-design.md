@@ -179,7 +179,7 @@ The work lands in three phases. Each phase ends with the automated gates (full t
 - **CUT:** every occlusion cut point is a vertex of the front outline.
 - **EMB:** DET and MONO hold for embellished output.
 
-`qa_report.py --corpus` keeps 180 designs, with at least a quarter of its rings layered (the corpus runner forces the `layered` position mode on chosen rings when the natural rate is lower) and every embellishment exercised at least ten times.
+`qa_report.py --corpus` keeps 180 designs, with at least a quarter of the rings of its botanical and geometric designs layered (the other three categories have no motifs to layer) (the corpus runner forces the `layered` position mode on chosen rings when the natural rate is lower) and every embellishment exercised at least ten times.
 
 ## 12. Documentation
 
