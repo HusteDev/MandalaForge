@@ -31,6 +31,10 @@ def salted_seed(seed: int, salt: str) -> int:
     return seed * 31 + zlib.crc32(salt.encode("utf-8"))
 
 
+WEIGHTS = ("outline", "detail")
+DETAIL_WEIGHT_SHARE = 0.6
+
+
 @dataclass(frozen=True)
 class CellPoint:
     radial: float
@@ -41,6 +45,9 @@ class CellPoint:
 class SmartVector:
     points: List[CellPoint]
     closed: bool = False
+    # "outline" strokes at the full width, "detail" at DETAIL_WEIGHT_SHARE of it; "back" layers draw beneath the base ink.
+    weight: str = "outline"
+    layer: str = "front"
 
 
 @dataclass
@@ -75,6 +82,16 @@ class MotifContext:
     @property
     def half_angle(self) -> float:
         return self.wedge_angle / 2
+
+    def stroke_for(self, weight: str) -> float:
+        """Stroke width in pixels for a line weight."""
+        if weight not in WEIGHTS:
+            raise ValueError(f"Line weight must be one of {WEIGHTS}, got {weight!r}")
+        return self.stroke_width * (DETAIL_WEIGHT_SHARE if weight == "detail" else 1.0)
+
+    def clearance_px(self, weight_a: str = "outline", weight_b: str = "outline") -> float:
+        """Centreline-to-centreline gap that leaves `min_white_space` between two lines' edges."""
+        return self.min_white_space + (self.stroke_for(weight_a) + self.stroke_for(weight_b)) / 2.0
 
     def radius_at(self, radial: float) -> float:
         return self.inner_radius + self.ring_depth * radial

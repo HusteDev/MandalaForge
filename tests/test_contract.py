@@ -167,3 +167,33 @@ def test_full_cell_box_slot_passes_strict_clearance(cell_kwargs):
     assert inst.declaration.slot is not None
     assert not hasattr(contract, "SLOT_CLEARANCE_SLACK_PX")
     assert MotifAnalyzer(ctx).analyze(inst) == []
+
+
+def test_detail_weight_and_clearance(cell_kwargs):
+    ctx = MotifContext(**cell_kwargs)
+    assert ctx.stroke_for("detail") == pytest.approx(0.6 * ctx.stroke_width)
+    assert ctx.clearance_px("outline", "detail") == pytest.approx(ctx.min_white_space + 0.8 * ctx.stroke_width)
+    assert ctx.clearance_px() == pytest.approx(ctx.min_white_space + ctx.stroke_width)
+
+
+def test_seam_end_is_accounted_for_only_when_declared(cell_kwargs):
+    arc = [SmartVector([CellPoint(0.5, -1.0), CellPoint(0.5, 0.0), CellPoint(0.5, 1.0)])]
+    ctx = MotifContext(**cell_kwargs)
+    assert build_instance(ctx, arc, seams=True).declaration.seams      # no reach end needed
+    reach = [ReachEnd(CellPoint(0.5, 0.0), "inward", 10.0)]
+    with pytest.raises(MotifError):
+        build_instance(MotifContext(**cell_kwargs), arc, reach_ends=reach)
+    with pytest.raises(MotifError):
+        build_instance(MotifContext(**cell_kwargs, angular_limits=0.6), arc, seams=True)
+
+
+def test_curved_reach_styles_are_accepted():
+    for style in ("bow", "s"):
+        assert ReachEnd(CellPoint(0, 0), "inward", 5.0, style).style == style
+
+
+def test_slot_and_slot_outline_are_mutually_exclusive(cell_kwargs):
+    ctx = MotifContext(**cell_kwargs)
+    box = closed_box(0.2, 0.8, 0.5)
+    with pytest.raises(MotifError):
+        build_instance(ctx, [box], slot_outline=list(box.points), slot=list(box.points))

@@ -21,7 +21,7 @@ from motifs.geometry import CellPoint, MotifContext, PointTuple, SmartVector
 
 
 REACH_DIRECTIONS = ("inward", "outward")
-REACH_STYLES = ("straight", "wavy")
+REACH_STYLES = ("straight", "wavy", "bow", "s")
 MOTIF_KINDS = ("enclosing", "open")
 
 # Slots smaller than this (square pixels) are treated as not there.
@@ -56,6 +56,7 @@ class Declaration:
     base_point: CellPoint
     overflow_inward: float
     overflow_outward: float
+    seams: bool = False
 
 
 @dataclass
@@ -96,13 +97,13 @@ def measure_overflow(vectors: Sequence[SmartVector]) -> Tuple[float, float]:
     return (inward, outward)
 
 
-def measure_slot(context: MotifContext, outline: List[CellPoint]) -> Optional[List[CellPoint]]:
+def inset_outline(context: MotifContext, outline: List[CellPoint], inset_px: float) -> Optional[List[CellPoint]]:
     """
-    Interior space a later motif may occupy: `outline` inset by the white-space
-    margin plus a stroke width, or None when nothing worth drawing is left.
+    `outline` (closed, cell space) inset by `inset_px` in true page space, or None when
+    nothing worth drawing is left.
 
-    The inset is taken in true page space (arc-subdivided outline, unrotated) so the
-    analyzer's pixel clearance check holds exactly, then mapped back to cell space.
+    The inset is taken on the arc-subdivided, unrotated outline so the analyzer's pixel
+    clearance check holds exactly, then mapped back to cell space.
     """
     if len(outline) < 3:
         raise MotifError("Slot outline needs at least three points")
@@ -113,7 +114,7 @@ def measure_slot(context: MotifContext, outline: List[CellPoint]) -> Optional[Li
     if not polygon.is_valid:
         raise MotifError("Slot outline is not a simple polygon")
 
-    inset = polygon.buffer(-(context.min_white_space + context.stroke_width), join_style="mitre")
+    inset = polygon.buffer(-inset_px, join_style="mitre")
     if inset.is_empty:
         return None
     if isinstance(inset, MultiPolygon):
@@ -122,15 +123,26 @@ def measure_slot(context: MotifContext, outline: List[CellPoint]) -> Optional[Li
         return None
 
     center_x, center_y = context.center
-    slot = []
+    result = []
     for x, y in list(inset.exterior.coords)[:-1]:
         radius = math.hypot(x - center_x, y - center_y)
         angle_deg = math.degrees(math.atan2(y - center_y, x - center_x))
-        slot.append(CellPoint(
+        result.append(CellPoint(
             radial=(radius - context.inner_radius) / context.ring_depth,
             angular=angle_deg / context.half_angle,
         ))
-    return slot
+    return result
+
+
+def measure_slot(
+    context: MotifContext, outline: List[CellPoint], outline_weight: str = "outline"
+) -> Optional[List[CellPoint]]:
+    """
+    Interior space a later motif may occupy: `outline` inset by the white-space margin
+    plus half the outline's stroke and half an outline-weight stroke of whatever fills
+    the slot, or None when nothing worth drawing is left.
+    """
+    return inset_outline(context, outline, context.clearance_px(outline_weight, "outline"))
 
 
 def _default_base_point(points: Sequence[CellPoint]) -> CellPoint:
@@ -143,8 +155,13 @@ def build_instance(
     reach_ends: Sequence[ReachEnd] = (),
     slot_outline: Optional[List[CellPoint]] = None,
     base_point: Optional[CellPoint] = None,
+    *,
+    seams: bool = False,
+    slot: Optional[List[CellPoint]] = None,
 ) -> MotifInstance:
     """Measure the declaration for `vectors`, then analyze; raises `MotifError` on any issue."""
+    if slot is not None and slot_outline is not None:
+        raise MotifError("Pass either slot_outline or an already-measured slot, not both")
     vectors = list(vectors)
     reach_ends = list(reach_ends)
     if not vectors and not reach_ends:
@@ -164,11 +181,12 @@ def build_instance(
 
     declaration = Declaration(
         footprint=footprint,
-        slot=measure_slot(context, slot_outline) if slot_outline is not None else None,
+        slot=slot if slot is not None else (measure_slot(context, slot_outline) if slot_outline is not None else None),
         reach_ends=reach_ends,
         base_point=base_point if base_point is not None else _default_base_point(anchor_candidates),
         overflow_inward=overflow_inward,
         overflow_outward=overflow_outward,
+        seams=seams,
     )
     kind = "enclosing" if any(vector.closed for vector in vectors) else "open"
     instance = MotifInstance(vectors=vectors, declaration=declaration, kind=kind)
@@ -192,10 +210,10 @@ class MotifAnalyzer:
         segments = self._all_segments(vectors)
         issues: List[str] = []
 
-        if instance.kind == "open" and not declaration.reach_ends:
+        if instance.kind == "open" and not declaration.reach_ends and not declaration.seams:
             issues.append("Open motif declares no reach ends")
 
-        issues.extend(self._open_end_issues(vectors, segments, declaration.reach_ends))
+        issues.extend(self._open_end_issues(vectors, segments, declaration.reach_ends, declaration.seams))
         issues.extend(self._limit_issues(vectors))
         issues.extend(self._crossing_issues(segments))
         issues.extend(self._slot_issues(declaration.slot, segments))
@@ -225,6 +243,7 @@ class MotifAnalyzer:
         vectors: Sequence[SmartVector],
         segments: List[Segment],
         reach_ends: Sequence[ReachEnd],
+        seams: bool = False,
     ) -> List[str]:
         issues = []
         for index, vector in enumerate(vectors):
@@ -236,7 +255,7 @@ class MotifAnalyzer:
                 ("start", vector.points[0], {0, 1}),
                 ("end", vector.points[-1], {last, last - 1}),
             ):
-                if self._end_is_accounted_for(endpoint, index, own, adjacent, segments, reach_ends):
+                if self._end_is_accounted_for(endpoint, index, own, adjacent, segments, reach_ends, seams):
                     continue
                 issues.append(
                     f"Vector {index} has an open end at its {name} "
@@ -253,7 +272,15 @@ class MotifAnalyzer:
         adjacent: Set[int],
         segments: List[Segment],
         reach_ends: Sequence[ReachEnd],
+        seams: bool = False,
     ) -> bool:
+        # A seam end sits exactly on the cell edge and meets its neighbour's mirror there (spec 4.3).
+        if (
+            seams
+            and self.context.angular_limits == 1.0
+            and abs(abs(endpoint.angular) - 1.0) <= self.tolerance
+        ):
+            return True
         if any(self._cell_distance(endpoint, reach.point) <= self.tolerance for reach in reach_ends):
             return True
         others = [segment for segment in segments if segment[2] != vector_index]

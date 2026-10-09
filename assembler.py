@@ -96,7 +96,7 @@ class AssembledDesign:
         return [path.coords for path in self.paths]
 
     def base_mask(self) -> List[bool]:
-        return [path.role == "base" for path in self.paths]
+        return [path.role in ("base", "back") for path in self.paths]
 
     def ring_ids(self) -> List[int]:
         return [path.ring_index for path in self.paths]
@@ -319,8 +319,9 @@ class Assembler:
         for vector in instance.vectors:
             coords, radials = trace(context, vector, rotation)
             paths.append(PlacedPath(
-                ring_index, cell_index, position, node_path, role,
-                coords, radials, vector.closed, self.stroke_width,
+                ring_index, cell_index, position, node_path,
+                "back" if vector.layer == "back" else role,
+                coords, radials, vector.closed, context.stroke_for(vector.weight),
             ))
         return paths
 

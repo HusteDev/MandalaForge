@@ -156,3 +156,25 @@ def test_cells_of_a_ring_share_one_ring_stream():
         if n.ring_index == 1 and len(n.node_path) == 1:
             by_motif.setdefault((n.recipe.motif, n.position), set()).add(n.context.ring_stream_seed)
     assert by_motif and all(len(seeds) == 1 for seeds in by_motif.values())
+
+
+def test_detail_vector_is_traced_thinner(monkeypatch):
+    from motifs import find_motif
+    from motifs.geometry import CellPoint, SmartVector
+    from motifs.contract import build_instance
+    entry = find_motif("petal")
+    original = entry["generator"]
+
+    def with_detail(context):
+        instance = original(context)
+        outline = instance.vectors[0]
+        detail = SmartVector([CellPoint(0.3 + 0.3 * p.radial, p.angular * 0.5)
+                              for p in outline.points], closed=True, weight="detail")
+        return build_instance(context, list(instance.vectors) + [detail],
+                              reach_ends=instance.declaration.reach_ends,
+                              base_point=instance.declaration.base_point)
+
+    monkeypatch.setitem(entry, "generator", with_detail)
+    asm = build(manual_plan())
+    widths = {p.stroke_width for p in asm.paths if p.position is not None}
+    assert any(w == pytest.approx(0.6 * asm.stroke_width) for w in widths)
