@@ -76,6 +76,23 @@ def _parse_bool(raw, name):
     raise ValueError(f'{name} must be a boolean')
 
 
+FORCE_MOTIF_KEYS = ('name', 'position', 'role')
+
+
+def _parse_force_motif(raw):
+    """
+    Validate the optional {"name", "position", "role"} object that forces one motif onto every ring past
+    the innermost. Only its shape is checked here; the composer rejects an unknown name, position or role,
+    or a seam motif in both mode, with ValueError.
+    """
+    if raw is None:
+        return None
+    if (not isinstance(raw, dict) or set(raw) != set(FORCE_MOTIF_KEYS)
+            or not all(isinstance(raw[key], str) for key in FORCE_MOTIF_KEYS)):
+        raise ValueError('force_motif must be an object with string name, position and role')
+    return {key: raw[key] for key in FORCE_MOTIF_KEYS}
+
+
 def _required_int(params, name):
     """Read a required integer field; a missing or malformed value raises ValueError."""
     try:
@@ -102,6 +119,7 @@ def _generator_kwargs(params, seed):
         'vary_divisions': _parse_bool(params.get('vary_divisions'), 'vary_divisions'),
         'ring_divisions': _parse_ring_divisions(params.get('ring_divisions'), num_rings),
         'ring_seeds': _parse_ring_seeds(params.get('ring_seeds'), num_rings),
+        'force_motif': _parse_force_motif(params.get('force_motif')),
     }
 
 
@@ -128,7 +146,11 @@ def generate():
                           "true", "1", "false", "0", ""),
         "ring_divisions": list of num_rings ints from 4 to 24, or null (optional),
         "ring_seeds": {"<ring index>": int} or null (optional; applies earlier
-                      per-ring regenerations, keys outside the ring range are ignored)
+                      per-ring regenerations, keys outside the ring range are ignored),
+        "force_motif": {"name": str, "position": "centre" | "divider" | "both",
+                        "role": "base" | "slot" | "contact"} or null (optional; forces the
+                       motif on every ring past the innermost; a retired name such as
+                       "ring_band" resolves to its current motif)
     }
 
     Returns:

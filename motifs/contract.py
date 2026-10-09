@@ -145,6 +145,12 @@ def measure_slot(
     return inset_outline(context, outline, context.clearance_px(outline_weight, "outline"))
 
 
+def require_full_budget(context: MotifContext, name: str) -> None:
+    """A seam motif ends on the cell edges, so it needs the whole angular budget (spec 4.1)."""
+    if context.angular_limits != 1.0:
+        raise MotifError(f"{name} is a seam motif and needs the full angular budget, got {context.angular_limits}")
+
+
 def _default_base_point(points: Sequence[CellPoint]) -> CellPoint:
     return min(points, key=lambda p: (p.radial, abs(p.angular)))
 

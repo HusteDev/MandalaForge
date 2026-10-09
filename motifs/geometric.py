@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from motifs.contract import MotifInstance, build_instance
-from motifs.geometry import CellPoint, MotifContext, SmartVector, side_edge_containing_touch, side_touch_radial_within
+from motifs.contract import MotifError, MotifInstance, build_instance, require_full_budget
+from motifs.geometry import CellPoint, MotifContext, SmartVector, cubic_points, mirror_points
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
 
 
@@ -29,29 +29,62 @@ def generate_diamond(context: MotifContext) -> MotifInstance:
     return build_instance(context, [SmartVector(points, closed=True)])
 
 
-def generate_ring_band(context: MotifContext) -> MotifInstance:
-    # Any pair of draws overlaps radially within [0.45, 0.55], so neighbouring cells meet along a shared radial edge.
-    r1 = context.rng.uniform(0.30, 0.45)
-    r2 = context.rng.uniform(0.55, 0.70)
-    limit = context.angular_limits
-    # Side touch (spec 13.2): the side edges widen to contain the ring's side-touch radial, and the
-    # shared vertex is added on each.
-    r1, r2 = side_edge_containing_touch(context, r1, r2)
-    touch = side_touch_radial_within(context, r1, r2)
-    outline = [
-        CellPoint(r1, -limit),
-        CellPoint(r1, 0.0),
-        CellPoint(r1, limit),
-        *([CellPoint(touch, limit)] if touch is not None else []),
-        CellPoint(r2, limit),
-        CellPoint(r2, 0.0),
-        CellPoint(r2, -limit),
-        *([CellPoint(touch, -limit)] if touch is not None else []),
-    ]
-    vectors = [SmartVector(outline, closed=True)]
-    if context.complexity >= 0.5:
-        vectors.append(SmartVector([CellPoint(r1, 0.0), CellPoint(r2, 0.0)]))
-    return build_instance(context, vectors)
+LENS_STEPS = 8
+# The lens's half-width as a share of the angular budget, drawn from the ring stream.
+LENS_SHARE_RANGE = (0.2, 0.4)
+
+
+def _lens_half_width(context: MotifContext, share: float, radial: float) -> float:
+    """
+    The lens's half-width in angular units at its widest radial: `share`, clamped so the lens is at least
+    `clearance_px()` across and the face between it and the next cell's lens, over the seam, is too.
+    A cell too narrow for both gets the even split (0.5), which keeps the narrower of the two widest.
+    """
+    unit_px = context.angular_to_px(1.0, radial)
+    if unit_px <= 0:
+        return 0.5
+    least = context.clearance_px() / (2.0 * unit_px)
+    if least > 1.0 - least:
+        return 0.5
+    return max(least, min(1.0 - least, share))
+
+
+def _lens(inner: float, outer: float, half_width: float) -> List[CellPoint]:
+    """
+    A closed, mirror-symmetric lens on the axis with pointed tips at `(inner, 0)` and `(outer, 0)`.
+
+    Each side is one cubic whose controls sit a third of the way in from each tip at the same angular,
+    so the side runs straight out in radial and peaks at exactly `half_width` (0.75 of the controls'
+    angular) at the middle radial.
+    """
+    third = (outer - inner) / 3.0
+    reach = half_width / 0.75
+    right = cubic_points(
+        CellPoint(inner, 0.0), CellPoint(inner + third, reach), CellPoint(outer - third, reach),
+        CellPoint(outer, 0.0), LENS_STEPS,
+    )
+    left = mirror_points(right)[1:-1][::-1]
+    return right + left
+
+
+def generate_band(context: MotifContext) -> MotifInstance:
+    require_full_budget(context, "band")
+    ring = context.ring_rng
+    # Every seam-deciding value comes from the ring stream, so every cell of the ring draws the same band.
+    r1 = ring.uniform(0.25, 0.45)
+    r2 = ring.uniform(0.55, 0.75)
+    share = ring.uniform(*LENS_SHARE_RANGE)
+
+    low, high = context.radial_limits
+    r1, r2 = max(low, r1), min(high, r2)
+    if r2 <= r1:
+        raise MotifError("band does not fit its radial limits")
+    # Two seam arcs, each with a vertex on the axis where the lens tip meets it exactly.
+    arcs = [SmartVector([CellPoint(r, -1.0), CellPoint(r, 0.0), CellPoint(r, 1.0)]) for r in (r1, r2)]
+    # The lens ties the arcs together and cuts the annulus between them into faces, one per cell side.
+    half_width = _lens_half_width(context, share, (r1 + r2) / 2.0)
+    lens = SmartVector(_lens(r1, r2, half_width), closed=True)
+    return build_instance(context, [*arcs, lens], seams=True)
 
 
 GEOMETRIC_MOTIFS: List[Dict] = [
@@ -73,14 +106,14 @@ GEOMETRIC_MOTIFS: List[Dict] = [
         "slot_estimate": None,
     },
     {
-        "name": "ring_band",
+        "name": "band",
         "category": "geometric",
-        "generator": generate_ring_band,
+        "generator": generate_band,
         "positions": ["centre", "divider"],
         "roles": ["base"],
         "touch": True,
-        "side_touch_heights": ("mid",),
-        "seams": False,
+        "side_touch_heights": (),
+        "seams": True,
         "embellishments": (),
         "spans_cell": True,
         "min_cell_width_px": 0.0,

@@ -157,3 +157,20 @@ def test_tips_nestled_into_each_others_rings_resolve_with_a_wide_touch_disc(job)
     # crossing test judged them: pull-backs traded the crossing between the rings until both ran out ("still
     # crosses or crowds"), or left the tips beside each other in a slit no pen fits.
     assert run_case(job)["status"] == "PASS"
+
+
+@pytest.mark.parametrize("name, category", [("band", "geometric"), ("scallop", "botanical")])
+def test_seam_motifs_skip_both_mode(name, category):
+    job = (name, category, (8, 8), 0.5, 10, "both", "base", 1, False)
+    result = run_case(job)
+    assert result["status"] == "SKIP" and "seam" in result["detail"]
+
+
+def test_run_case_passes_for_band_base():
+    job = ("band", "geometric", (8, 8, 8, 12), 0.5, 10, "centre", "base", 1, False)
+    assert run_case(job)["status"] == "PASS"
+
+
+@pytest.mark.parametrize("name", ["band", "scallop"])
+def test_property_checks_pass_for_seam_motifs(name):
+    assert all(property_checks(find_motif(name)).values())

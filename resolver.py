@@ -680,7 +680,11 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
     if length <= ON_INK_PX:
         return None, None
     far = (start[0] + direction[0] * length, start[1] + direction[1] * length)
-    exclude = lambda path: id(path) in subtree_ids
+    # An inward reach is the ring's contact with the structure inside it, so it never lands on ink of a ring
+    # further out: that ring is resolved later, its inward overflow may yet be pulled back off this reach, and
+    # it is not known to reach the structure itself.
+    outward_ink = lambda path: reach_end.direction == "inward" and path.ring_index > node.ring_index
+    exclude = lambda path: id(path) in subtree_ids or outward_ink(path)
     ray = LineString([start, far])
     hit = _landing(asm, ray, exclude)
     if hit is None:

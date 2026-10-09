@@ -418,7 +418,11 @@ def test_clearance_is_waived_around_a_vertex_the_run_shares_with_other_ink():
     assert resolver._too_close(asm, [run], 1, "outward")
 
 def test_grazing_reach_runs_along_its_ray_then_bends_onto_the_ink():
-    a = placed(shallow_plan())
+    plan = shallow_plan()
+    # Ring seed 10 draws ring 0's band with its outer arc 7.3px below the stem's anchor, so the stroke beside
+    # the ray (3.9px on) is the first ink the reach comes near.
+    plan.rings[0].ring_seed = 10
+    a = placed(plan)
     node, short, point, rotation = stem_of_cell_zero(a)
     anchor = lowest_vertex(node.paths[0])
     # A short stroke 3px beside the reach's ray (which runs toward the centre along y = anchor y), its end 3.9px on.

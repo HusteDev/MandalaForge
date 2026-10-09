@@ -186,8 +186,9 @@ def _once_per_wedge_stems(g):
 def test_base_symmetry_one_still_gets_three_inward_contacts_per_ring():
     # With ring_divisions (7, 12) the base symmetry is 1, so "once per wedge" meant one stem for the whole ring and
     # the band between rings could be one face running round the centre. Ring 2's stem sits on the first of its
-    # three sequence entries, so the contacts are spaced among the four cells holding it.
-    g = DesignGenerator(seed=20260821, ring_divisions=[7, 12], complexity=0.5, min_pattern_size=10,
+    # three sequence entries, so the contacts are spaced among the four cells holding it. (Seed 0: since band and
+    # scallop became seam motifs, seed 20260821 no longer plans a once-per-wedge stem on a three-entry ring.)
+    g = DesignGenerator(seed=0, ring_divisions=[7, 12], complexity=0.5, min_pattern_size=10,
                         categories=["botanical", "geometric"])
     g.generate()
     report = g.last_validation_result
@@ -195,7 +196,7 @@ def test_base_symmetry_one_still_gets_three_inward_contacts_per_ring():
     assert report.is_valid and report.stats["num_encircling_regions"] == 0, report.issues[:5]
     stems = _once_per_wedge_stems(g)
     assert stems and all(len(cells) >= 3 for cells in stems.values())
-    assert stems[2] == [0, 3, 6, 9]
+    assert len(g.plan.rings[2].sequence) == 3 and stems[2] == [0, 3, 6, 9]
 
 
 def test_neighbouring_cells_of_an_inexact_rotation_share_side_vertices_exactly():
@@ -218,13 +219,14 @@ def test_validator_measures_a_face_polygonize_returns_invalid(seed):
 
 
 def test_base_symmetry_four_keeps_one_inward_contact_per_wedge():
-    g = DesignGenerator(seed=20260821, ring_divisions=[8, 12], complexity=0.5, min_pattern_size=10,
+    # Seed 12: since band and scallop became seam motifs, seed 20260821 plans no once-per-wedge stem here.
+    g = DesignGenerator(seed=12, ring_divisions=[8, 12], complexity=0.5, min_pattern_size=10,
                         categories=["botanical", "geometric"])
     g.generate()
     report = g.last_validation_result
     assert g.plan.base_symmetry == 4
     assert report.is_valid and report.stats["num_encircling_regions"] == 0, report.issues[:5]
-    assert _once_per_wedge_stems(g) == {1: [0, 3, 6, 9]}
+    assert _once_per_wedge_stems(g) == {3: [0, 3, 6, 9]}
 
 
 def test_varied_division_design_is_deterministic():
@@ -248,3 +250,18 @@ def test_vary_twenty_two_divisions_uses_symmetry_eleven_and_finishes_quickly():
     assert all(r.divisions in (11, 22) for r in g.plan.rings)
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
     assert elapsed < 10, f"generation took {elapsed:.1f}s"
+
+
+@pytest.mark.parametrize("divisions", [[7, 7, 14], [8, 8, 8, 12]])
+def test_band_rings_meet_at_their_seams(divisions):
+    # Band-only rings (geometric gives ring 0 a band too): the seams meet under inexact rotations (360/7),
+    # the lens ties join each band's arcs and cut its annulus, so nothing floats or encircles the centre.
+    g = DesignGenerator(seed=5, num_rings=len(divisions), ring_divisions=divisions, categories=["geometric"],
+                        force_motif={"name": "band", "role": "base", "position": "centre"})
+    g.generate()
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+    summary = g.validation_summary()
+    assert summary["dangling_end_count"] == 0 and summary["floating_base_count"] == 0
+    assert g.last_validation_result.stats["num_encircling_regions"] == 0
+    assert all({n.recipe.motif for n in g.assembled.nodes if n.ring_index == r and n.parent is None} == {"band"}
+               for r in range(len(divisions)))

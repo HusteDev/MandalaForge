@@ -138,6 +138,15 @@ class MotifContext:
             self.center[1] + radius * math.sin(angle),
         )
 
+    def to_cell(self, point: PointTuple, rotation_deg: float = 0.0) -> CellPoint:
+        """The cell point of a canvas position in the cell turned by `rotation_deg`; inverts `to_cartesian`."""
+        dx, dy = point[0] - self.center[0], point[1] - self.center[1]
+        angle = math.remainder(math.degrees(math.atan2(dy, dx)) - rotation_deg, 360.0)
+        return CellPoint(
+            radial=(math.hypot(dx, dy) - self.inner_radius) / self.ring_depth,
+            angular=angle / self.half_angle,
+        )
+
     def _segment_steps(self, start: CellPoint, end: CellPoint) -> int:
         """
         How many straight pieces a cell-space segment must be drawn with.

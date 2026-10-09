@@ -84,7 +84,7 @@ def test_force_motif_disables_fallback_but_keeps_the_stem_repair():
     assert node.motif == "petal" and len(node.attachments) == 1
 
 def test_style_weights_categories_instead_of_filtering_them():
-    # Composer seed 2 gives ring 0 a scallop, so the variety filter leaves ring_band allowed in ring 1.
+    # Composer seed 2 gives ring 0 a scallop, so the variety filter leaves band allowed in ring 1.
     c = Composer(2, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
     c.style = {"categories": ["botanical"], "positions": "centre"}
     bases = set()
@@ -93,7 +93,7 @@ def test_style_weights_categories_instead_of_filtering_them():
             for node in (e.centre, e.divider):
                 if node is not None:
                     bases.add(node.motif)
-    assert "ring_band" in bases
+    assert "band" in bases
 
 def test_regenerating_one_ring_does_not_reshuffle_its_neighbours():
     settings = dict(categories=["botanical", "geometric"])
@@ -251,12 +251,12 @@ def test_contact_mode_falls_back_to_overflow_then_stem(monkeypatch):
     real = composer_module.find_motif
     def fake(name):
         entry = real(name)
-        if name in ("petal", "scallop"):
+        if name == "petal":
             return {**entry, "side_touch_heights": ()}
         return entry
     monkeypatch.setattr(composer_module, "find_motif", fake)
     c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
-    overflow = [CellEntry(CellRecipe("petal", "botanical"), CellRecipe("scallop", "botanical"))]
+    overflow = [CellEntry(CellRecipe("petal", "botanical"), CellRecipe("petal", "botanical"))]
     assert c._contact_mode(1, overflow) == "overflow"
     assert c._contact_mode(0, overflow) == "side"
     c._ensure_contact(1, overflow, "overflow")
@@ -315,7 +315,7 @@ def test_downgrade_from_side_mode_clears_once_per_wedge(monkeypatch):
     real = composer_module.find_motif
     def fake(name):
         entry = real(name)
-        if name in ("petal", "ring_band"):
+        if name == "petal":
             return {**entry, "side_touch_heights": ()}
         return entry
     monkeypatch.setattr(composer_module, "find_motif", fake)
@@ -325,7 +325,8 @@ def test_downgrade_from_side_mode_clears_once_per_wedge(monkeypatch):
     ring = RingPlan(1, 12, 1.0, seq, 1, contact_mode="side")
     assert seq[0].centre.attachments[0].once_per_wedge
     assert c.replace_node(ring, 1, "centre", "generation") is True
-    assert ring.sequence[1].centre.motif in ("petal", "ring_band")
+    # Band is a seam motif, never a substitute in a two-entry sequence, so the only other base is petal.
+    assert ring.sequence[1].centre.motif == "petal"
     assert ring.contact_mode == "stem"
     nodes = _base_nodes(ring)
     assert not any(a.once_per_wedge for n in nodes for a in n.attachments)
@@ -448,20 +449,24 @@ def test_disjoint_ring_falls_back_to_overflow_then_stem(monkeypatch):
         entry = real(name)
         if name == "petal":
             return {**entry, "side_touch_heights": ("base",)}
+        if name == "leaf":
+            return {**entry, "side_touch_heights": ("mid",), "max_overflow_inward": 0.2}
         return entry
     monkeypatch.setattr(composer_module, "find_motif", fake)
     c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
-    # petal (base only) and scallop (mid only) share no height, but both overflow inward.
-    seq = [CellEntry(CellRecipe("petal", "botanical"), CellRecipe("scallop", "botanical"))]
+    # petal (base only) and leaf (made mid only, with inward overflow) share no height, but both overflow inward.
+    seq = [CellEntry(CellRecipe("petal", "botanical"), None), CellEntry(CellRecipe("leaf", "botanical"), None)]
     assert c._contact_mode(1, seq) == "overflow"
-    seq = [CellEntry(CellRecipe("petal", "botanical"), CellRecipe("ring_band", "geometric"))]
+    # The safe band touches at mid height only and has no inward overflow.
+    seq = [CellEntry(CellRecipe("petal", "botanical"), CellRecipe("botanical_safe_band", "botanical"))]
     assert c._contact_mode(1, seq) == "stem"
 
 
 def test_floating_node_in_base_height_ring_tries_only_base_capable_bases():
     from composer import CellRecipe, CellEntry
     # The first floating repair of a petal in a side ring substitutes another base touching at the
-    # ring's height: only leaf at base height, while mid height also admits ring_band.
+    # ring's height. Band is a seam motif, so it qualifies at either height; it is a candidate because the
+    # sequence has one entry (a seam motif fills its whole position).
     picked = {"base": set(), "mid": set()}
     for ring_seed in range(30):
         for height in ("base", "mid"):
@@ -471,7 +476,7 @@ def test_floating_node_in_base_height_ring_tries_only_base_capable_bases():
             assert c.replace_node(ring, 0, "centre", "floating") is True
             picked[height].add(ring.sequence[0].centre.motif)
             assert ring.contact_mode == "side" and ring.touch_height == height
-    assert picked == {"base": {"leaf"}, "mid": {"leaf", "ring_band"}}
+    assert picked == {"base": {"leaf", "band"}, "mid": {"leaf", "band"}}
 
 
 def test_substitute_that_loses_the_ring_height_leaves_side_mode():
@@ -487,18 +492,7 @@ def test_substitute_that_loses_the_ring_height_leaves_side_mode():
     raise AssertionError("no substitute without the base height was reached")
 
 
-@pytest.fixture
-def seam_band(monkeypatch):
-    """Registers ring_band as a seam motif, as Task 5 will."""
-    import composer as composer_module
-    real_find, real_for = composer_module.find_motif, composer_module.motifs_for_categories
-    def as_seam(entry):
-        if entry is not None and entry["name"] == "ring_band":
-            return {**entry, "seams": True, "side_touch_heights": ()}
-        return entry
-    monkeypatch.setattr(composer_module, "find_motif", lambda name: as_seam(real_find(name)))
-    monkeypatch.setattr(composer_module, "motifs_for_categories",
-                        lambda cats: [as_seam(e) for e in real_for(cats)])
+SEAM_NAMES = {"band", "scallop"}
 
 
 def _seam_plans():
@@ -508,7 +502,7 @@ def _seam_plans():
                                                         categories=["botanical", "geometric"])).plan()
 
 
-def test_seam_motif_at_entry_zero_fills_its_whole_position(seam_band):
+def test_seam_motif_at_entry_zero_fills_its_whole_position():
     copied = 0
     for p in _seam_plans():
         for r in p.rings:
@@ -516,62 +510,77 @@ def test_seam_motif_at_entry_zero_fills_its_whole_position(seam_band):
                 nodes = [getattr(e, position) for e in r.sequence]
                 if nodes[0] is None:
                     continue
-                if nodes[0].motif == "ring_band":
-                    assert all(n.motif == "ring_band" for n in nodes)
+                if nodes[0].motif in SEAM_NAMES:
+                    assert all(n.motif == nodes[0].motif for n in nodes)
                     copied += len(nodes) > 1
                 else:
-                    assert all(n.motif != "ring_band" for n in nodes[1:])
+                    assert all(n.motif not in SEAM_NAMES for n in nodes[1:])
     assert copied > 0
 
 
-def test_seam_motifs_are_not_candidates_in_both_mode(seam_band):
+def test_seam_motifs_are_not_candidates_in_both_mode():
     both = 0
     for p in _seam_plans():
         for r in p.rings:
             if r.centre_share < 1.0:
                 both += 1
-                assert all(n.motif != "ring_band" for n in _base_nodes(r))
+                assert all(n.motif not in SEAM_NAMES for n in _base_nodes(r))
     assert both > 0
 
 
-def test_seam_ring_is_side_at_any_height(seam_band):
+def test_seam_ring_is_side_at_any_height():
     heights = set()
     for p in _seam_plans():
         for r in p.rings[1:]:
-            if {n.motif for n in _base_nodes(r)} == {"ring_band"}:
+            if {n.motif for n in _base_nodes(r)} <= SEAM_NAMES:
                 assert r.contact_mode == "side"
                 heights.add(r.touch_height)
     assert heights == {"base", "mid"}
 
 
-def test_replace_node_on_a_seam_node_replaces_every_entry(seam_band):
+def test_replace_node_on_a_seam_node_replaces_every_entry():
     from composer import CellRecipe, CellEntry
     c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
-    seq = [CellEntry(CellRecipe("ring_band", "geometric"), None) for _ in range(3)]
+    seq = [CellEntry(CellRecipe("band", "geometric"), None) for _ in range(3)]
     ring = RingPlan(1, 12, 1.0, seq, 1, contact_mode="side", touch_height="mid")
     assert c.replace_node(ring, 1, "centre", "generation") is True
     names = [e.centre.motif for e in ring.sequence]
-    assert names[0] != "ring_band" and len(set(names)) == 1
+    assert names[0] != "band" and len(set(names)) == 1
     assert len({id(e.centre) for e in ring.sequence}) == 3
 
 
-def test_replace_node_falls_back_in_every_entry_of_a_seam_position(seam_band):
+def test_replace_node_falls_back_in_every_entry_of_a_seam_position():
     from composer import CellRecipe, CellEntry
     c = Composer(1, GEOM, ComposerSettings(categories=["geometric"]))
-    seq = [CellEntry(CellRecipe("ring_band", "geometric"), None) for _ in range(2)]
+    seq = [CellEntry(CellRecipe("band", "geometric"), None) for _ in range(2)]
     ring = RingPlan(1, 12, 1.0, seq, 1, contact_mode="side", touch_height="mid")
     assert c.replace_node(ring, 0, "centre", "generation") is True
     assert all(e.centre.is_fallback for e in ring.sequence)
 
 
-def test_non_seam_substitute_never_brings_a_seam_into_a_longer_sequence(seam_band):
+def test_non_seam_substitute_never_brings_a_seam_into_a_longer_sequence():
     from composer import CellRecipe, CellEntry
     c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
     seq = [CellEntry(CellRecipe("petal", "botanical"), None), CellEntry(CellRecipe("leaf", "botanical"), None)]
     ring = RingPlan(1, 12, 1.0, seq, 1, contact_mode="side", touch_height="mid")
     steps = 0
     while c.replace_node(ring, 1, "centre", "generation") and not ring.sequence[1].centre.is_fallback:
-        assert ring.sequence[1].centre.motif != "ring_band"
+        assert ring.sequence[1].centre.motif not in SEAM_NAMES
         assert ring.sequence[0].centre.motif == "petal"
         steps += 1
     assert steps > 0 and ring.sequence[1].centre.is_fallback
+
+
+@pytest.mark.parametrize("role", ["base", "slot", "contact"])
+def test_forced_seam_motif_is_rejected_in_both_mode(role):
+    for name in ("band", "ring_band", "scallop"):
+        with pytest.raises(ValueError, match="both"):
+            Composer(1, GEOM, ComposerSettings(force_motif={"name": name, "position": "both", "role": role}))
+
+
+def test_forced_seam_base_fills_its_whole_position():
+    for seed in range(10):
+        p = plan_for(seed, complexity=1.0, force_motif={"name": "band", "position": "centre", "role": "base"})
+        for r in p.rings[1:]:
+            assert all(e.centre.motif == "band" and e.divider is None for e in r.sequence)
+            assert r.contact_mode == "side"

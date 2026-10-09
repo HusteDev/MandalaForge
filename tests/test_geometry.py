@@ -85,3 +85,12 @@ def test_insert_vertex_on_closing_segment():
     out = insert_vertex_on_outline(square, True, CellPoint(0.5, -1))
     assert out[-1] == CellPoint(0.5, -1) and len(out) == 5
     assert insert_vertex_on_outline(square, False, CellPoint(0.5, -1)) == square
+
+
+def test_to_cell_inverts_to_cartesian(cell_kwargs):
+    ctx = MotifContext(**cell_kwargs)
+    for point in (CellPoint(0.0, 0.0), CellPoint(0.37, -1.0), CellPoint(1.25, 0.6), CellPoint(-0.2, 0.99)):
+        for rotation in (0.0, 47.5, 200.0):
+            back = ctx.to_cell(ctx.to_cartesian(point, rotation), rotation)
+            assert back.radial == pytest.approx(point.radial, abs=1e-12)
+            assert back.angular == pytest.approx(point.angular, abs=1e-12)

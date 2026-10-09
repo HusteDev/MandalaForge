@@ -30,6 +30,11 @@ def test_motif_is_deterministic(entry, cell_kwargs):
 @pytest.mark.parametrize("entry", all_entries(), ids=lambda e: e["name"])
 def test_motif_respects_narrow_limits(entry, cell_kwargs):
     ctx = make_ctx(cell_kwargs, 3, radial_limits=(0.0, 1.0), angular_limits=0.5)
+    if entry["seams"]:
+        # A seam motif needs the full angular budget (spec 4.1); it refuses a narrower one.
+        with pytest.raises(MotifError):
+            generate(entry, ctx, cell_kwargs)
+        return
     inst = generate(entry, ctx, cell_kwargs)
     assert all(-0.03 <= p.radial <= 1.03 and abs(p.angular) <= 0.53 for v in inst.vectors for p in v.points)
 
@@ -49,7 +54,7 @@ def test_declared_slot_is_present_at_default_size(entry, cell_kwargs):
 def test_registry_lookup():
     assert find_motif("petal")["category"] == "botanical"
     assert find_motif("nope") is None
-    assert {e["name"] for e in motifs_for_categories(["geometric"])} == {"diamond", "ring_band"}
+    assert {e["name"] for e in motifs_for_categories(["geometric"])} == {"diamond", "band"}
     assert safe_motif("celtic")["name"] == "celtic_safe_band"
 
 def test_diamond_requires_slot(cell_kwargs):
@@ -144,12 +149,111 @@ def test_leaf_midrib_touches_outline(cell_kwargs):
     assert midrib.points[-1] in outline.points
 
 
-def test_ring_band_draws_overlap_in_shared_range(cell_kwargs):
-    gen = find_motif("ring_band")["generator"]
-    for seed in range(20):
-        pts = gen(make_ctx(cell_kwargs, seed)).vectors[0].points
-        rs = sorted({p.radial for p in pts})
-        assert rs[0] <= 0.45 and rs[-1] >= 0.55
+@pytest.mark.parametrize("name", ["band", "scallop"])
+def test_seam_ends_sit_on_the_cell_edges(name, cell_kwargs):
+    inst = find_motif(name)["generator"](make_ctx(cell_kwargs, 4, ring_stream_seed=77))
+    ends = [p for v in inst.vectors if not v.closed for p in (v.points[0], v.points[-1])]
+    assert ends and all(abs(p.angular) == 1.0 for p in ends)
+
+
+@pytest.mark.parametrize("name", ["band", "scallop"])
+def test_every_cell_draws_the_same_seams(name, cell_kwargs):
+    a = find_motif(name)["generator"](make_ctx(cell_kwargs, 1, ring_stream_seed=77))
+    b = find_motif(name)["generator"](make_ctx(cell_kwargs, 2, ring_stream_seed=77))
+    assert [v.points for v in a.vectors] == [v.points for v in b.vectors]
+
+
+def test_ring_band_alias():
+    assert find_motif("ring_band") is find_motif("band")
+
+
+@pytest.mark.parametrize("name", ["band", "scallop"])
+def test_seam_motifs_declare_seams_and_no_overflow(name):
+    entry = find_motif(name)
+    assert entry["seams"] and entry["spans_cell"] and entry["side_touch_heights"] == ()
+    assert entry["max_overflow_inward"] == 0.0 and entry["max_overflow_outward"] == 0.0
+
+
+def test_band_arcs_are_constant_radial_in_their_ranges(cell_kwargs):
+    for stream in range(30):
+        inst = find_motif("band")["generator"](make_ctx(cell_kwargs, 1, ring_stream_seed=stream))
+        arcs = [v for v in inst.vectors if not v.closed]
+        assert len(arcs) == 2
+        (r1,), (r2,) = ({p.radial for p in arc.points} for arc in arcs)
+        assert 0.25 <= r1 <= 0.45 and 0.55 <= r2 <= 0.75
+        for arc in arcs:
+            assert arc.points[0].angular == -1.0 and arc.points[-1].angular == 1.0
+
+
+def test_band_lens_ties_the_arcs_at_exact_shared_vertices(cell_kwargs):
+    for stream in range(30):
+        ctx = make_ctx(cell_kwargs, 1, ring_stream_seed=stream)
+        inst = find_motif("band")["generator"](ctx)
+        inner, outer = (v for v in inst.vectors if not v.closed)
+        (lens,) = (v for v in inst.vectors if v.closed)
+        r1, r2 = inner.points[0].radial, outer.points[0].radial
+        assert CellPoint(r1, 0.0) in inner.points and CellPoint(r1, 0.0) in lens.points
+        assert CellPoint(r2, 0.0) in outer.points and CellPoint(r2, 0.0) in lens.points
+        # Mirror-symmetric about the axis, and between the arcs.
+        key = lambda sign: sorted((round(p.radial, 12), round(sign * p.angular, 12) + 0.0) for p in lens.points)
+        assert key(1) == key(-1)
+        assert all(r1 <= p.radial <= r2 for p in lens.points)
+
+
+def test_band_lens_leaves_both_faces_colourable(cell_kwargs):
+    for stream in range(30):
+        ctx = make_ctx(cell_kwargs, 1, ring_stream_seed=stream)
+        inst = find_motif("band")["generator"](ctx)
+        (lens,) = (v for v in inst.vectors if v.closed)
+        widest = max(lens.points, key=lambda p: p.angular)
+        need = ctx.clearance_px()
+        # Across the lens, and across the face between this lens and the next one over the seam.
+        assert ctx.angular_to_px(2 * widest.angular, widest.radial) >= need - 1e-9
+        assert ctx.angular_to_px(2 * (1.0 - widest.angular), widest.radial) >= need - 1e-9
+
+
+def test_band_lens_falls_back_to_an_even_split_when_the_cell_is_too_narrow(cell_kwargs):
+    ctx = make_ctx(cell_kwargs, 1, ring_stream_seed=3, wedge_angle=6.0)
+    assert ctx.cell_width_px(0.5) < 2 * ctx.clearance_px()
+    (lens,) = (v for v in find_motif("band")["generator"](ctx).vectors if v.closed)
+    assert max(p.angular for p in lens.points) == pytest.approx(0.5)
+
+
+def test_scallop_lobe_is_a_page_space_circle_through_its_ends_and_apex(cell_kwargs):
+    for stream in range(30):
+        ctx = make_ctx(cell_kwargs, 1, ring_stream_seed=stream)
+        (lobe,) = find_motif("scallop")["generator"](ctx).vectors
+        rb = lobe.points[0].radial
+        assert lobe.points[0] == CellPoint(rb, -1.0) and lobe.points[-1] == CellPoint(rb, 1.0)
+        assert 0.3 <= rb <= 0.5
+        apex = max(lobe.points, key=lambda p: abs(p.radial - rb))
+        assert apex.angular == pytest.approx(0.0, abs=1e-9)
+        assert 0.0 < abs(apex.radial - rb) <= 0.45 + 1e-9
+        pts = [ctx.to_cartesian(p) for p in lobe.points]
+        # The circle through the two ends and the apex; every sample lies on it.
+        (ax, ay), (bx, by), (cx, cy) = pts[0], ctx.to_cartesian(apex), pts[-1]
+        d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+        ux = ((ax**2 + ay**2) * (by - cy) + (bx**2 + by**2) * (cy - ay) + (cx**2 + cy**2) * (ay - by)) / d
+        uy = ((ax**2 + ay**2) * (cx - bx) + (bx**2 + by**2) * (ax - cx) + (cx**2 + cy**2) * (bx - ax)) / d
+        radius = math.hypot(ax - ux, ay - uy)
+        assert all(abs(math.hypot(x - ux, y - uy) - radius) < 1e-6 for x, y in pts)
+
+
+def test_scallop_draws_both_directions(cell_kwargs):
+    directions = set()
+    for stream in range(30):
+        (lobe,) = find_motif("scallop")["generator"](make_ctx(cell_kwargs, 1, ring_stream_seed=stream)).vectors
+        directions.add(max(p.radial for p in lobe.points) > lobe.points[0].radial + 1e-9)
+    assert directions == {True, False}
+
+
+def test_scallop_lobe_shrinks_to_stay_inside_a_narrow_cell(cell_kwargs):
+    # 24 divisions on a ring-0-like geometry: an unclamped outward lobe overhangs the cell edge.
+    for stream in range(30):
+        ctx = make_ctx(cell_kwargs, 1, ring_stream_seed=stream, wedge_angle=15.0,
+                       inner_radius=20.0, outer_radius=82.0)
+        (lobe,) = find_motif("scallop")["generator"](ctx).vectors
+        assert all(abs(p.angular) <= 1.0 + 1e-9 for p in lobe.points)
 
 
 def test_stem_is_a_pure_reach(cell_kwargs):
@@ -179,9 +283,6 @@ def test_leaf_midrib_is_dropped_outside_a_slot_when_the_halves_are_too_thin(cell
 
 # ----- revision 2: side touch and ring fill ---------------------------------
 
-SIDE_TOUCH_NAMES = {"petal", "leaf", "scallop", "ring_band", "botanical_safe_band"}
-
-
 def has_vertex(inst, radial, angular, tol=1e-9):
     return any(
         abs(p.radial - radial) <= tol and abs(p.angular - angular) <= tol
@@ -198,10 +299,10 @@ def test_registry_declares_touch_heights_and_seams():
 def test_registry_phase_one_touch_heights():
     declared = {e["name"]: tuple(e["side_touch_heights"]) for e in all_entries()}
     assert declared == {
-        "petal": ("base", "mid"), "leaf": ("base", "mid"), "scallop": ("mid",), "stem": (),
-        "diamond": (), "ring_band": ("mid",), "botanical_safe_band": ("mid",),
+        "petal": ("base", "mid"), "leaf": ("base", "mid"), "scallop": (), "stem": (),
+        "diamond": (), "band": (), "botanical_safe_band": ("mid",),
     }
-    assert not any(e["seams"] for e in all_entries())
+    assert {e["name"] for e in all_entries() if e["seams"]} == {"band", "scallop"}
     assert all(e["embellishments"] == () for e in all_entries())
 
 
@@ -225,20 +326,7 @@ def test_every_side_touch_entry_meets_the_budget_at_the_side_touch_radial(entry,
         assert all(abs(p.angular) <= 0.5 + 1e-12 for v in inst.vectors for p in v.points)
 
 
-def test_scallop_side_vertex_falls_back_to_the_nearest_end_when_the_limits_clamp_its_edge(cell_kwargs):
-    # The side edge widens to contain the side-touch radial, but never past the radial limits; when they
-    # clamp it short of the radial, the edge's nearest end serves as the side vertex.
-    gen = find_motif("scallop")["generator"]
-    for seed in range(10):
-        for limits, radial in (((0.0, 0.55), 0.95), ((0.25, 1.0), 0.05)):
-            plain = gen(make_ctx(cell_kwargs, seed, radial_limits=limits)).vectors[0].points
-            inst = gen(make_ctx(cell_kwargs, seed, radial_limits=limits, side_touch_radial=radial))
-            side = [p.radial for p in inst.vectors[0].points if abs(p.angular - 1.0) <= 1e-12]
-            assert not min(side) < radial < max(side)
-            assert has_vertex(inst, max(side) if radial > 0.5 else min(side), 1.0)
-
-
-@pytest.mark.parametrize("name", ["ring_band", "botanical_safe_band", "scallop"])
+@pytest.mark.parametrize("name", ["botanical_safe_band"])
 def test_band_side_edges_contain_the_side_touch_radial_strictly(name, cell_kwargs):
     # Spec 13.2 (fix round): every band's side edge contains the ring's side-touch radial, so bands drawn
     # from different sequence entries share the side vertex.
@@ -316,17 +404,14 @@ def test_ring_fill_overflow_allowances():
     assert find_motif("petal")["max_overflow_inward"] == 0.5
     assert find_motif("petal")["max_overflow_outward"] == 0.3
     assert find_motif("leaf")["max_overflow_outward"] == 0.2
-    assert find_motif("scallop")["max_overflow_inward"] == 0.4
+    assert find_motif("scallop")["max_overflow_inward"] == 0.0
 
 
-def test_petal_and_scallop_dip_below_the_ring_with_room_to(cell_kwargs):
+def test_petal_dips_below_the_ring_with_room_to(cell_kwargs):
     wide = (-0.5, 1.3)
     petal_dips = [min(p.radial for p in find_motif("petal")["generator"](
         make_ctx(cell_kwargs, s, radial_limits=wide)).vectors[0].points) for s in range(60)]
-    scallop_dips = [min(p.radial for p in find_motif("scallop")["generator"](
-        make_ctx(cell_kwargs, s, radial_limits=wide)).vectors[0].points) for s in range(60)]
     assert min(petal_dips) < -0.25 and min(petal_dips) >= -0.5
-    assert min(scallop_dips) < -0.3 and min(scallop_dips) >= -0.4
 
 
 @pytest.mark.parametrize("name", ["petal", "diamond", "leaf"])

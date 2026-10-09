@@ -237,6 +237,9 @@ class Composer:
                 raise ValueError(f"unknown forced position: {force['position']}")
             if force["role"] not in FORCE_ROLES:
                 raise ValueError(f"unknown forced role: {force['role']}")
+            if force["position"] == "both" and find_motif(force["name"]).get("seams", False):
+                # A seam motif needs its whole cell and position (spec 4.1), which `both` mode never gives.
+                raise ValueError(f"seam motif {force['name']} cannot be forced in both mode")
         counts = [settings.num_divisions, *(settings.ring_divisions or [])]
         for count in counts:
             if isinstance(count, bool) or not isinstance(count, int) or not MIN_DIVISIONS <= count <= MAX_DIVISIONS:

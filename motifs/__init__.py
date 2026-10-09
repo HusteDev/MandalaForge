@@ -10,13 +10,17 @@ from motifs.geometric import GEOMETRIC_MOTIFS
 
 MOTIFS: List[Dict] = [*BOTANICAL_MOTIFS, *GEOMETRIC_MOTIFS]
 
+# Retired names that still resolve, so older plans and requests keep working.
+MOTIF_ALIASES: Dict[str, str] = {"ring_band": "band"}
+
 
 def motifs_for_categories(categories: List[str]) -> List[Dict]:
     return [entry for entry in MOTIFS if entry["category"] in categories]
 
 
 def find_motif(name: str) -> Optional[Dict]:
+    name = MOTIF_ALIASES.get(name, name)
     return next((entry for entry in MOTIFS if entry["name"] == name), None)
 
 
-__all__ = ["MOTIFS", "motifs_for_categories", "find_motif", "safe_motif"]
+__all__ = ["MOTIFS", "MOTIF_ALIASES", "motifs_for_categories", "find_motif", "safe_motif"]

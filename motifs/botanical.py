@@ -5,14 +5,13 @@ from __future__ import annotations
 import math
 from typing import Dict, List, Optional
 
-from motifs.contract import MotifError, MotifInstance, ReachEnd, build_instance
+from motifs.contract import MotifError, MotifInstance, ReachEnd, build_instance, require_full_budget
 from motifs.geometry import (
     CellPoint,
     MotifContext,
     SmartVector,
     mirror_points,
     quad_points,
-    side_edge_containing_touch,
     side_touch_radial_within,
 )
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
@@ -215,29 +214,63 @@ def generate_leaf(context: MotifContext) -> MotifInstance:
     return build_instance(context, vectors, base_point=vectors[0].points[0])
 
 
+SCALLOP_STEPS = 24
+# Each step toward the base radial keeps this share of the lobe's height.
+SCALLOP_SHRINK = 0.9
+SCALLOP_MAX_SHRINKS = 100
+
+
+def _scallop_lobe(context: MotifContext, base: float, apex: float) -> List[CellPoint]:
+    """
+    The circle through the seam ends `(base, +/-1)` and the apex `(apex, 0)`, built in page pixels so it is
+    round on the page, sampled from the left end through the apex to the right end and mapped back into
+    cell space. In the unturned cell the ends sit at radius Rb, angle +/-a and the apex at radius Ra, angle 0,
+    so the centre lies on the axis at c = (Ra^2 - Rb^2) / (2 (Ra - Rb cos a)). The ends and apex are pinned
+    exactly, so neighbouring cells meet at the same seam point.
+    """
+    half = math.radians(context.half_angle)
+    rb, ra = context.radius_at(base), context.radius_at(apex)
+    denominator = ra - rb * math.cos(half)
+    if abs(denominator) < 1e-9 * rb:
+        # The three points are collinear (an inward apex exactly on the chord): nudge it off the line.
+        ra -= 1e-6 * rb
+        denominator = ra - rb * math.cos(half)
+    centre = (ra * ra - rb * rb) / (2.0 * denominator)
+    radius = abs(ra - centre)
+    start = math.atan2(rb * math.sin(half), rb * math.cos(half) - centre)  # the +a end, in (0, pi)
+    # The apex is at circle angle 0 when it lies beyond the centre, else at pi.
+    end = -start if ra > centre else 2.0 * math.pi - start
+    cx, cy = context.center
+    points = []
+    for index in range(SCALLOP_STEPS + 1):
+        theta = start + (end - start) * index / SCALLOP_STEPS
+        points.append(context.to_cell((cx + centre + radius * math.cos(theta), cy + radius * math.sin(theta))))
+    points.reverse()  # left end first
+    points[0], points[-1] = CellPoint(base, -1.0), CellPoint(base, 1.0)
+    points[SCALLOP_STEPS // 2] = CellPoint(apex, 0.0)
+    return points
+
+
 def generate_scallop(context: MotifContext) -> MotifInstance:
-    rng = context.rng
-    top = rng.uniform(0.5, 0.6)
-    dip = rng.uniform(0.1, 0.4)
+    require_full_budget(context, "scallop")
+    ring = context.ring_rng
+    # Every seam-deciding value comes from the ring stream, so every cell of the ring draws the same lobe.
+    base = ring.uniform(0.3, 0.5)
+    height = ring.uniform(0.25, 0.45)
+    outward = ring.random() < 0.5
 
     low, high = context.radial_limits
-    limit = context.angular_limits
-    top = min(high, top)
-    side_bottom = max(low, top - 0.2)
-    # Side touch (spec 13.2): the side edges widen to contain the ring's side-touch radial.
-    side_bottom, top = side_edge_containing_touch(context, side_bottom, top)
-    lowest = max(low, -dip)
-    # The curve's midpoint is (start + 2 * control + end) / 4, so this control lands it on `lowest`.
-    control = CellPoint(2.0 * lowest - side_bottom, 0.0)
-    arc = quad_points(CellPoint(side_bottom, limit), control, CellPoint(side_bottom, -limit), QUAD_STEPS)
-    # The side edges already span the full budget. Side touch adds the shared vertex on each when it
-    # falls inside the edge (it always does unless the radial limits clamp the edge short of it);
-    # otherwise the edge's nearest end already is that vertex.
-    touch = side_touch_radial_within(context, side_bottom, top)
-    right_side = [CellPoint(touch, limit)] if touch is not None else []
-    left_side = [CellPoint(touch, -limit)] if touch is not None else []
-    outline = [CellPoint(top, -limit), CellPoint(top, limit), *right_side, *arc, *left_side]
-    return build_instance(context, [SmartVector(outline, closed=True)])
+    base = max(low, min(high, base))
+    apex = min(high, base + height) if outward else max(low, base - height)
+    lobe = _scallop_lobe(context, base, apex)
+    # A lobe taller than its cell is wide bellies past the cell edges; lower it until it fits. The shrink
+    # depends only on ring-wide values, so every cell of the ring shrinks alike.
+    for _ in range(SCALLOP_MAX_SHRINKS):
+        if max(abs(point.angular) for point in lobe) <= 1.0 + 1e-9:
+            break
+        apex = base + (apex - base) * SCALLOP_SHRINK
+        lobe = _scallop_lobe(context, base, apex)
+    return build_instance(context, [SmartVector(lobe)], seams=True)
 
 
 def generate_stem(context: MotifContext) -> MotifInstance:
@@ -292,13 +325,13 @@ BOTANICAL_MOTIFS: List[Dict] = [
         "positions": ["divider"],
         "roles": ["base"],
         "touch": True,
-        "side_touch_heights": ("mid",),
-        "seams": False,
+        "side_touch_heights": (),
+        "seams": True,
         "embellishments": (),
         "spans_cell": True,
         "min_cell_width_px": 12.0,
         "min_ring_depth_px": 16.0,
-        "max_overflow_inward": 0.4,
+        "max_overflow_inward": 0.0,
         "max_overflow_outward": 0.0,
         "slot_estimate": None,
     },

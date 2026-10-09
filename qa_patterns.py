@@ -223,8 +223,11 @@ def run_case(job):
     entry = find_motif(name)
     if entry is None:
         return result('ERROR', f"unknown motif {name}")
+    if position == 'both' and entry.get('seams', False):
+        return result('SKIP', "seam motif never placed in both mode")
     if not _supports(entry, position, role):
         return result('SKIP', f"{position}/{role} unsupported")
+    name = entry['name']  # a retired alias (ring_band) is placed under its current name
 
     try:
         with redirect_stdout(io.StringIO()):
@@ -308,6 +311,10 @@ def _monotone(entry):
 
 
 def _angular(entry):
+    if entry.get('seams', False):
+        # A seam motif only ever has the full budget (spec 4.1): it must end on the edges, never past them.
+        inst = _generate(entry, 3, radial_limits=(0.0, 1.0))
+        return all(-0.03 <= p.radial <= 1.03 and abs(p.angular) <= 1.0 for p in _points(inst))
     inst = _generate(entry, 3, radial_limits=(0.0, 1.0), angular_limits=0.5)
     return all(-0.03 <= p.radial <= 1.03 and abs(p.angular) <= 0.53 for p in _points(inst))
 

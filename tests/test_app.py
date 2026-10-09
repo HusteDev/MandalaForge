@@ -76,3 +76,16 @@ def test_vary_divisions_true_values_vary_the_rings(client, on):
 def test_malformed_vary_divisions_is_400(client, bad):
     r = client.post("/generate", json={**VARY_BASE, "vary_divisions": bad})
     assert r.status_code == 400 and "vary_divisions" in r.get_json()["error"]
+
+def test_generate_accepts_force_motif_naming_ring_band(client):
+    r = client.post("/generate", json={**BASE, "force_motif": {"name": "ring_band", "position": "centre", "role": "base"}})
+    assert r.status_code == 200, r.get_json()
+    data = r.get_json()
+    assert data["validation"]["is_valid"]
+    assert all(e["centre"]["motif"] == "band" for ring in data["plan"]["rings"][1:] for e in ring["sequence"])
+
+def test_generate_rejects_a_malformed_force_motif(client):
+    r = client.post("/generate", json={**BASE, "force_motif": {"name": "nope", "position": "centre", "role": "base"}})
+    assert r.status_code == 400
+    r = client.post("/generate", json={**BASE, "force_motif": "band"})
+    assert r.status_code == 400
