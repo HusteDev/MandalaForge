@@ -189,12 +189,20 @@ def has_vertex(inst, radial, angular, tol=1e-9):
     )
 
 
-def test_registry_declares_side_touch_on_every_entry():
-    declared = {e["name"]: e["side_touch"] for e in all_entries()}
+def test_registry_declares_touch_heights_and_seams():
+    for entry in MOTIFS + [safe_motif("botanical")]:
+        assert set(entry["side_touch_heights"]) <= {"base", "mid"} and "side_touch" not in entry
+        assert isinstance(entry["seams"], bool) and isinstance(entry["embellishments"], tuple)
+
+
+def test_registry_phase_one_touch_heights():
+    declared = {e["name"]: tuple(e["side_touch_heights"]) for e in all_entries()}
     assert declared == {
-        "petal": True, "leaf": True, "scallop": True, "stem": False,
-        "diamond": False, "ring_band": True, "botanical_safe_band": True,
+        "petal": ("base", "mid"), "leaf": ("base", "mid"), "scallop": ("mid",), "stem": (),
+        "diamond": (), "ring_band": ("mid",), "botanical_safe_band": ("mid",),
     }
+    assert not any(e["seams"] for e in all_entries())
+    assert all(e["embellishments"] == () for e in all_entries())
 
 
 @pytest.mark.parametrize("name", ["petal", "leaf"])
@@ -208,7 +216,7 @@ def test_side_touch_puts_vertices_at_the_side_touch_radial(name, cell_kwargs):
             assert widest <= limit + 1e-12
 
 
-@pytest.mark.parametrize("entry", [e for e in all_entries() if e["side_touch"]], ids=lambda e: e["name"])
+@pytest.mark.parametrize("entry", [e for e in all_entries() if e["side_touch_heights"]], ids=lambda e: e["name"])
 def test_every_side_touch_entry_meets_the_budget_at_the_side_touch_radial(entry, cell_kwargs):
     for seed in range(10):
         ctx = make_ctx(cell_kwargs, seed, complexity=1.0, angular_limits=0.5, side_touch_radial=0.5)

@@ -34,19 +34,24 @@ def test_overflow_and_reaches_touch_or_keep_pen_width_clear_of_other_rings():
     # Within a pen's width of ink a line either touches it or keeps clear. Every overflow part and every reach
     # stays at least 4px from every other-ring path, once both lose a 10px disc around each vertex the line's
     # path shares with any ink of that other ring.
+    # Seed 3 (was the fixture seed 20260821 until touch heights re-drew every ring's side-touch radial):
+    # the same stem/divider/contact job, with reaches and overflow runs, and rings touching at base height.
     import io
     from contextlib import redirect_stdout
     from shapely.geometry import LineString, MultiPoint
     from coloring_generator import DesignGenerator
     from placement import path_overflow
     with redirect_stdout(io.StringIO()):
-        g = DesignGenerator(seed=20260821, num_rings=4, num_divisions=8, complexity=0.5, min_pattern_size=10,
+        g = DesignGenerator(seed=3, num_rings=4, num_divisions=8, complexity=0.5, min_pattern_size=10,
                             categories=["botanical"], ring_divisions=[8, 8, 8, 12],
                             force_motif={"name": "stem", "position": "divider", "role": "contact"})
         g.generate()
     design = g.assembled
     lines = [(path, LineString(path.coords)) for path in design.paths if path.role == "reach"]
-    lines += [(path, run) for path in design.paths for _, run in path_overflow(path, design.center)]
+    runs = [(path, run) for path in design.paths for _, run in path_overflow(path, design.center)]
+    assert lines and runs, "the scenario needs both reaches and overflow runs"
+    assert any(r.touch_height == "base" for r in g.plan.rings)
+    lines += runs
     ring_vertices = {}
     for path in design.paths:
         ring_vertices.setdefault(path.ring_index, set()).update(path.coords)

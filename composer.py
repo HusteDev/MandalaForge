@@ -6,7 +6,7 @@ import json
 import math
 import random
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from motifs import find_motif, motifs_for_categories, safe_motif
 from motifs.geometry import salted_seed
@@ -82,6 +82,8 @@ class RingPlan:
     # Defaults keep revision-1 plans loadable: they used stems for contact and no side touch.
     contact_mode: str = "stem"
     side_touch_radial: float = 0.5
+    # Revision-2 plans touched at mid height only.
+    touch_height: str = "mid"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -92,6 +94,7 @@ class RingPlan:
             "ring_seed": self.ring_seed,
             "contact_mode": self.contact_mode,
             "side_touch_radial": self.side_touch_radial,
+            "touch_height": self.touch_height,
         }
 
     @classmethod
@@ -104,6 +107,7 @@ class RingPlan:
             ring_seed=d["ring_seed"],
             contact_mode=d.get("contact_mode", "stem"),
             side_touch_radial=d.get("side_touch_radial", 0.5),
+            touch_height=d.get("touch_height", "mid"),
         )
 
 
@@ -171,7 +175,11 @@ MIN_DIVISIONS = 4
 MAX_DIVISIONS = 24
 # Ring contact modes, strongest first (spec 13.2).
 CONTACT_MODES = ("side", "overflow", "stem")
-SIDE_TOUCH_RADIAL_RANGE = (0.35, 0.6)
+# Side-touch heights (spec 3.1) and the side_touch_radial range each one draws from.
+TOUCH_HEIGHTS = ("base", "mid")
+BASE_TOUCH_RANGE = (0.08, 0.2)
+MID_TOUCH_RANGE = (0.35, 0.6)
+TOUCH_RANGES = {"base": BASE_TOUCH_RANGE, "mid": MID_TOUCH_RANGE}
 # Base symmetry drawn with `vary_divisions` is a divisor of `num_divisions` in this range.
 SYMMETRY_MIN = 3
 SYMMETRY_MAX = 8
@@ -187,13 +195,20 @@ def _base_nodes(sequence: List[CellEntry]) -> List[CellRecipe]:
     return [n for e in sequence for n in (e.centre, e.divider) if n is not None]
 
 
-def _side_touch_capable(entry: Dict) -> bool:
+def touch_heights_of(entry: Dict) -> Tuple[str, ...]:
     """
-    Whether a base motif can meet its ring neighbours at a shared side vertex, as its registry
-    entry's `side_touch` key declares. An entry without the key (none in the registry) counts the
-    cell-spanning bands plus petal and leaf.
+    The heights at which a registry entry can meet its ring neighbours at a shared side vertex.
+    A seam motif connects its ring through its seams, so it counts at every height (spec 3.1).
     """
-    return bool(entry.get("side_touch", entry["spans_cell"] or entry["name"] in ("petal", "leaf")))
+    if entry.get("seams", False):
+        return TOUCH_HEIGHTS
+    return tuple(entry["side_touch_heights"])
+
+
+def common_touch_heights(entries: Sequence[Dict]) -> Tuple[str, ...]:
+    """The heights every entry supports, in `TOUCH_HEIGHTS` order; empty when the ring cannot side-touch."""
+    supported = [touch_heights_of(entry) for entry in entries]
+    return tuple(h for h in TOUCH_HEIGHTS if all(h in heights for heights in supported))
 
 
 @dataclass
@@ -318,7 +333,6 @@ class Composer:
         divisions = self._division_count(ring_index, rng)
         seq_len = self._sequence_length(divisions, rng)
         mode, centre_share = self._position_mode(ring_index, divisions, rng)
-        side_touch_radial = rng.uniform(*SIDE_TOUCH_RADIAL_RANGE)
         cell_width, ring_depth = self._ring_metrics(ring_index, divisions)
         avoid = set(self._inward_base_names(ring_index))
         force = self.settings.force_motif if ring_index > 0 else None
@@ -329,17 +343,28 @@ class Composer:
             for position in ("centre", "divider"):
                 if mode not in (position, "both"):
                     continue
-                budget = self._budget(mode, centre_share, position)
+                width = cell_width * self._budget(mode, centre_share, position)
+                first = getattr(sequence[0], position) if sequence else None
+                if first is not None and self._is_seam(first):
+                    # A seam motif owns its whole position: every entry repeats it, freshly composed.
+                    nodes[position] = self._compose(
+                        self._registry_entry(first), node_rng(ring_seed, ring_index, s, 0, position),
+                        ring_index, ring_seed, s, position, width, ring_depth, 0,
+                    )
+                    continue
+                # Only entry 0 may pick a seam motif, and never in `both` mode (spec 4.1).
                 nodes[position] = self._plan_node(
-                    ring_index, ring_seed, s, position, cell_width * budget, ring_depth, avoid, force
+                    ring_index, ring_seed, s, position, width, ring_depth, avoid, force,
+                    allow_seams=(s == 0 and mode != "both"),
                 )
             sequence.append(CellEntry(nodes["centre"], nodes["divider"]))
 
         contact_mode = self._contact_mode(ring_index, sequence)
+        touch_height, side_touch_radial = self._touch_height(ring_index, sequence, rng)
         if not (force and force["role"] == "contact"):
             self._ensure_contact(ring_index, sequence, contact_mode)
         plan = RingPlan(ring_index, divisions, centre_share, sequence, ring_seed,
-                        contact_mode, side_touch_radial)
+                        contact_mode, side_touch_radial, touch_height)
         if ring_seed == self.seed:
             self._canonical_names[ring_index] = self._base_names(plan)
         return plan
@@ -348,10 +373,11 @@ class Composer:
         """
         Advance one node along the fallback chain in place; False when exhausted.
 
-        A floating base in a side-touch ring first tries another side-touching base, then a stem;
-        in other rings it gets the stem first. A stem is a contact repair that changes no motif,
-        so it stays available under `force_motif`; substituting the motif or falling back to a
-        safe band does not.
+        A floating base in a side-touch ring first tries another base that touches at the ring's
+        height, then a stem; in other rings it gets the stem first. A stem is a contact repair that
+        changes no motif, so it stays available under `force_motif`; substituting the motif or
+        falling back to a safe band does not. A seam node owns its whole position, so a substitute
+        or fallback for it replaces it in every sequence entry.
         """
         if not 0 <= seq_pos < len(ring.sequence):
             return False
@@ -372,37 +398,51 @@ class Composer:
         if self._substitute(ring, seq_pos, position, side_only=False):
             return True
         safe = safe_motif(node.category)
-        self._set_node(entry, position, CellRecipe(safe["name"], safe["category"], is_fallback=True))
+        for target in (ring.sequence if self._is_seam(node) else [entry]):
+            self._set_node(target, position, CellRecipe(safe["name"], safe["category"], is_fallback=True))
         self._refresh_contact(ring)
         return True
 
     def _substitute(self, ring: RingPlan, seq_pos: int, position: str, side_only: bool) -> bool:
-        """Swap the node for an untried base (side-touching only, if asked); False when none is left."""
+        """
+        Swap the node for an untried base (one touching at the ring's height, if asked); False when
+        none is left.
+
+        A seam node is the whole position, so its substitute goes into every entry, tracked and
+        drawn as entry 0. A seam motif is a candidate only where it would fill the whole position
+        too (a seam node, or a one-entry sequence) and never in `both` mode.
+        """
         entry = ring.sequence[seq_pos]
         node = entry.centre if position == "centre" else entry.divider
-        tried = self._tried.setdefault((ring.ring_index, ring.ring_seed, seq_pos, position), [])
+        seam_position = self._is_seam(node)
+        key_pos = 0 if seam_position else seq_pos
+        tried = self._tried.setdefault((ring.ring_index, ring.ring_seed, key_pos, position), [])
         if node.motif not in tried:
             tried.append(node.motif)
 
         cell_width, ring_depth = self._ring_metrics(ring.ring_index, ring.divisions)
         mode = "both" if ring.centre_share < 1.0 else position
         cell_width *= self._budget(mode, ring.centre_share, position)
+        allow_seams = mode != "both" and (seam_position or len(ring.sequence) == 1)
 
         candidates = [
-            c for c in self._base_candidates(ring.ring_index, position, cell_width, ring_depth)
-            if c["name"] not in tried and (not side_only or _side_touch_capable(c))
+            c for c in self._base_candidates(ring.ring_index, position, cell_width, ring_depth, allow_seams)
+            if c["name"] not in tried and (not side_only or ring.touch_height in touch_heights_of(c))
         ]
         if not candidates:
             return False
         offset = 3 * len(tried)
-        rng = node_rng(ring.ring_seed, ring.ring_index, seq_pos, offset, position, "pick")
+        rng = node_rng(ring.ring_seed, ring.ring_index, key_pos, offset, position, "pick")
         chosen = self._pick(candidates, rng)
         tried.append(chosen["name"])
-        new_node = self._compose(
-            chosen, rng, ring.ring_index, ring.ring_seed, seq_pos, position,
-            cell_width, ring_depth, offset,
-        )
-        self._set_node(entry, position, new_node)
+        targets = range(len(ring.sequence)) if seam_position or chosen.get("seams") else [seq_pos]
+        for s in targets:
+            stream = rng if s == key_pos else node_rng(ring.ring_seed, ring.ring_index, s, offset, position, "pick")
+            new_node = self._compose(
+                chosen, stream, ring.ring_index, ring.ring_seed, s, position,
+                cell_width, ring_depth, offset,
+            )
+            self._set_node(ring.sequence[s], position, new_node)
         self._refresh_contact(ring)
         return True
 
@@ -487,23 +527,24 @@ class Composer:
         return motif["min_cell_width_px"] <= cell_width and motif["min_ring_depth_px"] <= ring_depth
 
     def _base_candidates(self, ring_index: int, position: str, cell_width: float,
-                         ring_depth: float) -> List[Dict]:
+                         ring_depth: float, allow_seams: bool = True) -> List[Dict]:
         return [
             m for m in motifs_for_categories(self.settings.categories)
             if "base" in m["roles"]
             and position in m["positions"]
             and (ring_index > 0 or m["spans_cell"])
+            and (allow_seams or not m.get("seams", False))
             and self._passes(m, cell_width, ring_depth)
         ]
 
     def _plan_node(self, ring_index: int, ring_seed: int, seq_pos: int, position: str,
                    cell_width: float, ring_depth: float, avoid: set,
-                   force: Optional[Dict[str, str]]) -> CellRecipe:
+                   force: Optional[Dict[str, str]], allow_seams: bool = True) -> CellRecipe:
         rng = node_rng(ring_seed, ring_index, seq_pos, 0, position)
         if force:
             return self._forced_node(force, rng, ring_index, ring_seed, seq_pos, position,
                                      cell_width, ring_depth)
-        candidates = self._base_candidates(ring_index, position, cell_width, ring_depth)
+        candidates = self._base_candidates(ring_index, position, cell_width, ring_depth, allow_seams)
         if ring_index > 0:
             candidates = [c for c in candidates if c["name"] not in avoid] or candidates
         if not candidates:
@@ -583,15 +624,35 @@ class Composer:
     def _registry_entry(node: CellRecipe) -> Dict:
         return find_motif(node.motif) or safe_motif(node.category)
 
-    def _contact_mode(self, ring_index: int, sequence: List[CellEntry]) -> str:
+    def _is_seam(self, node: CellRecipe) -> bool:
+        return bool(self._registry_entry(node).get("seams", False))
+
+    def _touch_height(self, ring_index: int, sequence: List[CellEntry],
+                      rng: random.Random) -> Tuple[str, float]:
         """
-        How the ring reaches the structure (spec 13.2): by side touch when every base supports it
-        (always in the innermost ring), else by inward overflow when every base has it, else stems.
+        The ring's touch height and side-touch radial (spec 3.2): the height drawn uniformly from
+        the heights every base supports, then the radial from that height's range. A ring with no
+        common height is not side-touching and keeps the mid defaults (the innermost ring included).
+        """
+        common = common_touch_heights([self._registry_entry(n) for n in _base_nodes(sequence)])
+        if len(common) > 1:
+            height = rng.choice(common)
+        else:
+            height = common[0] if common else "mid"
+        return height, rng.uniform(*TOUCH_RANGES[height])
+
+    def _contact_mode(self, ring_index: int, sequence: List[CellEntry],
+                      height: Optional[str] = None) -> str:
+        """
+        How the ring reaches the structure (spec 13.2): by side touch when its bases share a touch
+        height (`height` itself, when given; always in the innermost ring), else by inward overflow
+        when every base has it, else stems.
         """
         if ring_index == 0:
             return "side"
         entries = [self._registry_entry(n) for n in _base_nodes(sequence)]
-        if all(_side_touch_capable(entry) for entry in entries):
+        common = common_touch_heights(entries)
+        if (height in common) if height is not None else common:
             return "side"
         if all(entry["max_overflow_inward"] >= CONTACT_OVERFLOW for entry in entries):
             return "overflow"
@@ -600,13 +661,15 @@ class Composer:
     def _refresh_contact(self, ring: RingPlan) -> None:
         """
         Re-flag contact after a node changed. The ring keeps its mode unless its new bases no
-        longer support it, so a revision-1 plan (mode "stem") keeps its revision-1 contact.
+        longer support it (side touch at the ring's own touch height), so a revision-1 plan
+        (mode "stem") keeps its revision-1 contact.
 
         Leaving side mode turns any once-per-wedge stem back into a per-cell one: without side
         touch the cells are no longer one band, so every repeat needs its own contact.
         """
         previous = ring.contact_mode
-        ring.contact_mode = _weaker_mode(previous, self._contact_mode(ring.ring_index, ring.sequence))
+        current = self._contact_mode(ring.ring_index, ring.sequence, ring.touch_height)
+        ring.contact_mode = _weaker_mode(previous, current)
         if previous == "side" and ring.contact_mode != "side":
             for node in _base_nodes(ring.sequence):
                 for attachment in node.attachments:

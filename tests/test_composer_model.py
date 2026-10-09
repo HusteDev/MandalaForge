@@ -11,3 +11,10 @@ def test_plan_round_trips_through_json():
 def test_node_rng_is_stable_and_distinct():
     assert node_rng(1, 0, 0, 0, "centre").random() == node_rng(1, 0, 0, 0, "centre").random()
     assert node_rng(1, 0, 0, 0, "centre").random() != node_rng(1, 0, 0, 0, "divider").random()
+
+def test_touch_height_round_trips_and_defaults_to_mid():
+    ring = RingPlan(1, 8, 1.0, [CellEntry(CellRecipe("petal", "botanical"), None)], 5,
+                    contact_mode="side", side_touch_radial=0.1, touch_height="base")
+    assert ring.to_dict()["touch_height"] == "base"
+    assert RingPlan.from_dict(ring.to_dict()) == ring
+    assert RingPlan(1, 8, 1.0, [], 5).touch_height == "mid"
