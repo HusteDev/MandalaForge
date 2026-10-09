@@ -284,3 +284,22 @@ def test_inward_stem_never_lands_on_an_outer_rings_overflow():
 
 def _base_nodes_of(ring):
     return [n for e in ring.sequence for n in (e.centre, e.divider) if n is not None]
+
+
+@pytest.mark.parametrize("seed, vary", [(2, False), (8, True)])
+def test_base_height_side_touch_rings_assemble_and_validate(seed, vary):
+    # Base-height touch (side_touch_radial near 0.1) is exercised in assembled designs, not only at mid height:
+    # every petal or leaf base in such a ring carries the shared side vertex at its belly, and the design validates.
+    from motifs.geometry import CellPoint
+    g = DesignGenerator(seed=seed, num_rings=4, num_divisions=12, complexity=0.5,
+                        categories=["botanical"], vary_divisions=vary)
+    g.generate()
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+    rings = {r.ring_index: r for r in g.plan.rings if r.contact_mode == "side" and r.touch_height == "base"}
+    touched = [n for n in g.assembled.nodes
+               if n.ring_index in rings and n.parent is None and n.recipe.motif in ("petal", "leaf")]
+    assert touched, "the scenario needs petal or leaf bases in a base-height side-touch ring"
+    for node in touched:
+        radial, limit = rings[node.ring_index].side_touch_radial, node.context.angular_limits
+        outline = node.instance.vectors[0].points
+        assert CellPoint(radial, limit) in outline and CellPoint(radial, -limit) in outline

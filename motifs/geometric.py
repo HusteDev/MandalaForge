@@ -2,28 +2,68 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+import math
+from typing import Dict, List, Optional
 
 from motifs.contract import MotifError, MotifInstance, build_instance, require_full_budget
-from motifs.geometry import CellPoint, MotifContext, SmartVector, cubic_points, mirror_points
+from motifs.geometry import CellPoint, MotifContext, SmartVector, cubic_points, mirror_points, quad_points
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
 
 
-def generate_diamond(context: MotifContext) -> MotifInstance:
-    aspect = context.rng.uniform(0.6, 1.0)
-    box = fit_slot_box(context, "diamond")
-    mid = box.radial_mid
-    full_half_height = (box.radial_max - box.radial_min) / 2.0 * aspect
+DIAMOND_CONCAVE_CHANCE = 0.5
+# A concave edge's midpoint (at the radial halfway between tip and side vertex) sits this share of the
+# half-width inside the straight edge's.
+DIAMOND_BOW_RANGE = (0.15, 0.35)
+DIAMOND_EDGE_STEPS = 8
+# A concave edge is a quadratic whose control sits this share of the tip-to-side-vertex radial from the tip.
+# Leaning it toward the side vertex keeps the control's angular positive for every bow in the range, so the
+# edge leaves the tip on its own side of the axis and the tip stays a point, never a cusp.
+DIAMOND_CONTROL_LEAN = 0.8
 
-    def build(scale: float) -> List[CellPoint]:
-        half_height = full_half_height * scale
-        width = box.half_width * scale
+
+def _concave_edge_control_share(bow: float) -> float:
+    """
+    The control's angular, as a share of the half-width, that puts the edge's halfway-radial point `bow`
+    of the half-width inside the straight edge. The quadratic's radial is `hh (2 L t (1 - t) + t^2)` for
+    lean L, which is half the height at the root `t` of `(1 - 2L) t^2 + 2 L t - 1/2`; the angular there,
+    `2 t (1 - t) a + t^2`, must equal `1/2 - bow`.
+    """
+    a, b = 1.0 - 2.0 * DIAMOND_CONTROL_LEAN, 2.0 * DIAMOND_CONTROL_LEAN
+    t = (-b + math.sqrt(b * b + 2.0 * a)) / (2.0 * a)
+    return (0.5 - bow - t * t) / (2.0 * t * (1.0 - t))
+
+
+def _diamond(mid: float, half_height: float, width: float, bow: Optional[float]) -> List[CellPoint]:
+    """A closed diamond on the axis, straight-sided, or with every edge bowed inward by `bow` of `width`."""
+    if bow is None:
         return [
             CellPoint(mid - half_height, 0.0),
             CellPoint(mid, width),
             CellPoint(mid + half_height, 0.0),
             CellPoint(mid, -width),
         ]
+    tip = CellPoint(mid - half_height, 0.0)
+    control = CellPoint(mid - half_height * (1.0 - DIAMOND_CONTROL_LEAN), width * _concave_edge_control_share(bow))
+    lower = quad_points(tip, control, CellPoint(mid, width), DIAMOND_EDGE_STEPS)
+    # The upper edge is the lower one reflected across the side vertex's radial.
+    upper = [CellPoint(2.0 * mid - point.radial, point.angular) for point in reversed(lower)]
+    right = lower + upper[1:]
+    left = mirror_points(right)[1:-1][::-1]
+    return right + left
+
+
+def generate_diamond(context: MotifContext) -> MotifInstance:
+    rng = context.rng
+    # Every parameter is drawn before the slot is measured, whichever variant is kept.
+    aspect = rng.uniform(0.6, 1.0)
+    concave = rng.random() < DIAMOND_CONCAVE_CHANCE
+    bow = rng.uniform(*DIAMOND_BOW_RANGE)
+    box = fit_slot_box(context, "diamond")
+    mid = box.radial_mid
+    full_half_height = (box.radial_max - box.radial_min) / 2.0 * aspect
+
+    def build(scale: float) -> List[CellPoint]:
+        return _diamond(mid, full_half_height * scale, box.half_width * scale, bow if concave else None)
 
     points = fit_inside_slot(context, "diamond", build)
     return build_instance(context, [SmartVector(points, closed=True)])

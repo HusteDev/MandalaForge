@@ -10,63 +10,97 @@ from motifs.geometry import (
     CellPoint,
     MotifContext,
     SmartVector,
+    cubic_points,
     mirror_points,
-    quad_points,
     side_touch_radial_within,
 )
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
 
-QUAD_STEPS = 8
-# A side-touching leaf's base corners sit at this fraction of the angular budget.
-LEAF_SIDE_TOUCH_BASE = 0.6
+CURVE_STEPS = 12
+# Each control beside the belly sits this share of its segment's radial length from the belly, at the
+# belly's angular, so the outline crosses its widest vertex parallel to the cell's centreline.
+BELLY_HANDLE = 0.4
+# A short segment below the belly (a base-height touch) still gets a handle at least this long in radial, up to
+# its whole length, so it bends up into the belly over its length instead of in one sharp turn just below it.
+BELLY_MIN_HANDLE = 0.15
+# A ripple never moves a sample more than this share of the half-width, so a thin outline cannot fold.
+WAVE_SHARE_CAP = 0.25
+
+# Lotus petal: the belly sits at a drawn share of the length; the base control leaves the narrow base at a
+# fixed reach and spread; the tip control is drawn per instance - its radial handle is the flare (longer is a
+# deeper concave flare into the tip) and its angular share is the tip sharpness (smaller is sharper).
+PETAL_BELLY_RANGE = (0.3, 0.6)
+PETAL_BASE_REACH, PETAL_BASE_SPREAD = 0.35, 0.35
+PETAL_FLARE_RANGE = (0.3, 0.55)
+PETAL_SHARPNESS_RANGE = (0.1, 0.3)
+
+# Leaf: an almond whose convex sides meet at a curved point. Its apex control's angular share is the drawn
+# roundness (larger is a blunter, rounder apex).
+LEAF_BELLY_RANGE = (0.35, 0.55)
+LEAF_BASE_REACH, LEAF_BASE_SPREAD = 0.4, 0.5
+LEAF_APEX_HANDLE = 0.35
+LEAF_ROUNDNESS_RANGE = (0.35, 0.7)
 
 
-def _petal_outline(
+def _ripple(s: float) -> float:
+    """A one-wave ripple over a segment's parameter `s`, zero with zero slope at both ends."""
+    return math.sin(2.0 * math.pi * s) * math.sin(math.pi * s)
+
+
+def _pointed_outline(
     base_radial: float,
     tip_radial: float,
+    belly_radial: float,
     half_width: float,
-    waist: float,
+    base_reach: float,
+    base_spread: float,
+    tip_handle: float,
+    tip_share: float,
     wave: float,
     angular_bound: float,
-    widest_radial: Optional[float] = None,
 ) -> List[CellPoint]:
     """
-    One closed, mirror-symmetric outline: right side base to tip, then the left side back.
+    One closed, mirror-symmetric outline pointed at both ends: the right side base to tip, then the left back.
 
-    `widest_radial` pins the widest vertex there instead of at `waist`, and drops the lower run's
-    shoulder bulge so no sample of that run is wider than the widest vertex (side touch).
+    Each side is two cubic segments, base to belly and belly to tip, the belly vertex `(belly_radial,
+    half_width)` exactly. The controls either side of the belly share its angular, so the tangent there runs
+    along the radial and the belly is the widest vertex: a side-touch vertex placed there meets its neighbour
+    smoothly (spec 3.3), and nothing above or below it is wider. `wave` ripples each segment's interior
+    samples, outward near the base and inward either side of the belly, with zero offset and slope at the
+    vertices, scaled by the segment's share of the length so a short segment is not crinkled; interior samples
+    are clamped to `angular_bound`.
     """
     base = CellPoint(base_radial, 0.0)
+    belly = CellPoint(belly_radial, half_width)
     tip = CellPoint(tip_radial, 0.0)
-    if widest_radial is None:
-        widest = CellPoint(base.radial + (tip.radial - base.radial) * waist, half_width)
-        shoulder = half_width * 1.15
-    else:
-        widest = CellPoint(widest_radial, half_width)
-        shoulder = half_width
-    lower = quad_points(
+    lower_length = belly_radial - base_radial
+    upper_length = tip_radial - belly_radial
+    lower_handle = min(lower_length, max(lower_length * BELLY_HANDLE, BELLY_MIN_HANDLE))
+    lower = cubic_points(
         base,
-        CellPoint(base.radial + (widest.radial - base.radial) * 0.5, shoulder),
-        widest,
-        QUAD_STEPS,
+        CellPoint(base_radial + lower_length * base_reach, half_width * base_spread),
+        CellPoint(belly_radial - lower_handle, half_width),
+        belly,
+        CURVE_STEPS,
     )
-    upper = quad_points(
-        widest,
-        CellPoint(widest.radial + (tip.radial - widest.radial) * 0.5, half_width * 0.9),
+    upper = cubic_points(
+        belly,
+        CellPoint(belly_radial + upper_length * BELLY_HANDLE, half_width),
+        CellPoint(tip_radial - upper_length * tip_handle, half_width * tip_share),
         tip,
-        QUAD_STEPS,
+        CURVE_STEPS,
     )
+    amplitude = min(wave, half_width * WAVE_SHARE_CAP) / (tip_radial - base_radial)
+    # Outward on the lower segment's base half, inward on the upper segment's belly half.
+    runs = ((lower, amplitude * lower_length), (upper[1:], -amplitude * upper_length))
 
     right: List[CellPoint] = []
-    for run, samples in enumerate((lower, upper)):
-        for index, point in enumerate(samples):
-            if run == 1 and index == 0:
-                continue  # the widest vertex already closes the lower run
+    for run, (samples, ripple) in enumerate(runs):
+        for offset, point in enumerate(samples):
+            index = offset + run  # the upper run starts past the belly, which closes the lower run
             angular = point.angular
-            if 0 < index < QUAD_STEPS:
-                if wave > 0:
-                    t = (run * QUAD_STEPS + index) / (2 * QUAD_STEPS)
-                    angular += wave * math.sin(3 * math.pi * t)
+            if 0 < index < CURVE_STEPS:
+                angular += ripple * _ripple(index / CURVE_STEPS)
                 angular = max(-angular_bound, min(angular_bound, angular))
             right.append(CellPoint(point.radial, angular))
 
@@ -83,8 +117,19 @@ def generate_petal(context: MotifContext) -> MotifInstance:
     length = rng.uniform(0.95, 1.3)
     dip = rng.uniform(0.0, 0.5)
     half_width = context.angular_limits * rng.uniform(0.55, 0.95)
-    waist = rng.uniform(0.35, 0.6)
+    belly = rng.uniform(*PETAL_BELLY_RANGE)
+    flare = rng.uniform(*PETAL_FLARE_RANGE)
+    sharpness = rng.uniform(*PETAL_SHARPNESS_RANGE)
     wave = rng.uniform(0.0, context.complexity * 0.06)
+
+    def outline(base_radial: float, tip_radial: float, width: float, bound: float,
+                belly_radial: Optional[float] = None) -> List[CellPoint]:
+        if belly_radial is None:
+            belly_radial = base_radial + (tip_radial - base_radial) * belly
+        return _pointed_outline(
+            base_radial, tip_radial, belly_radial, width,
+            PETAL_BASE_REACH, PETAL_BASE_SPREAD, flare, sharpness, wave, bound,
+        )
 
     low, high = context.radial_limits
     if context.slot:
@@ -98,66 +143,42 @@ def generate_petal(context: MotifContext) -> MotifInstance:
         centre = (base_radial + tip_radial) / 2.0
 
         def build(scale: float) -> List[CellPoint]:
-            return _petal_outline(
+            return outline(
                 centre + (base_radial - centre) * scale,
                 centre + (tip_radial - centre) * scale,
                 half_width * scale,
-                waist,
-                wave,
                 angular_bound * scale,
             )
 
-        outline = fit_inside_slot(context, "petal", build)
+        points = fit_inside_slot(context, "petal", build)
     else:
         base_radial = max(low, -dip)
         tip_radial = min(high, length)
-        # Side touch (spec 13.2): full angular budget, widest vertex exactly on the shared side vertex.
+        # Side touch (spec 13.2, 3.3): the belly is the shared side vertex, at the full angular budget.
         touch = side_touch_radial_within(context, base_radial, tip_radial)
         if touch is not None:
             half_width = context.angular_limits
-        outline = _petal_outline(
-            base_radial, tip_radial, half_width, waist, wave, context.angular_limits, widest_radial=touch
-        )
-    return build_instance(context, [SmartVector(outline, closed=True)], slot_outline=outline)
+        points = outline(base_radial, tip_radial, half_width, context.angular_limits, belly_radial=touch)
+    return build_instance(context, [SmartVector(points, closed=True)], slot_outline=points)
 
 
 def _leaf_vectors(
     base_radial: float,
     apex_radial: float,
+    belly_radial: float,
     half_width: float,
     roundness: float,
-    side_radial: Optional[float] = None,
+    angular_bound: float,
 ) -> List[SmartVector]:
     """
-    A closed leaf outline plus a midrib whose ends are outline vertices.
-
-    With `side_radial`, `half_width` is the angular budget: the base corners sit at
-    LEAF_SIDE_TOUCH_BASE of it and each edge runs corner, side vertex `(side_radial, half_width)`,
-    apex, in two curves whose controls are no wider than the budget, so neither run is wider either.
+    A closed leaf outline, pointed at the base and curved to a point at the apex, plus a midrib whose ends
+    are the outline's base and apex vertices. The belly vertex `(belly_radial, half_width)` is the widest.
     """
-    middle = (base_radial + apex_radial) / 2.0
-    apex = CellPoint(apex_radial, 0.0)
-    if side_radial is None:
-        right = quad_points(
-            CellPoint(base_radial, half_width), CellPoint(middle, half_width * roundness), apex, QUAD_STEPS
-        )
-    else:
-        corner = CellPoint(base_radial, half_width * LEAF_SIDE_TOUCH_BASE)
-        side = CellPoint(side_radial, half_width)
-        lower = quad_points(
-            corner, CellPoint(base_radial + (side_radial - base_radial) * 0.5, half_width), side, QUAD_STEPS
-        )
-        upper = quad_points(
-            side,
-            CellPoint(side_radial + (apex_radial - side_radial) * 0.5, half_width * min(1.0, roundness)),
-            apex,
-            QUAD_STEPS,
-        )
-        right = lower + upper[1:]
-    left = mirror_points(right)[:-1][::-1]
-    # The base vertex sits on the straight base edge so the midrib's lower end touches outline ink.
-    outline = [CellPoint(base_radial, 0.0), *right, *left]
-    midrib = [CellPoint(base_radial, 0.0), apex]
+    outline = _pointed_outline(
+        base_radial, apex_radial, belly_radial, half_width,
+        LEAF_BASE_REACH, LEAF_BASE_SPREAD, LEAF_APEX_HANDLE, roundness, 0.0, angular_bound,
+    )
+    midrib = [outline[0], CellPoint(apex_radial, 0.0)]
     return [SmartVector(outline, closed=True), SmartVector(midrib)]
 
 
@@ -174,10 +195,12 @@ def _drop_thin_midrib(context: MotifContext, vectors: List[SmartVector]) -> List
 
 def generate_leaf(context: MotifContext) -> MotifInstance:
     rng = context.rng
+    # Every parameter is drawn before any limit is applied (the MONO property).
     # Ring fill (spec 13.3): the apex reaches the ring boundary or a little past it.
     length = rng.uniform(1.0, 1.2)
     half_width = context.angular_limits * rng.uniform(0.45, 0.85)
-    roundness = rng.uniform(0.25, 1.1)
+    belly = rng.uniform(*LEAF_BELLY_RANGE)
+    roundness = rng.uniform(*LEAF_ROUNDNESS_RANGE)
 
     high = context.radial_limits[1]
     if context.slot:
@@ -187,16 +210,17 @@ def generate_leaf(context: MotifContext) -> MotifInstance:
         if apex_radial <= base_radial:
             raise MotifError("leaf does not fit slot")
         half_width = min(half_width, box.half_width, context.angular_limits)
+        angular_bound = min(context.angular_limits, box.half_width)
         centre = (base_radial + apex_radial) / 2.0
 
         built: List[List[SmartVector]] = []
 
         def build(scale: float) -> List[CellPoint]:
+            low_end = centre + (base_radial - centre) * scale
+            high_end = centre + (apex_radial - centre) * scale
             built.append(_leaf_vectors(
-                centre + (base_radial - centre) * scale,
-                centre + (apex_radial - centre) * scale,
-                half_width * scale,
-                roundness,
+                low_end, high_end, low_end + (high_end - low_end) * belly,
+                half_width * scale, roundness, angular_bound * scale,
             ))
             return built[-1][0].points
 
@@ -205,11 +229,12 @@ def generate_leaf(context: MotifContext) -> MotifInstance:
         vectors = built[-1]
     else:
         apex_radial = min(high, length)
-        # Side touch (spec 13.2): the leaf bulges out to the full budget at the shared side vertex.
+        # Side touch (spec 13.2, 3.3): the belly is the shared side vertex, at the full angular budget.
         touch = side_touch_radial_within(context, 0.0, apex_radial)
         if touch is not None:
             half_width = context.angular_limits
-        vectors = _leaf_vectors(0.0, apex_radial, half_width, roundness, side_radial=touch)
+        belly_radial = touch if touch is not None else apex_radial * belly
+        vectors = _leaf_vectors(0.0, apex_radial, belly_radial, half_width, roundness, context.angular_limits)
     vectors = _drop_thin_midrib(context, vectors)
     return build_instance(context, vectors, base_point=vectors[0].points[0])
 

@@ -27,13 +27,14 @@ import random
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import redirect_stdout
+from typing import List, Set
 
 from assembler import stroke_width_for
 from coloring_generator import DesignGenerator
 from composer import Composer, ComposerSettings, node_rng
 from motifs import MOTIFS, find_motif, safe_motif
 from motifs.contract import MotifError
-from motifs.geometry import CellPoint, MotifContext
+from motifs.geometry import CellPoint, MotifContext, SmartVector
 
 CATEGORIES = ['botanical', 'geometric', 'celtic', 'art_deco', 'abstract']
 POSITIONS = ('centre', 'divider', 'both')
@@ -292,6 +293,67 @@ def _generate(entry, seed, **over):
 
 def _points(instance):
     return [p for vector in instance.vectors for p in vector.points]
+
+
+def _angle_between_deg(a, b):
+    """Angle in degrees between two page-space direction vectors, 0 to 180."""
+    norm = math.hypot(*a) * math.hypot(*b)
+    if norm == 0:
+        return 0.0
+    cosine = (a[0] * b[0] + a[1] * b[1]) / norm
+    return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
+
+
+def tangent_error_deg(context: MotifContext, points: List[CellPoint], index: int) -> float:
+    """
+    Angle in degrees, 0 to 90, between the page-space tangent at `points[index]` and the radial
+    direction there. The tangent is the chord between the vertex's two neighbours (wrapping round,
+    so it suits a closed outline); a side-touch vertex whose tangent is parallel to the divider reads 0.
+    """
+    before = context.to_cartesian(points[(index - 1) % len(points)])
+    after = context.to_cartesian(points[(index + 1) % len(points)])
+    x, y = context.to_cartesian(points[index])
+    tangent = (after[0] - before[0], after[1] - before[1])
+    radial = (x - context.center[0], y - context.center[1])
+    angle = _angle_between_deg(tangent, radial)
+    return min(angle, 180.0 - angle)
+
+
+def max_turn_deg(context: MotifContext, points: List[CellPoint], closed: bool, skip: Set[int]) -> float:
+    """
+    The largest page-space turning angle, in degrees, at any vertex of the traced polyline except the
+    vertices in `skip` (indices into `points`). Each cell-space segment is traced as `polyline` draws
+    it, so the bends of its subdivisions count too; an open run's two ends never turn.
+    """
+    count = len(points)
+    coords, owners = [], []
+    for index in range(count if closed else count - 1):
+        segment = context.polyline(SmartVector([points[index], points[(index + 1) % count]]))
+        coords.extend(segment[:-1])
+        owners.extend([index] + [None] * (len(segment) - 2))
+    if not closed:
+        coords.append(context.to_cartesian(points[-1]))
+        owners.append(count - 1)
+    # Zero-length pieces have no direction: drop repeated coordinates, keeping the first owner.
+    kept = []
+    for coord, owner in zip(coords, owners):
+        if kept and math.dist(kept[-1][0], coord) < 1e-12:
+            continue
+        kept.append((coord, owner))
+    if closed and len(kept) > 1 and math.dist(kept[0][0], kept[-1][0]) < 1e-12:
+        kept.pop()
+    total = len(kept)
+    worst = 0.0
+    for k in range(total):
+        if not closed and (k == 0 or k == total - 1):
+            continue
+        if kept[k][1] in skip:
+            continue
+        previous, here, following = kept[k - 1][0], kept[k][0], kept[(k + 1) % total][0]
+        incoming = (here[0] - previous[0], here[1] - previous[1])
+        outgoing = (following[0] - here[0], following[1] - here[1])
+        worst = max(worst, _angle_between_deg(incoming, outgoing))
+    return worst
 
 
 def _deterministic(entry):

@@ -422,3 +422,106 @@ def test_slot_child_stays_within_radial_limits_when_the_slot_dips_below_them(nam
         ctx.slot = [CellPoint(-0.2, -0.4), CellPoint(-0.2, 0.4), CellPoint(0.8, 0.4), CellPoint(0.8, -0.4)]
         inst = find_motif(name)["generator"](ctx)
         assert min(p.radial for v in inst.vectors for p in v.points) >= 0.0
+
+
+# ----- motif aesthetics: lotus petal, curved leaf, concave diamond ----------
+
+from qa_patterns import max_turn_deg, tangent_error_deg
+
+
+def test_tangent_error_is_zero_along_a_radial_line_and_ninety_across_it(cell_kwargs):
+    ctx = make_ctx(cell_kwargs)
+    radial_line = [CellPoint(0.2, 0.3), CellPoint(0.5, 0.3), CellPoint(0.8, 0.3)]
+    across = [CellPoint(0.5, -0.2), CellPoint(0.5, 0.0), CellPoint(0.5, 0.2)]
+    assert tangent_error_deg(ctx, radial_line, 1) == pytest.approx(0.0, abs=1e-9)
+    assert tangent_error_deg(ctx, across, 1) == pytest.approx(90.0, abs=0.1)
+
+
+def test_max_turn_reads_corners_on_the_traced_polyline_and_honours_skip(cell_kwargs):
+    ctx = make_ctx(cell_kwargs)
+    square = [CellPoint(0.2, -0.3), CellPoint(0.2, 0.3), CellPoint(0.8, 0.3), CellPoint(0.8, -0.3)]
+    assert 80.0 < max_turn_deg(ctx, square, True, set()) < 100.0
+    # An open run never turns at its ends; skipping every corner leaves only the gentle subdivision bends.
+    assert max_turn_deg(ctx, square, True, {0, 1, 2, 3}) < 10.0
+    assert max_turn_deg(ctx, square[:2], False, set()) < 10.0
+
+
+@pytest.mark.parametrize("name", ["petal", "leaf"])
+@pytest.mark.parametrize("radial", [0.12, 0.45])
+def test_side_touch_vertex_is_smooth(name, radial, cell_kwargs):
+    for seed in range(12):
+        ctx = make_ctx(cell_kwargs, seed, side_touch_radial=radial)
+        outline = find_motif(name)["generator"](ctx).vectors[0].points
+        i = next(k for k, p in enumerate(outline) if p.radial == radial and p.angular == 1.0)
+        assert tangent_error_deg(ctx, outline, i) <= 10.0
+
+
+@pytest.mark.parametrize("name", ["petal", "leaf"])
+def test_outline_has_no_corners_but_its_tip_and_base(name, cell_kwargs):
+    for seed in range(12):
+        ctx = make_ctx(cell_kwargs, seed, side_touch_radial=0.12)
+        pts = find_motif(name)["generator"](ctx).vectors[0].points
+        tip = max(range(len(pts)), key=lambda k: pts[k].radial)
+        base = min(range(len(pts)), key=lambda k: (pts[k].radial, abs(pts[k].angular)))
+        assert max_turn_deg(ctx, pts, True, {tip, base}) <= 35.0
+
+
+@pytest.mark.parametrize("name", ["petal", "leaf"])
+@pytest.mark.parametrize("touch", [None, 0.45])
+def test_plain_and_mid_touch_outlines_have_no_corners_but_tip_and_base(name, touch, cell_kwargs):
+    for seed in range(12):
+        ctx = make_ctx(cell_kwargs, seed, complexity=1.0, side_touch_radial=touch)
+        pts = find_motif(name)["generator"](ctx).vectors[0].points
+        tip = max(range(len(pts)), key=lambda k: pts[k].radial)
+        base = min(range(len(pts)), key=lambda k: (pts[k].radial, abs(pts[k].angular)))
+        assert max_turn_deg(ctx, pts, True, {tip, base}) <= 35.0
+
+
+def test_base_touch_narrows_above_the_vertex(cell_kwargs):
+    ctx = make_ctx(cell_kwargs, 3, side_touch_radial=0.12)
+    pts = find_motif("petal")["generator"](ctx).vectors[0].points
+    assert all(abs(p.angular) < 1.0 for p in pts if p.radial > 0.12 + 1e-9)
+
+
+def test_petal_belly_is_its_widest_vertex_at_a_drawn_fraction_of_its_length(cell_kwargs):
+    fractions = []
+    for seed in range(40):
+        pts = find_motif("petal")["generator"](make_ctx(cell_kwargs, seed)).vectors[0].points
+        base, tip = min(p.radial for p in pts), max(p.radial for p in pts)
+        belly = max(pts, key=lambda p: (p.angular, -p.radial))
+        fractions.append((belly.radial - base) / (tip - base))
+    assert all(0.3 - 1e-9 <= f <= 0.6 + 1e-9 for f in fractions)
+    assert max(fractions) - min(fractions) > 0.15
+
+
+def test_diamond_has_both_variants(cell_kwargs):
+    kinds = set()
+    for seed in range(20):
+        ctx = make_ctx(cell_kwargs, seed); ctx.slot = slot_for(cell_kwargs)
+        kinds.add(len(find_motif("diamond")["generator"](ctx).vectors[0].points) > 4)
+    assert kinds == {True, False}
+
+
+def test_concave_diamond_edges_bow_inside_the_straight_diamond(cell_kwargs):
+    for seed in range(20):
+        ctx = make_ctx(cell_kwargs, seed); ctx.slot = slot_for(cell_kwargs)
+        pts = find_motif("diamond")["generator"](ctx).vectors[0].points
+        if len(pts) == 4:
+            continue
+        hull = Polygon([(p.angular, p.radial) for p in pts]).convex_hull
+        shape = Polygon([(p.angular, p.radial) for p in pts])
+        assert shape.is_valid and shape.area < 0.9 * hull.area
+        # Every sample keeps to its own side of the axis, so the two sides never cross.
+        tips = [k for k, p in enumerate(pts) if p.angular == 0.0]
+        assert len(tips) == 2
+
+
+def test_concave_diamond_bow_is_a_drawn_share_of_its_half_width(cell_kwargs):
+    from motifs.geometric import DIAMOND_BOW_RANGE, _diamond
+    for bow in (DIAMOND_BOW_RANGE[0], 0.25, DIAMOND_BOW_RANGE[1]):
+        pts = _diamond(0.5, 0.3, 0.4, bow)
+        lower = [p for p in pts if p.angular >= 0 and p.radial <= 0.5]
+        # Interpolate the lower-right edge at the radial halfway from the tip (0.2) to the side vertex (0.5).
+        a, b = next((p, q) for p, q in zip(lower, lower[1:]) if p.radial <= 0.35 <= q.radial)
+        angular = a.angular + (b.angular - a.angular) * (0.35 - a.radial) / (b.radial - a.radial)
+        assert (0.2 - angular) / 0.4 == pytest.approx(bow, abs=0.02)
