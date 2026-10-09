@@ -219,6 +219,92 @@ def quad_points(
     return points
 
 
+def cubic_points(
+    start: CellPoint,
+    control1: CellPoint,
+    control2: CellPoint,
+    end: CellPoint,
+    steps: int = 8,
+) -> List[CellPoint]:
+    """Sample a cubic bezier in cell space: `steps + 1` points, exact ends, nothing clamped."""
+    points = [start]
+    for index in range(1, steps):
+        t = index / steps
+        u = 1.0 - t
+        w0, w1, w2, w3 = u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t
+        points.append(CellPoint(
+            radial=w0 * start.radial + w1 * control1.radial + w2 * control2.radial + w3 * end.radial,
+            angular=w0 * start.angular + w1 * control1.angular + w2 * control2.angular + w3 * end.angular,
+        ))
+    points.append(end)
+    return points
+
+
+def page_arc_points(
+    context: MotifContext,
+    centre: CellPoint,
+    radius_px: float,
+    start_deg: float,
+    end_deg: float,
+    steps: int = 16,
+) -> List[CellPoint]:
+    """
+    An arc that is round on the page, sampled in cell space.
+
+    Angles are in the cell's local page frame at `centre`: 0 degrees points outward along the
+    radius, 90 degrees toward increasing angular. Pixel offsets are converted at the centre's radial.
+    """
+    points = []
+    for index in range(steps + 1):
+        theta = math.radians(start_deg + (end_deg - start_deg) * index / steps)
+        points.append(CellPoint(
+            radial=centre.radial + context.px_to_radial(radius_px * math.cos(theta)),
+            angular=centre.angular + context.px_to_angular(radius_px * math.sin(theta), centre.radial),
+        ))
+    return points
+
+
+def page_circle_points(
+    context: MotifContext,
+    centre: CellPoint,
+    radius_px: float,
+    steps: int = 24,
+) -> List[CellPoint]:
+    """A closed circle round on the page; the first point is not repeated at the end."""
+    return page_arc_points(context, centre, radius_px, 0.0, 360.0, steps)[:-1]
+
+
+def insert_vertex_on_outline(
+    points: List[CellPoint],
+    closed: bool,
+    point: CellPoint,
+    tolerance: float = 1e-9,
+) -> List[CellPoint]:
+    """
+    Insert `point` into the outline segment it lies on, in cell space.
+
+    Returns the input unchanged when `point` is already a vertex or lies on no segment.
+    """
+    def near(a: CellPoint, b: CellPoint) -> bool:
+        return abs(a.radial - b.radial) <= tolerance and abs(a.angular - b.angular) <= tolerance
+
+    if any(near(vertex, point) for vertex in points):
+        return points
+    count = len(points)
+    for index in range(count if closed else count - 1):
+        a, b = points[index], points[(index + 1) % count]
+        dr, da = b.radial - a.radial, b.angular - a.angular
+        length_sq = dr * dr + da * da
+        if length_sq == 0:
+            continue
+        t = ((point.radial - a.radial) * dr + (point.angular - a.angular) * da) / length_sq
+        if not 0.0 < t < 1.0:
+            continue
+        if math.hypot(a.radial + dr * t - point.radial, a.angular + da * t - point.angular) <= tolerance:
+            return points[:index + 1] + [point] + points[index + 1:]
+    return points
+
+
 def mirror_points(points: List[CellPoint]) -> List[CellPoint]:
     """Reflect a run across the cell centerline, preserving order."""
     return [CellPoint(point.radial, -point.angular) for point in points]
