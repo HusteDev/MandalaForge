@@ -12,9 +12,10 @@ limits, and overflow past a boundary is legitimate.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import random
+import zlib
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -23,6 +24,11 @@ PointTuple = Tuple[float, float]
 # A rendered segment may span at most this much arc before it is subdivided.
 # 4 degrees holds the chord/arc error under ~0.25px at the largest canvas radius.
 MAX_SEGMENT_ARC_DEGREES = 4.0
+
+
+def salted_seed(seed: int, salt: str) -> int:
+    """A seed forked by a salt; crc32 keeps it stable across processes (unlike hash())."""
+    return seed * 31 + zlib.crc32(salt.encode("utf-8"))
 
 
 @dataclass(frozen=True)
@@ -53,6 +59,14 @@ class MotifContext:
     slot: Optional[List[CellPoint]] = None
     # Radial of the shared side vertex for base motifs in a side-touch ring (spec 13.2); None draws the plain shape.
     side_touch_radial: Optional[float] = None
+    # Seed shared by every cell of a ring with the same motif and position, and this node's own stream seed.
+    ring_stream_seed: int = 0
+    node_seed: int = 0
+    # Rebuilt from ring_stream_seed on every construction, so dataclasses.replace yields a fresh, identical stream.
+    ring_rng: random.Random = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self.ring_rng = random.Random(self.ring_stream_seed)
 
     @property
     def ring_depth(self) -> float:

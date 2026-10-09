@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from motifs import find_motif, motifs_for_categories, safe_motif
+from motifs.geometry import salted_seed
 
 
 @dataclass
@@ -138,20 +139,27 @@ class DesignPlan:
         return cls.from_dict(json.loads(text))
 
 
-def node_seed(seed: int, ring_index: int, seq_pos: int, depth: int, position: str) -> int:
-    """Integer seed of one node's stream, kept so the node can be regenerated later."""
-    return (
+def node_seed(seed: int, ring_index: int, seq_pos: int, depth: int, position: str, salt: str = "") -> int:
+    """Integer seed of one node's stream, kept so the node can be regenerated later. A salt forks an independent stream."""
+    base = (
         seed * 1_000_003
         + ring_index * 10_007
         + seq_pos * 101
         + depth * 11
         + (0 if position == "centre" else 1)
     )
+    return salted_seed(base, salt) if salt else base
 
 
-def node_rng(seed: int, ring_index: int, seq_pos: int, depth: int, position: str) -> random.Random:
+def node_rng(seed: int, ring_index: int, seq_pos: int, depth: int, position: str,
+             salt: str = "") -> random.Random:
     """Independent, reproducible stream for one node of the plan tree."""
-    return random.Random(node_seed(seed, ring_index, seq_pos, depth, position))
+    return random.Random(node_seed(seed, ring_index, seq_pos, depth, position, salt))
+
+
+def ring_stream_seed(ring_seed: int, ring_index: int, salt: str) -> int:
+    """Seed of a ring-level stream shared by every cell of the ring that uses the same salt."""
+    return node_seed(ring_seed, ring_index, 0, -2, "centre", salt)
 
 
 BOTH_MIN_CELL_WIDTH_PX = 2 * 14.0
@@ -387,7 +395,7 @@ class Composer:
         if not candidates:
             return False
         offset = 3 * len(tried)
-        rng = node_rng(ring.ring_seed, ring.ring_index, seq_pos, offset, position)
+        rng = node_rng(ring.ring_seed, ring.ring_index, seq_pos, offset, position, "pick")
         chosen = self._pick(candidates, rng)
         tried.append(chosen["name"])
         new_node = self._compose(
@@ -501,7 +509,7 @@ class Composer:
         if not candidates:
             safe = safe_motif(self.settings.categories[0])
             return CellRecipe(safe["name"], safe["category"], is_fallback=True)
-        chosen = self._pick(candidates, rng)
+        chosen = self._pick(candidates, node_rng(ring_seed, ring_index, seq_pos, 0, position, "pick"))
         return self._compose(chosen, rng, ring_index, ring_seed, seq_pos, position,
                              cell_width, ring_depth, 0)
 
@@ -548,7 +556,7 @@ class Composer:
         ]
         if not candidates:
             return
-        child_rng = node_rng(ring_seed, ring_index, seq_pos, offset + depth + 1, position)
+        child_rng = node_rng(ring_seed, ring_index, seq_pos, offset + depth + 1, position, "pick")
         child_motif = self._pick(candidates, child_rng)
         node.slot_child = CellRecipe(child_motif["name"], child_motif["category"])
         self._nest(node.slot_child, child_motif, child_rng, ring_index, ring_seed, seq_pos,

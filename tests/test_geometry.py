@@ -27,3 +27,10 @@ def test_quad_points_are_not_clamped():
     assert pts[0] == CellPoint(-0.2, 0.0) and pts[-1] == CellPoint(1.2, 0.0)
     assert not all(0.0 <= p.radial <= 1.0 for p in pts)
     assert pts[1].radial < 0.0  # interior sample below the inner boundary survives
+
+
+def test_ring_rng_is_fresh_after_replace(cell_kwargs):
+    from dataclasses import replace
+    ctx = MotifContext(**cell_kwargs, ring_stream_seed=99)
+    first = ctx.ring_rng.random()
+    assert replace(ctx).ring_rng.random() == first

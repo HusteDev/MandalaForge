@@ -20,7 +20,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tupl
 import numpy as np
 from shapely.geometry import LineString
 
-from composer import CellRecipe, Composer, DesignPlan, RingPlan, node_seed
+from composer import CellRecipe, Composer, DesignPlan, RingPlan, node_seed, ring_stream_seed
 from motifs import find_motif, safe_motif
 from motifs.contract import MotifError, MotifInstance, ReachEnd
 from motifs.geometry import MotifContext, PointTuple, cell_rotation_deg
@@ -290,7 +290,7 @@ class Assembler:
             return
         self._place_slot_children(ring, child)
 
-    def _context(self, ring: RingPlan, position: str, rng_seed: int, radial_limits: Tuple[float, float],
+    def _context(self, ring: RingPlan, position: str, recipe: CellRecipe, rng_seed: int, radial_limits: Tuple[float, float],
                  slot: Optional[list], is_base: bool = False) -> MotifContext:
         """A node's context; a base motif of a side-touch ring gets the ring's side-touch radial (spec 13.2)."""
         geometry = self.ring_geometry[ring.ring_index]
@@ -308,6 +308,8 @@ class Assembler:
             radial_limits=radial_limits,
             slot=slot,
             side_touch_radial=ring.side_touch_radial if is_base and ring.contact_mode == "side" else None,
+            ring_stream_seed=ring_stream_seed(ring.ring_seed, ring.ring_index, f"ring:{recipe.motif}:{position}"),
+            node_seed=rng_seed,
         )
 
     def _trace_node(self, ring_index: int, cell_index: int, position: str, node_path: Tuple[int, ...],
@@ -336,7 +338,7 @@ class Assembler:
         """Generate one node, place and index its ink, and record its attachments' reach ends."""
         depth = len(node_path) - 1
         rng_seed = node_seed(ring.ring_seed, ring.ring_index, node_path[0], depth, position)
-        context = self._context(ring, position, rng_seed, radial_limits, slot, is_base=parent is None)
+        context = self._context(ring, position, recipe, rng_seed, radial_limits, slot, is_base=parent is None)
         instance = _registry_entry(recipe)["generator"](context)
 
         rotation = cell_rotation_deg(cell_index, ring.divisions, position)

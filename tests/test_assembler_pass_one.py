@@ -147,3 +147,12 @@ def test_empty_sequence_raises_assembly_error():
     plan.rings[1].sequence = []
     with pytest.raises(AssemblyError, match="ring 1 has an empty sequence"):
         build(plan)
+
+
+def test_cells_of_a_ring_share_one_ring_stream():
+    asm = build(manual_plan())
+    by_motif = {}
+    for n in asm.nodes:
+        if n.ring_index == 1 and len(n.node_path) == 1:
+            by_motif.setdefault((n.recipe.motif, n.position), set()).add(n.context.ring_stream_seed)
+    assert by_motif and all(len(seeds) == 1 for seeds in by_motif.values())

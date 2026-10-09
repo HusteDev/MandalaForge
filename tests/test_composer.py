@@ -360,3 +360,23 @@ def test_floating_node_in_side_ring_tries_side_bases_before_a_stem():
         seen.append(node.motif)
     assert set(seen) == side_names and len(seen) > 1
     assert ring.contact_mode == "side"
+
+
+def test_unsalted_node_seed_is_unchanged():
+    from composer import node_seed
+    assert node_seed(42, 1, 2, 0, "centre") == 42 * 1_000_003 + 1 * 10_007 + 2 * 101
+
+
+def test_salt_changes_the_seed_and_is_stable():
+    from composer import node_seed
+    salted = node_seed(42, 1, 2, 0, "centre", salt="pick")
+    assert salted != node_seed(42, 1, 2, 0, "centre")
+    assert salted == node_seed(42, 1, 2, 0, "centre", salt="pick")
+
+
+def test_salt_survives_a_new_process():
+    import subprocess, sys
+    from composer import node_seed
+    code = "from composer import node_seed; print(node_seed(42, 1, 2, 0, 'centre', salt='pick'))"
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
+    assert int(out) == node_seed(42, 1, 2, 0, "centre", salt="pick")
