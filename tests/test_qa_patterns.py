@@ -180,3 +180,47 @@ def test_property_checks_pass_for_seam_motifs(name):
 def test_forced_scallop_meets_the_faces_per_cell_floor(divisions):
     job = ("scallop", "botanical", divisions, 0.5, 10, "divider", "base", 20260821, False)
     assert run_case(job)["status"] == "PASS"
+
+
+def test_property_checks_include_seam_and_tangent():
+    from motifs import MOTIFS
+    for entry in MOTIFS:
+        outcome = property_checks(entry)
+        assert {"seam", "tangent"} <= set(outcome) and all(outcome.values()), (entry["name"], outcome)
+
+
+def test_seam_check_fails_a_motif_whose_open_end_is_off_the_edge():
+    from qa_patterns import _seam
+    from motifs.geometry import CellPoint
+    entry = dict(find_motif("band"))
+    good = entry["generator"]
+
+    def off_edge(context):
+        instance = good(context)
+        for vector in instance.vectors:
+            if not vector.closed:
+                vector.points[0] = CellPoint(vector.points[0].radial, 0.9)
+        return instance
+
+    assert _seam(entry)
+    entry["generator"] = off_edge
+    assert not _seam(entry)
+
+
+def test_tangent_check_fails_a_motif_with_a_kinked_touch_vertex():
+    from qa_patterns import _tangent
+    from motifs.geometry import CellPoint
+    entry = dict(find_motif("petal"))
+    good = entry["generator"]
+
+    def kinked(context):
+        instance = good(context)
+        pts = instance.vectors[0].points
+        i = next(k for k, p in enumerate(pts) if p.angular == 1.0 and p.radial == context.side_touch_radial)
+        pts[i - 1] = CellPoint(pts[i].radial, 0.6)
+        pts[(i + 1) % len(pts)] = CellPoint(pts[i].radial, 0.9)
+        return instance
+
+    assert _tangent(entry)
+    entry["generator"] = kinked
+    assert not _tangent(entry)

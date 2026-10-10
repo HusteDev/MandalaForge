@@ -8,9 +8,9 @@ fixtures, and drives the REAL generation pipeline. Forcing disables the fallback
 chain (a rejection is a visible failure, not a silent substitution) and never
 applies to ring 0.
 
-It also checks four properties of each motif's generator on a standard cell:
-determinism, narrower radial limits never reaching further, angular containment
-and an honest slot declaration.
+It also checks six properties of each motif's generator on a standard cell:
+determinism, narrower radial limits never reaching further, angular containment,
+an honest slot declaration, seam ends on the cell edges and smooth side touch.
 
 Usage:
     python qa_patterns.py                        # smoke tier, every motif
@@ -31,7 +31,7 @@ from typing import List, Set
 
 from assembler import stroke_width_for
 from coloring_generator import DesignGenerator
-from composer import Composer, ComposerSettings, node_rng
+from composer import Composer, ComposerSettings, node_rng, ring_stream_seed
 from motifs import MOTIFS, find_motif, safe_motif
 from motifs.contract import MotifError
 from motifs.geometry import CellPoint, MotifContext, SmartVector
@@ -387,10 +387,49 @@ def _slot(entry):
     return _generate(entry, 9).declaration.slot is not None
 
 
+def _seam(entry):
+    """
+    A seam motif's open ends sit at angular exactly +-1.0, and two cells of one ring (seeds 11 and 12,
+    one `ring_stream_seed`) draw identical vectors, so neighbours meet along the shared edge.
+    """
+    if not entry.get('seams', False):
+        return True
+    ring_seed = ring_stream_seed(7, 1, f"ring:{entry['name']}:divider")
+    first = _generate(entry, 11, ring_stream_seed=ring_seed)
+    second = _generate(entry, 12, ring_stream_seed=ring_seed)
+    ends = [vector.points[k] for vector in first.vectors if not vector.closed for k in (0, -1)]
+    return (all(abs(point.angular) == 1.0 for point in ends)
+            and [(v.points, v.closed) for v in first.vectors] == [(v.points, v.closed) for v in second.vectors])
+
+
+# Radial of the shared side vertex per touch height; both sit inside the ranges the composer draws from.
+TOUCH_RADIALS = {'base': 0.12, 'mid': 0.45}
+TANGENT_LIMIT_DEG = 10.0
+
+
+def _tangent(entry):
+    """
+    At each declared touch height the outline's side-touch vertex runs along the divider: the tangent
+    there is within `TANGENT_LIMIT_DEG` of radial for seeds 0 to 5. A missing touch vertex fails.
+    """
+    for height in entry.get('side_touch_heights', ()):
+        radial = TOUCH_RADIALS[height]
+        for seed in range(6):
+            context = MotifContext(**PROPERTY_CELL, rng=random.Random(seed), side_touch_radial=radial)
+            instance = entry['generator'](context)
+            found = [(vector.points, k) for vector in instance.vectors if vector.closed
+                     for k, p in enumerate(vector.points) if p.radial == radial and abs(p.angular) == 1.0]
+            if not found:
+                return False
+            if any(tangent_error_deg(context, points, k) > TANGENT_LIMIT_DEG for points, k in found):
+                return False
+    return True
+
+
 def property_checks(entry):
-    """Run the four generator property checks on the standard test cell."""
+    """Run the generator property checks on the standard test cell."""
     checks = {'deterministic': _deterministic, 'monotone': _monotone,
-              'angular': _angular, 'slot': _slot}
+              'angular': _angular, 'slot': _slot, 'seam': _seam, 'tangent': _tangent}
     outcome = {}
     for key, check in checks.items():
         try:
@@ -458,7 +497,7 @@ def main():
         by_motif.setdefault(result['name'], []).append(result)
 
     header = (f"{'MOTIF':16} {'PASS':>5} {'SKIP':>5} {'FAIL':>5} {'CONTR':>6} {'ERR':>4} {'DROP':>5} "
-              f"{'DET':>5} {'MONO':>5} {'ANG':>5} {'SLOT':>5}")
+              f"{'DET':>5} {'MONO':>5} {'ANG':>5} {'SLOT':>5} {'SEAM':>5} {'TANG':>5}")
     print(header)
     print("-" * len(header))
     failed = []
@@ -474,7 +513,8 @@ def main():
         print(f"{name:16} {counts['PASS']:>5} {counts['SKIP']:>5} {counts['FAIL']:>5} "
               f"{counts['CONTRACT']:>6} {counts['ERROR']:>4} {dropped:>5} "
               f"{mark[props['deterministic']]:>5} {mark[props['monotone']]:>5} "
-              f"{mark[props['angular']]:>5} {mark[props['slot']]:>5}")
+              f"{mark[props['angular']]:>5} {mark[props['slot']]:>5} "
+              f"{mark[props['seam']]:>5} {mark[props['tangent']]:>5}")
 
     if failed:
         print("\nFailing cases:")
