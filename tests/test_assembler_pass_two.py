@@ -810,3 +810,52 @@ def test_curved_reach_flattens_one_rung_at_a_time():
     asm.index.add(PlacedPath(0, 0, "centre", (0,), "base", [(30.0, -9.0), (70.0, -9.0)], [0.5, 0.5], False, 1.0))
     coords = resolver._curve_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0), bow_coords)
     assert math.isclose(max(abs(y) for _, y in coords), 4.0, abs_tol=1e-9)
+
+
+# ----- reaches from or onto a junction: ink shared by other paths -----
+
+def _junction_asm():
+    # A band's lens tip on its inner arc at (0, 0): the stem starts on a vertex both paths hold. Its end at
+    # (0, 100) lies on a target line and on the end of a midrib that meets the target there.
+    asm = types.SimpleNamespace(index=InkIndex(), min_white_space=10.0)
+    arc = PlacedPath(0, 0, "centre", (0,), "base", [(-50.0, 0.0), (0.0, 0.0), (50.0, 0.0)], [0.5] * 3, False, 1.0)
+    lens = PlacedPath(0, 0, "centre", (0,), "base", [(0.0, 0.0), (6.0, -20.0), (0.0, -40.0), (-6.0, -20.0), (0.0, 0.0)],
+                      [0.5] * 5, True, 1.0)
+    target = PlacedPath(0, 1, "centre", (0,), "base", [(-50.0, 100.0), (0.0, 100.0), (50.0, 100.0)], [0.5] * 3, False, 1.0)
+    midrib = PlacedPath(0, 1, "centre", (1,), "base", [(0.0, 100.0), (0.0, 140.0)], [0.5] * 2, False, 1.0)
+    for path in (arc, lens, target, midrib):
+        asm.index.add(path)
+    return asm, lens, target
+
+@pytest.mark.parametrize("shape", ["bow", "s"])
+def test_curved_reach_from_a_junction_keeps_its_curve(shape):
+    # Every path meeting the reach's start or end point may come closer within the touch disc there, not only
+    # the anchor and target: the arc through the lens tip and the midrib ending on the target used to sit at
+    # distance 0 from every curve, so each stem from a band's lens fell back to straight.
+    asm, lens, target = _junction_asm()
+    coords = resolver._curve_clear_of_ink(asm, (0.0, 0.0), (0.0, 100.0), resolver.REACH_SHAPES[shape],
+                                          end_paths=[(lens, (0.0, 0.0)), (target, (0.0, 100.0))])
+    assert coords[0] == (0.0, 0.0) and coords[-1] == (0.0, 100.0)
+    assert max(abs(x) for x, _ in coords) == pytest.approx(8.0, abs=0.2)
+
+@pytest.mark.parametrize("shape", ["bow", "s"])
+def test_junction_path_is_exempt_only_near_the_junction(shape):
+    # A path through the start that then runs 3px beside the reach, well past the touch disc, is within a pen's
+    # width of every curve there: the reach still falls back to straight.
+    asm, lens, target = _junction_asm()
+    asm.index.add(PlacedPath(0, 0, "centre", (2,), "base", [(0.0, 0.0), (-3.0, 20.0), (-3.0, 80.0)], [0.5] * 3,
+                             False, 1.0))
+    coords = resolver._curve_clear_of_ink(asm, (0.0, 0.0), (0.0, 100.0), resolver.REACH_SHAPES[shape],
+                                          end_paths=[(lens, (0.0, 0.0)), (target, (0.0, 100.0))])
+    assert max(abs(x) for x, _ in coords) == 0.0
+
+def test_stems_from_a_band_ring_are_drawn_curved():
+    # A band's stems start on its lens tips, which its inner arc passes through: they keep their curves.
+    plan = manual_plan()
+    plan.rings[1].sequence[0] = CellEntry(CellRecipe(
+        "band", "geometric", attachments=[CellRecipe("stem", "botanical", provides_contact=True)]), None)
+    design = assemble(plan)
+    stems = [r for r in design.reaches if r.ring_index == 1]
+    assert stems
+    assert all(LineString([r.coords[0], r.coords[-1]]).hausdorff_distance(LineString(r.coords)) > 0.5
+               for r in stems)

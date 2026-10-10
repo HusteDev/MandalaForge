@@ -812,15 +812,37 @@ def _curve_clear_of_ink(asm: Assembler, start: PointTuple, end: PointTuple,
     The curved reach of `shape` from `start` to `end`, its curve flattened step
     by step down `WAVY_FALLBACK_SCALES` until it keeps `CLEARANCE_PX` from ink
     and `accept` takes it. The paths the reach starts and ends on, `end_paths`
-    with the point on each, may come closer within the touch disc around that
-    point. The straight segment always qualifies, being the ray up to where it
-    came within the touch gap of ink; None when `accept` refuses even that.
+    with the point on each, and every other path that meets `start` or `end`
+    (a junction: a band's arc through its lens tip, a midrib ending on a leaf's
+    tip) may come closer within the touch disc around that point. The straight
+    segment always qualifies, being the ray up to where it came within the
+    touch gap of ink; None when `accept` refuses even that.
     """
+    end_paths = list(end_paths) + _junction_paths(asm, (start, end), end_paths)
     for scale in WAVY_FALLBACK_SCALES:
         coords = shape(start, end, scale)
         if (scale == 0.0 or _keeps_clearance(asm, LineString(coords), end_paths)) and accept(coords):
             return coords
     return None
+
+
+def _junction_paths(asm: Assembler, points: Sequence[PointTuple],
+                    known: Sequence[Tuple[PlacedPath, PointTuple]]) -> List[Tuple[PlacedPath, PointTuple]]:
+    """
+    Each indexed path, other than those in `known` at the same point, within
+    `ON_INK_PX` of one of `points`, paired with that point. Such a path sits at
+    distance 0 from any line leaving the point, so it is held clear only beyond
+    the touch disc there, as the reach's own end paths are.
+    """
+    have = {(id(path), point) for path, point in known}
+    found: List[Tuple[PlacedPath, PointTuple]] = []
+    for point in points:
+        probe = Point(point)
+        for other in asm.index.candidates(probe.buffer(ON_INK_PX)):
+            if (id(other), point) not in have and path_geometry(other).distance(probe) <= ON_INK_PX:
+                have.add((id(other), point))
+                found.append((other, point))
+    return found
 
 
 def _keeps_clearance(asm: Assembler, line: LineString, end_paths: Sequence[Tuple[PlacedPath, PointTuple]]) -> bool:
