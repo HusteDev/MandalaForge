@@ -302,14 +302,32 @@ def _centre(bead):
     return CellPoint((min(radials) + max(radials)) / 2.0, (min(angulars) + max(angulars)) / 2.0)
 
 
-# At the fixture's 10px white space no bead fits a band in a 60px-deep ring (a 10px bead needs the band 32px
-# thick between its arcs), so the bead tests draw with 4px white space.
+# At the fixture's 10px white space a beaded band is thick enough, but its ~34px half-cell beside the lens
+# rarely leaves room for a 10px bead with its clearances, so the bead tests draw with 4px white space.
 def test_beads_are_the_same_in_every_cell(cell_kwargs):
     make = lambda s: find_motif("band")["generator"](make_ctx(
         cell_kwargs, s, ring_stream_seed=5, embellishments=("beads",), min_white_space=4.0))
     a, b = make(1), make(2)
     assert [v.points for v in a.vectors] == [v.points for v in b.vectors]
     assert any(v.closed and v.weight == "detail" for v in a.vectors)
+
+
+def test_beaded_band_draws_wider_arcs_from_the_same_draws(cell_kwargs):
+    from motifs.geometric import (
+        BAND_INNER_RANGE, BAND_OUTER_RANGE, BEADED_BAND_INNER_RANGE, BEADED_BAND_OUTER_RANGE,
+    )
+    assert (BEADED_BAND_INNER_RANGE, BEADED_BAND_OUTER_RANGE) == ((0.12, 0.25), (0.75, 0.88))
+    assert (BAND_INNER_RANGE, BAND_OUTER_RANGE) == ((0.25, 0.45), (0.55, 0.75))
+    for ring in range(20):
+        plain = find_motif("band")["generator"](make_ctx(cell_kwargs, 1, ring_stream_seed=ring))
+        beaded = find_motif("band")["generator"](make_ctx(cell_kwargs, 1, ring_stream_seed=ring,
+                                                          embellishments=("beads",)))
+        (p1, p2), (b1, b2) = [(i.vectors[0].points[0].radial, i.vectors[1].points[0].radial) for i in (plain, beaded)]
+        assert 0.25 <= p1 <= 0.45 and 0.55 <= p2 <= 0.75
+        assert 0.12 <= b1 <= 0.25 and 0.75 <= b2 <= 0.88
+        # The same draws, in the same order: each radial sits at the same share of its range.
+        assert (b1 - 0.12) / 0.13 == pytest.approx((p1 - 0.25) / 0.2)
+        assert (b2 - 0.75) / 0.13 == pytest.approx((p2 - 0.55) / 0.2)
 
 
 def test_beads_draw_only_from_the_ring_stream(cell_kwargs):

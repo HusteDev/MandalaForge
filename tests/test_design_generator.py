@@ -299,15 +299,22 @@ def test_band_rings_meet_at_their_seams(divisions):
 def test_inward_stem_never_lands_on_an_outer_rings_overflow():
     # Seed 9: ring 2's scallop stem runs down the axis of a ring-3 petal dipping into ring 2. Landing on that
     # petal (a ring resolved later, not yet joined to the structure) left ring 2 floating through every substitute.
+    # Since beaded bands widened (Task 11), ring 1 keeps its petal, whose tip reaches into ring 2: the stem may
+    # land there, on ink of an inner ring, but never on ring 3's.
+    from shapely.geometry import LineString, Point
     g = DesignGenerator(seed=9, num_rings=4, num_divisions=12, vary_divisions=True, complexity=0.5,
                         min_pattern_size=10, categories=["botanical", "geometric"])
     g.generate()
     assert {n.motif for n in _base_nodes_of(g.plan.rings[2])} == {"scallop"}
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
-    for reach in g.assembled.reaches:
-        if reach.ring_index == 2:
-            end = reach.coords[-1]
-            assert math.hypot(end[0] - g.center[0], end[1] - g.center[1]) <= g.rings[2]["inner_radius"] + 1e-6
+    inner = [LineString(p.coords) for p in g.assembled.paths if p.ring_index < 2 and len(p.coords) > 1]
+    outer = [LineString(p.coords) for p in g.assembled.paths if p.ring_index > 2 and len(p.coords) > 1]
+    stems = [reach for reach in g.assembled.reaches if reach.ring_index == 2]
+    assert stems
+    for reach in stems:
+        end = Point(reach.coords[-1])
+        assert min(line.distance(end) for line in inner) < 1e-6
+        assert min(line.distance(end) for line in outer) > 1.0
 
 
 def _base_nodes_of(ring):
