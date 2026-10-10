@@ -157,15 +157,18 @@ def test_members_float_noise_does_not_fail_the_final_check(seed):
 
 
 def test_guarded_tips_are_touched_from_the_other_side():
-    # Seed 3 pulls a ring-2 leaf back outward and a ring-3 leaf back inward, so their tips meet at the shared
-    # boundary. Both apexes are shared with their midribs and neither can move onto the other, so the ring-3
-    # outline must come to the ring-2 apex.
-    g = DesignGenerator(seed=3, num_rings=4, num_divisions=12, complexity=0.7,
+    # Seed 87 (c0.5) pulls a ring-2 leaf back outward and a ring-3 leaf back inward, so their tips meet at the
+    # shared boundary. Both apexes are shared with their midribs and neither can move onto the other, so the
+    # ring-3 outline must come to the ring-2 apex. (Seed 3 at c0.7 was the case until embellishments: its leaves
+    # now carry echoes, which move the midrib inside, off the apex.)
+    g = DesignGenerator(seed=87, num_rings=4, num_divisions=12, complexity=0.5,
                         categories=["botanical", "geometric"], vary_divisions=True)
     g.generate()
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
     nodes = g.assembled.nodes
     leaves = [n for n in nodes if n.recipe.motif == "leaf" and n.parent is None]
+    # No echo, so each leaf's midrib still ends on its outline's apex.
+    assert not any("echo" in n.recipe.embellishments for n in leaves if n.ring_index in (2, 3))
     assert any(n.pull_backs.get("outward") for n in leaves if n.ring_index == 2)
     assert any(n.pull_backs.get("inward") for n in leaves if n.ring_index == 3)
     outer = [n.paths[0] for n in nodes if n.ring_index == 3 and n.recipe.motif == "leaf" and n.parent is None]

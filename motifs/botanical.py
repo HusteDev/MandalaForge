@@ -5,7 +5,8 @@ from __future__ import annotations
 import math
 from typing import Dict, List, Optional
 
-from motifs.contract import MotifError, MotifInstance, ReachEnd, build_instance, require_full_budget
+from motifs.contract import Anatomy, MotifError, MotifInstance, ReachEnd, build_instance, require_full_budget
+from motifs.embellish import apply_embellishments, axis_span, end_on_outline, innermost_ink
 from motifs.geometry import (
     CellPoint,
     MotifContext,
@@ -159,7 +160,17 @@ def generate_petal(context: MotifContext) -> MotifInstance:
         if touch is not None:
             half_width = context.angular_limits
         points = outline(base_radial, tip_radial, half_width, context.angular_limits, belly_radial=touch)
-    return build_instance(context, [SmartVector(points, closed=True)], slot_outline=points)
+    anatomy = _pointed_anatomy(points)
+    result = apply_embellishments(context, [SmartVector(points, closed=True)], anatomy, points)
+    return build_instance(
+        context, result.vectors, slot_outline=result.slot_outline, anatomy=anatomy,
+        dropped_embellishments=result.dropped, slot_outline_weight=result.slot_outline_weight,
+    )
+
+
+def _pointed_anatomy(points: List[CellPoint]) -> Anatomy:
+    """A `_pointed_outline`'s anatomy: its base vertex first, its tip vertex where the right side ends."""
+    return Anatomy(base=points[0], tip=points[2 * CURVE_STEPS], outline=0)
 
 
 def _leaf_vectors(
@@ -182,15 +193,18 @@ def _leaf_vectors(
     return [SmartVector(outline, closed=True), SmartVector(midrib)]
 
 
+def _halves_colourable(context: MotifContext, outline: List[CellPoint]) -> bool:
+    """
+    Whether a midrib along the axis leaves each half of `outline` colourable: at the outline's widest
+    point a half is as wide as that point's angular offset.
+    """
+    widest = max(outline, key=lambda point: abs(point.angular))
+    return context.angular_to_px(widest.angular, widest.radial) >= context.min_white_space
+
+
 def _drop_thin_midrib(context: MotifContext, vectors: List[SmartVector]) -> List[SmartVector]:
-    """
-    Keep the midrib only when each half it makes is colourable: at the leaf's
-    widest point a half is as wide as that point's angular offset.
-    """
-    widest = max(vectors[0].points, key=lambda point: abs(point.angular))
-    if context.angular_to_px(widest.angular, widest.radial) >= context.min_white_space:
-        return vectors
-    return vectors[:1]
+    """Keep the midrib only when each half it makes is colourable."""
+    return vectors if _halves_colourable(context, vectors[0].points) else vectors[:1]
 
 
 def generate_leaf(context: MotifContext) -> MotifInstance:
@@ -236,7 +250,36 @@ def generate_leaf(context: MotifContext) -> MotifInstance:
         belly_radial = touch if touch is not None else apex_radial * belly
         vectors = _leaf_vectors(0.0, apex_radial, belly_radial, half_width, roundness, context.angular_limits)
     vectors = _drop_thin_midrib(context, vectors)
-    return build_instance(context, vectors, base_point=vectors[0].points[0])
+    has_midrib = len(vectors) > 1
+    anatomy = _pointed_anatomy(vectors[0].points)
+    result = apply_embellishments(context, vectors[:1], anatomy, None)
+    vectors = result.vectors
+    if has_midrib:
+        vectors = _leaf_with_midrib(context, vectors, anatomy)
+    return build_instance(
+        context, vectors, base_point=vectors[0].points[0], anatomy=anatomy,
+        dropped_embellishments=result.dropped,
+    )
+
+
+def _leaf_with_midrib(context: MotifContext, vectors: List[SmartVector], anatomy: Anatomy) -> List[SmartVector]:
+    """
+    The leaf's ink with its midrib along the axis, ending on the innermost ring of ink: the outline's base
+    and apex vertices, or, inside echoes, the innermost echo's axis crossings, inserted there as vertices.
+    The midrib is left out when the innermost echo is too thin for each half to be colourable.
+    """
+    innermost = innermost_ink(vectors, anatomy)
+    if innermost == anatomy.outline:
+        return vectors + [SmartVector([anatomy.base, anatomy.tip])]
+    echo = vectors[innermost]
+    span = axis_span(echo.points)
+    if span is None or not _halves_colourable(context, echo.points):
+        return vectors
+    echo, ends = end_on_outline(echo, span)
+    vectors = list(vectors)
+    vectors[innermost] = echo
+    # Inside an echo the midrib is interior detail, drawn at detail weight like the echo it ends on.
+    return vectors + [SmartVector(ends, weight="detail")]
 
 
 SCALLOP_STEPS = 24
@@ -323,7 +366,7 @@ BOTANICAL_MOTIFS: List[Dict] = [
         "touch": True,
         "side_touch_heights": ("base", "mid"),
         "seams": False,
-        "embellishments": (),
+        "embellishments": ("echo", "veins", "fan", "dot"),
         "spans_cell": False,
         "min_cell_width_px": 14.0,
         "min_ring_depth_px": 18.0,
@@ -340,7 +383,7 @@ BOTANICAL_MOTIFS: List[Dict] = [
         "touch": True,
         "side_touch_heights": ("base", "mid"),
         "seams": False,
-        "embellishments": (),
+        "embellishments": ("echo", "veins"),
         "spans_cell": False,
         "min_cell_width_px": 14.0,
         "min_ring_depth_px": 20.0,

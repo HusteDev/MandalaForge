@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 from shapely.geometry import Polygon
 
 from motifs.contract import MotifError, MotifInstance, build_instance, require_full_budget
+from motifs.embellish import apply_embellishments
 from motifs.geometry import CellPoint, MotifContext, SmartVector, cubic_points, mirror_points, quad_points
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
 from topology_validator import MIN_REGION_AREA_PX2, PEN_RADIUS_PX
@@ -143,7 +144,9 @@ def generate_band(context: MotifContext) -> MotifInstance:
     # The lens ties the arcs together and cuts the annulus between them into faces, one per cell side.
     half_width = _lens_half_width(context, share, (r1 + r2) / 2.0)
     lens = SmartVector(_lens(r1, r2, half_width), closed=True)
-    return build_instance(context, [*arcs, lens], seams=True)
+    # The band offers no slot and no anatomy; an embellishment it cannot draw yet is dropped and counted.
+    result = apply_embellishments(context, [*arcs, lens], None, None)
+    return build_instance(context, result.vectors, seams=True, dropped_embellishments=result.dropped)
 
 
 GEOMETRIC_MOTIFS: List[Dict] = [
@@ -173,7 +176,7 @@ GEOMETRIC_MOTIFS: List[Dict] = [
         "touch": True,
         "side_touch_heights": (),
         "seams": True,
-        "embellishments": (),
+        "embellishments": ("beads",),
         "spans_cell": True,
         "min_cell_width_px": 0.0,
         "min_ring_depth_px": 0.0,

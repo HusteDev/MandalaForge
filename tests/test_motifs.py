@@ -303,7 +303,9 @@ def test_registry_phase_one_touch_heights():
         "diamond": (), "band": (), "botanical_safe_band": ("mid",),
     }
     assert {e["name"] for e in all_entries() if e["seams"]} == {"band", "scallop"}
-    assert all(e["embellishments"] == () for e in all_entries())
+    # Task 9 (spec 6.4): petal, leaf and band accept embellishments; every other entry accepts none.
+    accepted = {"petal": ("echo", "veins", "fan", "dot"), "leaf": ("echo", "veins"), "band": ("beads",)}
+    assert all(e["embellishments"] == accepted.get(e["name"], ()) for e in all_entries())
 
 
 @pytest.mark.parametrize("name", ["petal", "leaf"])

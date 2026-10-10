@@ -69,6 +69,8 @@ class MotifContext:
     # Seed shared by every cell of a ring with the same motif and position, and this node's own stream seed.
     ring_stream_seed: int = 0
     node_seed: int = 0
+    # Embellishment names the composer picked for this node (spec 6.4); `apply_embellishments` runs them.
+    embellishments: Tuple[str, ...] = ()
     # Rebuilt from ring_stream_seed on every construction, so dataclasses.replace yields a fresh, identical stream.
     ring_rng: random.Random = field(init=False, repr=False, compare=False)
 

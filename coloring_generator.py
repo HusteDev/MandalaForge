@@ -180,7 +180,8 @@ class DesignGenerator:
         ).assemble()
         print(f"  Ring divisions: {[ring.divisions for ring in self.plan.rings]}")
         print(f"  Placed {len(self.assembled.paths)} paths, {len(self.assembled.reaches)} reaches, "
-              f"{self.assembled.dropped_children} dropped children")
+              f"{self.assembled.dropped_children} dropped children, "
+              f"{self.assembled.dropped_embellishments} dropped embellishments")
 
         svg = self._render_svg()
 

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from motifs import find_motif, motifs_for_categories, safe_motif
+from motifs.embellish import EMBELLISHMENT_ORDER, INTERIOR_FILLS
 from motifs.geometry import salted_seed
 
 
@@ -24,6 +25,8 @@ class CellRecipe:
     # An attachment drawn in one cell per wedge only (cell_index % (divisions // base_symmetry) == 0):
     # the single stem of a side-touch ring, whose cells already form one connected band.
     once_per_wedge: bool = False
+    # Embellishment names for this node, in EMBELLISHMENT_ORDER (spec 6.4); picked for base nodes only.
+    embellishments: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -35,6 +38,7 @@ class CellRecipe:
             "provides_contact": self.provides_contact,
             "dropped": self.dropped,
             "once_per_wedge": self.once_per_wedge,
+            "embellishments": list(self.embellishments),
         }
 
     @classmethod
@@ -49,6 +53,7 @@ class CellRecipe:
             provides_contact=d.get("provides_contact", False),
             dropped=d.get("dropped", False),
             once_per_wedge=d.get("once_per_wedge", False),
+            embellishments=list(d.get("embellishments", [])),
         )
 
 
@@ -164,6 +169,28 @@ def node_rng(seed: int, ring_index: int, seq_pos: int, depth: int, position: str
 def ring_stream_seed(ring_seed: int, ring_index: int, salt: str) -> int:
     """Seed of a ring-level stream shared by every cell of the ring that uses the same salt."""
     return node_seed(ring_seed, ring_index, 0, -2, "centre", salt)
+
+
+MAX_EMBELLISHMENTS = 3
+
+
+def pick_embellishments(entry: Dict, complexity: float, rng: random.Random) -> List[str]:
+    """
+    Embellishments for one node (spec 6.4): `n = clamp(floor(3 (complexity - 0.2) / 0.8 + u), 0, 3)` with
+    `u` from `rng`, names drawn without replacement from the entry's accepted list, at most one interior
+    fill, returned in `EMBELLISHMENT_ORDER`.
+    """
+    u = rng.random()
+    count = max(0, min(MAX_EMBELLISHMENTS, math.floor(3.0 * (complexity - 0.2) / 0.8 + u)))
+    pool = list(entry.get("embellishments", ()))
+    picked: List[str] = []
+    while len(picked) < count and pool:
+        name = rng.choice(pool)
+        picked.append(name)
+        pool.remove(name)
+        if name in INTERIOR_FILLS:
+            pool = [other for other in pool if other not in INTERIOR_FILLS]
+    return [name for name in EMBELLISHMENT_ORDER if name in picked]
 
 
 BOTH_MIN_CELL_WIDTH_PX = 2 * 14.0
@@ -577,7 +604,17 @@ class Composer:
     def _compose(self, motif: Dict, rng: random.Random, ring_index: int, ring_seed: int,
                  seq_pos: int, position: str, cell_width: float, ring_depth: float,
                  offset: int) -> CellRecipe:
+        """
+        A base node: its embellishments, from their own stream so the base picks never shift, then its slot
+        chain, unless an interior fill now fills the slot (spec 6.4).
+        """
         node = CellRecipe(motif["name"], motif["category"])
+        node.embellishments = pick_embellishments(
+            motif, self.settings.complexity,
+            node_rng(ring_seed, ring_index, seq_pos, offset, position, "pick:emb"),
+        )
+        if set(node.embellishments) & set(INTERIOR_FILLS):
+            return node
         self._nest(node, motif, rng, ring_index, ring_seed, seq_pos, position,
                    cell_width, ring_depth, offset, 0, 1.0, 1.0)
         return node

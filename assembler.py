@@ -23,7 +23,7 @@ from shapely.geometry import LineString
 from composer import CellRecipe, Composer, DesignPlan, RingPlan, node_seed, ring_stream_seed
 from motifs import find_motif, safe_motif
 from motifs.contract import MotifError, MotifInstance, ReachEnd
-from motifs.geometry import MotifContext, PointTuple, cell_rotation_deg
+from motifs.geometry import MotifContext, PointTuple, SmartVector, cell_rotation_deg
 from placement import InkIndex, PlacedPath, path_geometry, path_overflow, trace
 import resolver
 
@@ -91,6 +91,8 @@ class AssembledDesign:
     reaches: List[PlacedPath]
     dropped_children: int
     center: PointTuple
+    # Embellishments asked for but not drawn, summed over the placed instances.
+    dropped_embellishments: int = 0
 
     def polylines(self) -> List[List[PointTuple]]:
         return [path.coords for path in self.paths]
@@ -110,6 +112,16 @@ class AssembledDesign:
 
 def _registry_entry(recipe: CellRecipe) -> Dict:
     return find_motif(recipe.motif) or safe_motif(recipe.category)
+
+
+def _path_role(vector: SmartVector, node_role: str) -> str:
+    """
+    A traced vector's role: "back" beneath the base ink, "detail" for embellishment ink (it floats inside
+    its host, as a slot child may, so it is not base structure), else the node's own role.
+    """
+    if vector.layer == "back":
+        return "back"
+    return "detail" if vector.weight == "detail" else node_role
 
 
 def _angular_limit(ring: RingPlan, position: str) -> float:
@@ -179,7 +191,8 @@ class Assembler:
         self.pass_one()
         self.pass_two()
         return AssembledDesign(
-            self.plan, list(self.paths), list(self.nodes), list(self.reaches), self.dropped_children, self.center
+            self.plan, list(self.paths), list(self.nodes), list(self.reaches), self.dropped_children, self.center,
+            dropped_embellishments=sum(node.instance.dropped_embellishments for node in self.nodes),
         )
 
     # ----------------------------------------------------------- pass two
@@ -310,6 +323,7 @@ class Assembler:
             side_touch_radial=ring.side_touch_radial if is_base and ring.contact_mode == "side" else None,
             ring_stream_seed=ring_stream_seed(ring.ring_seed, ring.ring_index, f"ring:{recipe.motif}:{position}"),
             node_seed=rng_seed,
+            embellishments=tuple(recipe.embellishments),
         )
 
     def _trace_node(self, ring_index: int, cell_index: int, position: str, node_path: Tuple[int, ...],
@@ -320,7 +334,7 @@ class Assembler:
             coords, radials = trace(context, vector, rotation)
             paths.append(PlacedPath(
                 ring_index, cell_index, position, node_path,
-                "back" if vector.layer == "back" else role,
+                _path_role(vector, role),
                 coords, radials, vector.closed, context.stroke_for(vector.weight),
             ))
         return paths

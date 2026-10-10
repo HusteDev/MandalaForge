@@ -1,5 +1,9 @@
+import random
+
 import pytest
-from composer import Composer, ComposerSettings
+from composer import CellRecipe, Composer, ComposerSettings, pick_embellishments
+from motifs import find_motif
+from motifs.embellish import EMBELLISHMENT_ORDER, INTERIOR_FILLS
 
 GEOM = [dict(inner_radius=20 + 60 * i, outer_radius=80 + 60 * i) for i in range(4)]
 
@@ -603,3 +607,62 @@ def test_every_cell_of_a_seam_ring_carries_a_stem():
                 for n in nodes:
                     assert [a.motif for a in n.attachments] == ["stem"] and not n.attachments[0].once_per_wedge
     assert seen > 0
+
+
+def test_embellishment_count_follows_complexity():
+    entry = find_motif("petal")
+    assert pick_embellishments(entry, 0.2, random.Random(1)) == []
+    picks = [pick_embellishments(entry, 1.0, random.Random(s)) for s in range(50)]
+    assert all(len(p) == 3 and sum(n in INTERIOR_FILLS for n in p) <= 1 for p in picks)
+
+
+def test_embellishment_picks_are_ordered_unique_and_accepted():
+    for name in ("petal", "leaf", "band"):
+        entry = find_motif(name)
+        for s in range(30):
+            picks = pick_embellishments(entry, 0.7, random.Random(s))
+            assert len(set(picks)) == len(picks) <= len(entry["embellishments"])
+            assert set(picks) <= set(entry["embellishments"])
+            assert picks == [n for n in EMBELLISHMENT_ORDER if n in picks]
+
+
+def test_registry_embellishments():
+    assert find_motif("petal")["embellishments"] == ("echo", "veins", "fan", "dot")
+    assert find_motif("leaf")["embellishments"] == ("echo", "veins")
+    assert find_motif("band")["embellishments"] == ("beads",)
+
+
+def test_interior_fill_excludes_slot_child():
+    seen = False
+    for seed in range(40):
+        for ring in plan_for(seed=seed, complexity=1.0).rings:
+            for e in ring.sequence:
+                for node in (e.centre, e.divider):
+                    if node and set(node.embellishments) & set(INTERIOR_FILLS):
+                        seen = True
+                        assert node.slot_child is None
+    assert seen, "some node picked an interior fill"
+
+
+def test_base_nodes_get_embellishments_and_slot_children_do_not():
+    # At complexity 0.7 some base nodes draw embellishments; slot children never do (spec 6.4 picks base nodes).
+    nodes = [n for seed in range(20) for ring in plan_for(seed=seed, complexity=0.7).rings
+             for e in ring.sequence for n in (e.centre, e.divider) if n]
+    assert any(n.embellishments for n in nodes)
+    children = [n.slot_child for n in nodes if n.slot_child]
+    assert children and all(c.embellishments == [] for c in children)
+
+
+def test_low_complexity_plans_carry_no_embellishments():
+    for seed in range(10):
+        for ring in plan_for(seed=seed, complexity=0.2).rings:
+            for e in ring.sequence:
+                assert all(not n.embellishments for n in (e.centre, e.divider) if n)
+
+
+def test_embellishments_round_trip_and_default_empty():
+    recipe = CellRecipe("petal", "botanical", embellishments=["echo", "dot"])
+    assert CellRecipe.from_dict(recipe.to_dict()).embellishments == ["echo", "dot"]
+    d = recipe.to_dict()
+    del d["embellishments"]
+    assert CellRecipe.from_dict(d).embellishments == []

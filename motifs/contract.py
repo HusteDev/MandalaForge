@@ -48,6 +48,15 @@ class ReachEnd:
             raise MotifError(f"Reach style must be one of {REACH_STYLES}, got {self.style!r}")
 
 
+@dataclass(frozen=True)
+class Anatomy:
+    """A host's base point, its tip, and the index of its closed outline vector (spec 6.1)."""
+
+    base: CellPoint
+    tip: CellPoint
+    outline: int
+
+
 @dataclass
 class Declaration:
     footprint: List[CellPoint]
@@ -57,6 +66,7 @@ class Declaration:
     overflow_inward: float
     overflow_outward: float
     seams: bool = False
+    anatomy: Optional[Anatomy] = None
 
 
 @dataclass
@@ -64,6 +74,8 @@ class MotifInstance:
     vectors: List[SmartVector]
     declaration: Declaration
     kind: str
+    # Embellishments asked for but not drawn (they did not fit, or are not implemented yet).
+    dropped_embellishments: int = 0
 
     def __post_init__(self) -> None:
         if self.kind not in MOTIF_KINDS:
@@ -164,8 +176,16 @@ def build_instance(
     *,
     seams: bool = False,
     slot: Optional[List[CellPoint]] = None,
+    anatomy: Optional[Anatomy] = None,
+    dropped_embellishments: int = 0,
+    slot_outline_weight: str = "outline",
 ) -> MotifInstance:
-    """Measure the declaration for `vectors`, then analyze; raises `MotifError` on any issue."""
+    """
+    Measure the declaration for `vectors`, then analyze; raises `MotifError` on any issue.
+
+    `slot_outline` is the ink the slot is measured inside, at `slot_outline_weight`: the host outline,
+    or the innermost echo (a detail line) once `apply_embellishments` has run, so the echoes lie outside it.
+    """
     if slot is not None and slot_outline is not None:
         raise MotifError("Pass either slot_outline or an already-measured slot, not both")
     vectors = list(vectors)
@@ -187,15 +207,20 @@ def build_instance(
 
     declaration = Declaration(
         footprint=footprint,
-        slot=slot if slot is not None else (measure_slot(context, slot_outline) if slot_outline is not None else None),
+        slot=slot if slot is not None else (
+            measure_slot(context, slot_outline, slot_outline_weight) if slot_outline is not None else None
+        ),
         reach_ends=reach_ends,
         base_point=base_point if base_point is not None else _default_base_point(anchor_candidates),
         overflow_inward=overflow_inward,
         overflow_outward=overflow_outward,
         seams=seams,
+        anatomy=anatomy,
     )
     kind = "enclosing" if any(vector.closed for vector in vectors) else "open"
-    instance = MotifInstance(vectors=vectors, declaration=declaration, kind=kind)
+    instance = MotifInstance(
+        vectors=vectors, declaration=declaration, kind=kind, dropped_embellishments=dropped_embellishments
+    )
 
     issues = MotifAnalyzer(context).analyze(instance)
     if issues:
