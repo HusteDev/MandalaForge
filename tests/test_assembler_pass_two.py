@@ -55,11 +55,16 @@ def test_touch_inserts_vertex_into_target_path():
     assert any(any(math.isclose(x, hit[0], abs_tol=1e-6) and math.isclose(y, hit[1], abs_tol=1e-6)
                    for x, y in p.coords) for p in design.paths if p.role != "reach")
 
-def test_wavy_reach_has_interior_points():
-    plan = manual_plan()
+def test_curved_reach_has_interior_points():
+    # Every stem is drawn curved (bow, s or wavy): a reach has interior points, and some leave the chord (these
+    # stems are 4px long, so their curves are shallow).
+    # (The manual plan's petal dips onto the band and draws no stems, so the shallow plan is used.)
     composer = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
-    design = Assembler(plan, GEOM, CENTER, 0.9, 10.0, composer).assemble()
-    assert all(len(r.coords) == 9 for r in design.reaches)
+    design = Assembler(shallow_plan(), GEOM, CENTER, 0.9, 10.0, composer).assemble()
+    assert design.reaches
+    assert all(len(r.coords) >= 9 for r in design.reaches)
+    assert any(LineString([r.coords[0], r.coords[-1]]).hausdorff_distance(LineString(r.coords)) > 0.1
+               for r in design.reaches)
 
 def test_assembly_is_deterministic():
     a = assemble(manual_plan()); b = assemble(manual_plan())
@@ -314,7 +319,7 @@ def test_wavy_reach_flattens_when_the_wave_would_meet_ink():
     # Ink the full wave would meet is within a pen's width of every lesser wave too: the reach goes straight.
     asm = types.SimpleNamespace(index=InkIndex(), min_white_space=10.0)
     asm.index.add(PlacedPath(0, 0, "centre", (0,), "base", [(10.0, 2.0), (90.0, 2.0)], [0.5, 0.5], False, 1.0))
-    coords = resolver._wavy_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0))
+    coords = resolver._curve_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0), resolver.wavy_coords)
     offsets = [abs(y) for _, y in coords]
     assert len(coords) == 9 and max(offsets) == 0.0
     assert coords[0] == (0.0, 0.0) and coords[-1] == (100.0, 0.0)
@@ -323,7 +328,7 @@ def test_wavy_reach_flattens_until_it_keeps_a_pen_width_from_ink():
     # The wave peaks 3px toward ink 5px off its line; it halves until the peak stays 4px clear (0.75px).
     asm = types.SimpleNamespace(index=InkIndex(), min_white_space=10.0)
     asm.index.add(PlacedPath(0, 0, "centre", (0,), "base", [(15.0, 5.0), (85.0, 5.0)], [0.5, 0.5], False, 1.0))
-    coords = resolver._wavy_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0))
+    coords = resolver._curve_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0), resolver.wavy_coords)
     assert math.isclose(max(abs(y) for _, y in coords), 0.75, abs_tol=1e-9)
 
 
@@ -351,7 +356,7 @@ def test_reach_that_would_close_a_slit_too_thin_to_colour_is_refused():
 
 def test_wavy_reach_is_refused_when_no_flattening_is_accepted():
     asm = types.SimpleNamespace(index=InkIndex(), min_white_space=10.0)
-    assert resolver._wavy_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0), lambda coords: False) is None
+    assert resolver._curve_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0), resolver.wavy_coords, lambda coords: False) is None
 
 def test_touch_within_the_touch_radius_of_a_vertex_reuses_it():
     # A second touch landing 3e-7px from an earlier one used to add a vertex beside it; once both lines
@@ -424,6 +429,8 @@ def test_grazing_reach_runs_along_its_ray_then_bends_onto_the_ink():
     plan.rings[0].ring_seed = 10
     a = placed(plan)
     node, short, point, rotation = stem_of_cell_zero(a)
+    # The run along the ray is the straight reach's; a curved stem bends off the ray from its start.
+    short = ReachEnd(short.point, short.direction, short.max_length_px, "straight")
     anchor = lowest_vertex(node.paths[0])
     # A short stroke 3px beside the reach's ray (which runs toward the centre along y = anchor y), its end 3.9px on.
     x, y = anchor[0] - 3.9, anchor[1] + 3.0
@@ -762,3 +769,43 @@ def test_a_pull_back_never_hands_its_crossing_to_the_neighbour(monkeypatch):
         g.generate()
     assert pulled
     assert g.last_validation_result.is_valid
+
+
+# ----- curved stems (bow and s) -----
+
+from resolver import bow_coords, s_coords
+
+@pytest.mark.parametrize("shape", [bow_coords, s_coords])
+def test_curve_ends_are_exact_and_amplitude_capped(shape):
+    start, end = (0.0, 0.0), (0.0, 100.0)
+    coords = shape(start, end)
+    assert coords[0] == start and coords[-1] == end
+    assert max(abs(x) for x, _ in coords) == pytest.approx(min(8.0, 0.12 * 100.0), abs=0.2)
+
+def test_bow_bows_to_the_same_side_under_rotation():
+    # The bow sits to the left of start-to-end, whichever way the reach points.
+    for start, end in [((0.0, 0.0), (100.0, 0.0)), ((0.0, 0.0), (0.0, 100.0)), ((5.0, 5.0), (-60.0, -40.0))]:
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        sides = [dx * (y - start[1]) - dy * (x - start[0]) for x, y in bow_coords(start, end)[1:-1]]
+        assert all(side > 0.0 for side in sides)
+
+def test_reach_shapes_name_every_curved_style():
+    assert resolver.REACH_SHAPES == {"wavy": resolver.wavy_coords, "bow": bow_coords, "s": s_coords}
+
+@pytest.mark.parametrize("shape", ["bow", "s"])
+def test_curved_reach_falls_down_the_ladder_to_straight_when_it_would_come_too_close_to_ink(shape):
+    # Ink 2px off the line is within a pen's width of every curve on the ladder: the reach goes straight.
+    asm = types.SimpleNamespace(index=InkIndex(), min_white_space=10.0)
+    asm.index.add(PlacedPath(0, 0, "centre", (0,), "base", [(10.0, 2.0), (90.0, 2.0)], [0.5, 0.5], False, 1.0))
+    asm.index.add(PlacedPath(0, 0, "centre", (0,), "base", [(10.0, -2.0), (90.0, -2.0)], [0.5, 0.5], False, 1.0))
+    coords = resolver._curve_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0), resolver.REACH_SHAPES[shape])
+    assert coords[0] == (0.0, 0.0) and coords[-1] == (100.0, 0.0)
+    assert max(abs(y) for _, y in coords) == 0.0
+
+def test_curved_reach_flattens_one_rung_at_a_time():
+    # The bow peaks 8px; ink 9px off its line keeps it from 1.0 and 0.5 (5px clear) is the first rung to fit.
+    asm = types.SimpleNamespace(index=InkIndex(), min_white_space=10.0)
+    asm.index.add(PlacedPath(0, 0, "centre", (0,), "base", [(30.0, 9.0), (70.0, 9.0)], [0.5, 0.5], False, 1.0))
+    asm.index.add(PlacedPath(0, 0, "centre", (0,), "base", [(30.0, -9.0), (70.0, -9.0)], [0.5, 0.5], False, 1.0))
+    coords = resolver._curve_clear_of_ink(asm, (0.0, 0.0), (100.0, 0.0), bow_coords)
+    assert math.isclose(max(abs(y) for _, y in coords), 4.0, abs_tol=1e-9)

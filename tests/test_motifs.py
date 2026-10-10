@@ -525,3 +525,9 @@ def test_concave_diamond_bow_is_a_drawn_share_of_its_half_width(cell_kwargs):
         a, b = next((p, q) for p, q in zip(lower, lower[1:]) if p.radial <= 0.35 <= q.radial)
         angular = a.angular + (b.angular - a.angular) * (0.35 - a.radial) / (b.radial - a.radial)
         assert (0.2 - angular) / 0.4 == pytest.approx(bow, abs=0.02)
+
+
+def test_stems_are_never_drawn_straight_by_choice(cell_kwargs):
+    stem = find_motif("stem")["generator"]
+    styles = {stem(make_ctx(cell_kwargs, s)).declaration.reach_ends[0].style for s in range(40)}
+    assert styles == {"bow", "s", "wavy"}

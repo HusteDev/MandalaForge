@@ -298,12 +298,17 @@ def generate_scallop(context: MotifContext) -> MotifInstance:
     return build_instance(context, [SmartVector(lobe)], seams=True)
 
 
+STEM_STYLES = ["bow", "s", "wavy"]
+STEM_STYLE_WEIGHTS = [2, 2, 1]
+
+
 def generate_stem(context: MotifContext) -> MotifInstance:
     reach = ReachEnd(
         point=CellPoint(0.0, 0.0),
         direction="inward",
         max_length_px=context.ring_depth * 0.9,
-        style="wavy" if context.complexity >= 0.6 else "straight",
+        # A stem is never drawn straight by choice (spec 7.2); the resolver flattens it only to keep clear of ink.
+        style=context.rng.choices(STEM_STYLES, weights=STEM_STYLE_WEIGHTS)[0],
     )
     return build_instance(context, [], reach_ends=[reach], base_point=CellPoint(0.0, 0.0))
 

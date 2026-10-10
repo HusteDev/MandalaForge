@@ -78,6 +78,11 @@ WAVY_MAX_AMPLITUDE_PX = 3.0
 WAVY_AMPLITUDE_SHARE = 0.1
 # A wave that would come within CLEARANCE_PX of ink is flattened through these amplitude scales.
 WAVY_FALLBACK_SCALES = (1.0, 0.5, 0.25, 0.0)
+# The stem's bowed and S-curved reaches (spec 7.2): a deeper curve than the wave, capped in pixels.
+BOW_AMPLITUDE_SHARE = 0.12
+CURVE_MAX_AMPLITUDE_PX = 8.0
+# Points along a bow or S, enough that the deeper curve reads as a curve rather than a polygon.
+CURVE_POINTS = 17
 # A reach's midpoint this close to a face's boundary bounds that face (noding snaps to 0.001px).
 FACE_PROBE_PX = 0.01
 # Faces beside a reach are built from ink within this margin of it, the margin growing
@@ -144,6 +149,37 @@ def wavy_coords(start: PointTuple, end: PointTuple, scale: float = 1.0) -> List[
         coords.append((start[0] + dx * t + nx * offset, start[1] + dy * t + ny * offset))
     coords[0], coords[-1] = start, end
     return coords
+
+
+def _sine_coords(start: PointTuple, end: PointTuple, scale: float, half_waves: int) -> List[PointTuple]:
+    """`CURVE_POINTS` points from `start` to `end`, offset leftward of start-to-end by `half_waves` half sine waves."""
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    length = math.hypot(dx, dy)
+    amplitude = scale * min(CURVE_MAX_AMPLITUDE_PX, BOW_AMPLITUDE_SHARE * length)
+    nx, ny = -dy / length, dx / length
+    coords = []
+    for k in range(CURVE_POINTS):
+        t = k / (CURVE_POINTS - 1)
+        offset = amplitude * math.sin(half_waves * math.pi * t)
+        coords.append((start[0] + dx * t + nx * offset, start[1] + dy * t + ny * offset))
+    coords[0], coords[-1] = start, end
+    return coords
+
+
+def bow_coords(start: PointTuple, end: PointTuple, scale: float = 1.0) -> List[PointTuple]:
+    """Half a sine wave from `start` to `end`, bowing left of start-to-end, so it is the same under rotation."""
+    return _sine_coords(start, end, scale, 1)
+
+
+def s_coords(start: PointTuple, end: PointTuple, scale: float = 1.0) -> List[PointTuple]:
+    """One full sine wave from `start` to `end`: an S, first to the left of start-to-end, then to the right."""
+    return _sine_coords(start, end, scale, 2)
+
+
+# How each curved reach style is drawn; `straight` is drawn as the ray itself.
+REACH_SHAPES: Dict[str, Callable[[PointTuple, PointTuple, float], List[PointTuple]]] = {
+    "wavy": wavy_coords, "bow": bow_coords, "s": s_coords,
+}
 
 
 # ---------------------------------------------------------------- overflow
@@ -718,7 +754,8 @@ def _draw_reach(asm: Assembler, node: PlacedNode, reach_end: ReachEnd,
         coords = body + tail if leaves_room(body) else None
     else:
         ends = [(anchor[0], start)] if anchor is not None else []
-        body = _wavy_clear_of_ink(asm, start, lead or end, leaves_room, ends + [(target, end)])
+        body = _curve_clear_of_ink(asm, start, lead or end, REACH_SHAPES[reach_end.style], leaves_room,
+                                   ends + [(target, end)])
         coords = None if body is None else body + tail
     if coords is None:
         # Any reach here would close off a face too thin or too small to colour: none is drawn.
@@ -744,19 +781,20 @@ def _distance_to_floor(asm: Assembler, ring_index: int, start: PointTuple) -> fl
     return max(0.0, math.hypot(start[0] - asm.center[0], start[1] - asm.center[1]) - floor)
 
 
-def _wavy_clear_of_ink(asm: Assembler, start: PointTuple, end: PointTuple,
-                      accept: Callable[[List[PointTuple]], bool] = lambda coords: True,
-                      end_paths: Sequence[Tuple[PlacedPath, PointTuple]] = ()) -> Optional[List[PointTuple]]:
+def _curve_clear_of_ink(asm: Assembler, start: PointTuple, end: PointTuple,
+                        shape: Callable[[PointTuple, PointTuple, float], List[PointTuple]],
+                        accept: Callable[[List[PointTuple]], bool] = lambda coords: True,
+                        end_paths: Sequence[Tuple[PlacedPath, PointTuple]] = ()) -> Optional[List[PointTuple]]:
     """
-    The wavy reach from `start` to `end`, its wave flattened step by step until
-    it keeps `CLEARANCE_PX` from ink and `accept` takes it. The paths the reach
-    starts and ends on, `end_paths` with the point on each, may come closer
-    within the touch disc around that point. The straight segment always
-    qualifies, being the ray up to where it came within the touch gap of ink;
-    None when `accept` refuses even that.
+    The curved reach of `shape` from `start` to `end`, its curve flattened step
+    by step down `WAVY_FALLBACK_SCALES` until it keeps `CLEARANCE_PX` from ink
+    and `accept` takes it. The paths the reach starts and ends on, `end_paths`
+    with the point on each, may come closer within the touch disc around that
+    point. The straight segment always qualifies, being the ray up to where it
+    came within the touch gap of ink; None when `accept` refuses even that.
     """
     for scale in WAVY_FALLBACK_SCALES:
-        coords = wavy_coords(start, end, scale)
+        coords = shape(start, end, scale)
         if (scale == 0.0 or _keeps_clearance(asm, LineString(coords), end_paths)) and accept(coords):
             return coords
     return None
