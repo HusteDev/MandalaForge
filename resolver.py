@@ -1078,11 +1078,15 @@ def _resolve_ring(asm: Assembler, ring: RingPlan) -> None:
         wedge = asm.wedge_cells(ring.ring_index)
         groups = sorted({(cell % wedge, position) for _, cell, position in floating})
         targets = sorted({(cell % len(ring.sequence), position) for cell, position in groups})
+        had_back = ring.back is not None
         for seq_pos, position in targets:
             if not asm.composer.replace_node(ring, seq_pos, position, "floating"):
                 raise assembler.AssemblyError(
                     f"ring {ring.ring_index} sequence {seq_pos} ({position}): floating base cannot be replaced"
                 )
+        if had_back and ring.back is None:
+            # A safe fallback dropped the back; placing only the changed cells would leave it in the others.
+            raise assembler.LayeredRingFailed(ring.ring_index, "a floating replacement dropped the back")
         changed = {seq_pos for seq_pos, _ in targets}
         changed.update(s for s, entry in enumerate(ring.sequence) if entry.to_dict() != before[s])
         asm.replace_cells(ring, sorted(changed))

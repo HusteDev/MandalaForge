@@ -197,8 +197,9 @@ class DesignGenerator:
 
     def _assemble(self) -> AssembledDesign:
         """
-        Assemble the plan. A layered ring whose composite fails in pass two loses its back for the whole
-        ring and the design is assembled again (spec 5.4), at most once per ring.
+        Assemble the plan. A layered ring whose composite fails in pass two, or whose back a pass-two
+        replacement dropped, loses its back for the whole ring and the design is assembled again (spec 5.4),
+        at most once per ring.
         """
         dropped: set[int] = set()
         while True:
@@ -208,7 +209,7 @@ class DesignGenerator:
                 ).assemble()
             except LayeredRingFailed as failure:
                 ring = next((r for r in self.plan.rings if r.ring_index == failure.ring_index), None)
-                if failure.ring_index in dropped or ring is None or ring.back is None:
+                if failure.ring_index in dropped or ring is None:
                     raise
                 dropped.add(failure.ring_index)
                 print(f"  {failure}; dropping its back layer and assembling again")

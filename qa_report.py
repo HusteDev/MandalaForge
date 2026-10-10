@@ -165,7 +165,8 @@ def main():
     parser.add_argument('--complexity', type=float, default=0.5)
     parser.add_argument('--categories', nargs='*', default=['botanical'])
     parser.add_argument('--force-mode', choices=['centre', 'divider', 'both', 'layered'], default=None,
-                        help="force this position mode on every ring past the innermost where it is eligible")
+                        help="force this position mode on every ring past the innermost where it is eligible "
+                             "(the corpus and seed runs force no motif, so it always applies)")
     parser.add_argument('--out', default='test_output')
     parser.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 2) // 2))
     parser.add_argument('--overlays', choices=['always', 'failures', 'never'], default=None,

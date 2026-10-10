@@ -715,12 +715,20 @@ def test_back_round_trips_and_defaults_off():
     assert loaded.back is None and loaded.back_dropped is False and loaded.position_mode == "centre"
 
 
-def test_back_is_picked_from_its_own_stream():
-    # The back pick never shifts the fronts: the same plan without its back has the same centre entries.
+def test_back_is_picked_from_its_own_stream(monkeypatch):
+    # The back pick never shifts the fronts: with the back pick stubbed out, the centre entries are the same.
     p = layered_plan(seed=5, complexity=0.9)
     assert any(ring.back.embellishments for seed in range(20) for ring in layered_plan(seed=seed, complexity=0.9).rings[1:])
-    again = layered_plan(seed=5, complexity=0.9)
-    assert [r.back for r in p.rings] == [r.back for r in again.rings]
+    monkeypatch.setattr(Composer, "_plan_back", lambda self, *args: CellRecipe("leaf", "botanical"))
+    stubbed = layered_plan(seed=5, complexity=0.9)
+    assert [[e.to_dict() for e in r.sequence] for r in p.rings] == [[e.to_dict() for e in r.sequence] for r in stubbed.rings]
+    assert [r.side_touch_radial for r in p.rings] == [r.side_touch_radial for r in stubbed.rings]
+
+
+def test_force_position_mode_cannot_combine_with_force_motif():
+    with pytest.raises(ValueError):
+        Composer(1, GEOM, ComposerSettings(force_position_mode="layered",
+                                           force_motif={"name": "petal", "position": "centre", "role": "base"}))
 
 
 def test_drop_back_keeps_the_centre_entries_and_sets_centre_mode():

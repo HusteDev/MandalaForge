@@ -113,7 +113,7 @@ class AssembledDesign:
         return [path.coords for path in self.paths]
 
     def base_mask(self) -> List[bool]:
-        return [path.role in ("base", "back") for path in self.paths]
+        return [path.role in resolver.STRUCTURAL_ROLES for path in self.paths]
 
     def ring_ids(self) -> List[int]:
         return [path.ring_index for path in self.paths]
@@ -261,11 +261,15 @@ class Assembler:
                 continue
             seq_pos = cell_index % len(ring.sequence)
             count = replacements.get((seq_pos, position), 0)
+            had_back = ring.back is not None
             if count >= MAX_BASE_REPLACEMENTS or not self.composer.replace_node(ring, seq_pos, position, "generation"):
                 raise AssemblyError(
                     f"ring {ring.ring_index} cell {cell_index} ({position}): base motif failed "
                     f"after {count} replacements: {error}"
                 ) from error
+            if had_back and ring.back is None and not drop_back:
+                # The replacement dropped the back (a safe fallback), but cells outside `cells` still draw it.
+                raise LayeredRingFailed(ring.ring_index, "a replacement dropped the back") from error
             replacements[(seq_pos, position)] = count + 1
 
     def _place_cells(self, ring: RingPlan, cells: Sequence[int]) -> Optional[Tuple[int, str, MotifError]]:

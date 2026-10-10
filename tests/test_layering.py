@@ -138,3 +138,82 @@ def test_regenerated_seam_ring_keeps_its_seams_meeting():
     bands = [n for n in g.assembled.nodes if n.ring_index == 2 and n.parent is None and n.recipe.motif == "band"]
     assert bands and len({n.context.ring_stream_seed for n in bands}) == 1
     assert bands[0].context.ring_stream_seed == ring_stream_seed(999, 2, "ring:band:centre")
+
+
+def _fallback_scenario(monkeypatch, front_fails):
+    """
+    Seed 1, forced layered, substitution disabled. Ring 1 (two sequence entries) reports its entry-0 cells
+    floating once, so pass two replaces that entry and places its cells again. With `front_fails` the entry-0
+    front then fails to generate, so the replacement reaches the safe band through the generation path inside
+    `replace_cells`; without it the floating path reaches it on its second round. The safe band drops the back.
+    """
+    import motifs.layering as layering
+    import resolver
+    from composer import Composer, node_seed
+    from motifs.contract import MotifError
+    monkeypatch.setattr(Composer, "_substitute", lambda self, *args, **kwargs: False)
+    real_floating, real_compose = resolver.floating_base_cells, layering.compose_layered
+    state = {"rounds": 0, "armed": False}
+
+    def floating(asm, ring_index=None):
+        ring = asm.ring_plan(1)
+        if ring_index == 1 and ring.back is not None and state["rounds"] < (1 if front_fails else 2):
+            state["rounds"] += 1
+            state["armed"] = front_fails
+            return [(1, cell, "centre") for cell in range(ring.divisions) if cell % len(ring.sequence) == 0]
+        return real_floating(asm, ring_index)
+
+    def compose(front_context, front_entry, back_context, back_entry):
+        if state["armed"] and front_context.node_seed == node_seed(1, 1, 0, 0, "centre"):
+            raise MotifError("front fails")
+        return real_compose(front_context, front_entry, back_context, back_entry)
+
+    import assembler
+    real_replace = assembler.Assembler.replace_cells
+    half_dropped = []
+
+    def replace_cells(asm, ring, seq_positions):
+        # The invariant of spec 5.4 at every step, not only at the end (later rounds can re-place every cell
+        # and hide a half-dropped ring): once the back is gone, no cell of the ring still draws it.
+        real_replace(asm, ring, seq_positions)
+        if ring.back is None and any(p.ring_index == ring.ring_index and p.role == "back" for p in asm.paths):
+            half_dropped.append(ring.ring_index)
+
+    monkeypatch.setattr(resolver, "floating_base_cells", floating)
+    monkeypatch.setattr(layering, "compose_layered", compose)
+    monkeypatch.setattr(assembler.Assembler, "replace_cells", replace_cells)
+    g = layered_design(seed=1)
+    g.generate()
+    return g, half_dropped
+
+
+@pytest.mark.parametrize("front_fails", [True, False], ids=["generation", "floating"])
+def test_a_pass_two_safe_fallback_drops_the_back_for_the_whole_ring(monkeypatch, front_fails):
+    g, half_dropped = _fallback_scenario(monkeypatch, front_fails)
+    assert not half_dropped, "a pass-two replacement left back ink in cells it did not place again"
+    ring = g.plan.rings[1]
+    assert len(ring.sequence) == 2
+    assert ring.sequence[0].centre.is_fallback and ring.back is None and ring.back_dropped
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+    assert not [p.cell_index for p in g.assembled.paths if p.ring_index == 1 and p.role == "back"]
+
+
+def test_pass_two_layering_failure_drops_the_back_at_24_divisions(monkeypatch):
+    # Focus 2 in pass two: a pull-back makes the composite fail in a dense ring; its back goes ring-wide.
+    import motifs.layering as layering
+    real = layering.compose_layered
+    failed = []
+
+    def fragile(front_context, front_entry, back_context, back_entry):
+        if front_context.radial_limits[1] < 1.0 + front_entry["max_overflow_outward"]:
+            failed.append(1)
+            raise LayeringError("pulled back")
+        return real(front_context, front_entry, back_context, back_entry)
+
+    monkeypatch.setattr(layering, "compose_layered", fragile)
+    g = layered_design(ring_divisions=[24, 24, 24, 24], complexity=0.9); g.generate()
+    assert failed, "the scenario needs a pull-back of a layered composite"
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+    dropped = {r.ring_index for r in g.plan.rings if r.back_dropped}
+    assert dropped and all(r.back is None and r.position_mode == "centre" for r in g.plan.rings if r.back_dropped)
+    assert not any(p.role == "back" for p in g.assembled.paths if p.ring_index in dropped)

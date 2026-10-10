@@ -277,7 +277,8 @@ class ComposerSettings:
     categories: List[str] = field(default_factory=lambda: ["botanical"])
     force_motif: Optional[Dict[str, str]] = None
     ring_seeds: Optional[Dict[int, int]] = None
-    # Forces this position mode on every ring past the innermost where it is eligible.
+    # Forces this position mode on every ring past the innermost where it is eligible. It cannot be combined
+    # with force_motif, which forces its own position.
     force_position_mode: Optional[str] = None
 
 
@@ -300,6 +301,8 @@ class Composer:
                 raise ValueError(f"seam motif {force['name']} cannot be forced in both mode")
         if settings.force_position_mode is not None and settings.force_position_mode not in POSITION_MODES:
             raise ValueError(f"unknown forced position mode: {settings.force_position_mode}")
+        if settings.force_position_mode is not None and force:
+            raise ValueError("force_position_mode cannot be combined with force_motif, which forces its own position")
         counts = [settings.num_divisions, *(settings.ring_divisions or [])]
         for count in counts:
             if isinstance(count, bool) or not isinstance(count, int) or not MIN_DIVISIONS <= count <= MAX_DIVISIONS:
