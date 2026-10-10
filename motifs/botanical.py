@@ -6,7 +6,7 @@ import math
 from typing import Dict, List, Optional
 
 from motifs.contract import Anatomy, MotifError, MotifInstance, ReachEnd, build_instance, require_full_budget
-from motifs.embellish import apply_embellishments
+from motifs.embellish import apply_embellishments, holds_pen
 from motifs.geometry import (
     CellPoint,
     MotifContext,
@@ -152,6 +152,7 @@ def generate_petal(context: MotifContext) -> MotifInstance:
             )
 
         points = fit_inside_slot(context, "petal", build)
+        _require_pen_room(context, "petal", points)
     else:
         base_radial = max(low, -dip)
         tip_radial = min(high, length)
@@ -166,6 +167,15 @@ def generate_petal(context: MotifContext) -> MotifInstance:
         context, result.vectors, slot_outline=result.slot_outline, anatomy=anatomy,
         dropped_embellishments=result.dropped, slot_outline_weight=result.slot_outline_weight,
     )
+
+
+def _require_pen_room(context: MotifContext, name: str, outline: List[CellPoint]) -> None:
+    """
+    A slot-fitted outline must be a face the validator accepts (`holds_pen`, as the diamond's is): a slot
+    cut shallow, by a dot for one, can otherwise fit a child too thin to colour. Raising drops the child.
+    """
+    if not holds_pen(context, outline):
+        raise MotifError(f"{name} fitted to the slot is too thin to hold a pen")
 
 
 def _pointed_anatomy(points: List[CellPoint]) -> Anatomy:
@@ -225,6 +235,7 @@ def generate_leaf(context: MotifContext) -> MotifInstance:
         # fit_inside_slot returns on the first outline that fits, so the last one built is the one kept.
         fit_inside_slot(context, "leaf", build)
         outline = built[-1]
+        _require_pen_room(context, "leaf", outline)
     else:
         apex_radial = min(high, length)
         # Side touch (spec 13.2, 3.3): the belly is the shared side vertex, at the full angular budget.

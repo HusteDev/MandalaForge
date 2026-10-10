@@ -361,3 +361,9 @@ def test_run_case_runs_a_forced_front_and_back_in_a_layered_ring():
     result = run_case(job)
     assert result["status"] == "PASS" and "back-petal" in result["label"], result
     assert result["drawn"] + result["dropped"] >= 1, result
+
+
+def test_slot_child_too_thin_for_a_pen_is_dropped_not_drawn():
+    # A petal with a dot cut its slot shallow, and the leaf fitted into it could not hold a pen.
+    job = ("petal", "botanical", (8, 8, 8, 12), 0.9, 5, "centre", "base", 20260821, False)
+    assert run_case(job)["status"] == "PASS"

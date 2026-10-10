@@ -585,3 +585,18 @@ def test_a_thin_concave_diamond_falls_back_to_the_straight_one(cell_kwargs, monk
                 fell_back += 1
                 assert len(inst.vectors[0].points) == 4 and _colourable(ctx, inst)
     assert fell_back > 0
+
+
+@pytest.mark.parametrize("name", ["petal", "leaf"])
+def test_slot_child_that_cannot_hold_a_pen_raises(name, cell_kwargs, monkeypatch):
+    # A slot cut shallow (by a dot) let a slot-fitted leaf come out too thin for a pen, and the design failed
+    # validation. A slot child whose fitted outline fails the validator's own rule now raises, so it is dropped.
+    import motifs.botanical as botanical
+
+    def tiny(context, label, build):
+        return build(0.04)
+
+    monkeypatch.setattr(botanical, "fit_inside_slot", tiny)
+    ctx = make_ctx(cell_kwargs, slot=slot_for(cell_kwargs))
+    with pytest.raises(MotifError):
+        find_motif(name)["generator"](ctx)
