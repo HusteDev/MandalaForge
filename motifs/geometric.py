@@ -5,9 +5,12 @@ from __future__ import annotations
 import math
 from typing import Dict, List, Optional
 
+from shapely.geometry import Polygon
+
 from motifs.contract import MotifError, MotifInstance, build_instance, require_full_budget
 from motifs.geometry import CellPoint, MotifContext, SmartVector, cubic_points, mirror_points, quad_points
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
+from topology_validator import PEN_RADIUS_PX
 
 
 DIAMOND_CONCAVE_CHANCE = 0.5
@@ -52,6 +55,12 @@ def _diamond(mid: float, half_height: float, width: float, bow: Optional[float])
     return right + left
 
 
+def _holds_pen(context: MotifContext, outline: List[CellPoint]) -> bool:
+    """Whether the closed outline's interior, less half the stroke, still fits the pen tip somewhere."""
+    polygon = Polygon(context.polyline(SmartVector(list(outline), closed=True)))
+    return polygon.is_valid and not polygon.buffer(-(context.stroke_width / 2.0 + PEN_RADIUS_PX)).is_empty
+
+
 def generate_diamond(context: MotifContext) -> MotifInstance:
     rng = context.rng
     # Every parameter is drawn before the slot is measured, whichever variant is kept.
@@ -62,10 +71,15 @@ def generate_diamond(context: MotifContext) -> MotifInstance:
     mid = box.radial_mid
     full_half_height = (box.radial_max - box.radial_min) / 2.0 * aspect
 
-    def build(scale: float) -> List[CellPoint]:
-        return _diamond(mid, full_half_height * scale, box.half_width * scale, bow if concave else None)
+    def build_for(edge_bow: Optional[float]):
+        return lambda scale: _diamond(mid, full_half_height * scale, box.half_width * scale, edge_bow)
 
-    points = fit_inside_slot(context, "diamond", build)
+    points = fit_inside_slot(context, "diamond", build_for(bow if concave else None))
+    if concave and not _holds_pen(context, points):
+        # Bowed edges thin the diamond; the straight one in the same slot is wider.
+        points = fit_inside_slot(context, "diamond", build_for(None))
+    if not _holds_pen(context, points):
+        raise MotifError("diamond does not fit slot: its interior is too small to colour")
     return build_instance(context, [SmartVector(points, closed=True)])
 
 

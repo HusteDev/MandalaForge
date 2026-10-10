@@ -211,6 +211,31 @@ def _placed_count(generator, name, role):
     return sum(1 for node in nodes if node.parent is None and node.recipe.motif == name)
 
 
+def _final_slot_refusals(entry, generator):
+    """
+    Why each placed frame's final slot refuses the child, in order; empty when any frame has no slot
+    to measure or one that admits it (so a child that is still missing is a genuine failure).
+    """
+    reasons = []
+    for node in generator.assembled.nodes:
+        if node.parent is not None:
+            continue
+        slot = node.instance.declaration.slot
+        if not slot:
+            continue
+        radials = [point.radial for point in slot]
+        angulars = [point.angular for point in slot]
+        context = node.context
+        mid = (min(radials) + max(radials)) / 2.0
+        measured = (context.angular_to_px(max(angulars) - min(angulars), mid),
+                    context.radial_to_px(max(radials) - min(radials)), context.stroke_width)
+        refusal = _slot_refusal(entry, measured)
+        if refusal is None:
+            return []
+        reasons.append(f"ring {node.ring_index} cell {node.cell_index}: {refusal}")
+    return reasons
+
+
 def run_case(job):
     name, category, ring_divisions, complexity, min_white, position, role, seed, probe = job
     # An explicit division list's base symmetry is its gcd (spec 13.1).
@@ -259,6 +284,12 @@ def run_case(job):
     dropped = 0 if role != 'slot' else sum(
         1 for node in generator.assembled.nodes
         if node.child_dropped and node.recipe.slot_child is not None and node.recipe.slot_child.motif == name)
+    if placed == 0 and role == 'slot' and not probe:
+        # The gate measured pass one; pull-backs and nestling reshape a frame afterwards. When the slot
+        # every frame really ended with refuses the child, nothing could have been placed.
+        refusals = _final_slot_refusals(entry, generator)
+        if refusals:
+            return result('SKIP', "no final frame slot admits the child; " + refusals[0], dropped)
     if placed == 0:
         return result('FAIL', f"forced motif never placed ({dropped} dropped)", dropped)
     # A child that does not fit its cell's real slot is dropped gracefully: reported, not failed.

@@ -531,3 +531,26 @@ def test_stems_are_never_drawn_straight_by_choice(cell_kwargs):
     stem = find_motif("stem")["generator"]
     styles = {stem(make_ctx(cell_kwargs, s)).declaration.reach_ends[0].style for s in range(40)}
     assert styles == {"bow", "s", "wavy"}
+
+
+# ----- a placed diamond leaves room for the pen --------------------------------
+
+from topology_validator import PEN_RADIUS_PX
+
+
+@pytest.mark.parametrize("depth", [(0.4, 0.6), (0.38, 0.62), (0.35, 0.65)])
+def test_a_drawn_diamond_is_wide_enough_to_colour(depth, cell_kwargs):
+    # A small slot shrinks the diamond; its interior, less half the stroke, must still hold the pen tip.
+    drawn = 0
+    for seed in range(80):
+        ctx = make_ctx(cell_kwargs, seed, stroke_width=2.0)
+        ctx.slot = [CellPoint(depth[0], -0.25), CellPoint(depth[0], 0.25),
+                    CellPoint(depth[1], 0.25), CellPoint(depth[1], -0.25)]
+        try:
+            inst = find_motif("diamond")["generator"](ctx)
+        except MotifError:
+            continue
+        drawn += 1
+        polygon = Polygon(ctx.polyline(inst.vectors[0]))
+        assert not polygon.buffer(-(ctx.stroke_width / 2.0 + PEN_RADIUS_PX)).is_empty, (seed, polygon.bounds)
+    assert drawn > 0 or depth == (0.4, 0.6)  # the smallest slot may refuse every diamond

@@ -224,3 +224,11 @@ def test_tangent_check_fails_a_motif_with_a_kinked_touch_vertex():
     assert _tangent(entry)
     entry["generator"] = kinked
     assert not _tangent(entry)
+
+
+def test_slot_job_whose_frames_are_pulled_back_below_the_gate_is_skipped():
+    # The lotus petal's slot is deep enough in pass one, but pull-backs against the ring inside leave
+    # every final slot shallower than the diamond's gate, so nothing could be placed: SKIP, not FAIL.
+    job = ("diamond", "geometric", (8, 8, 8, 12), 0.15, 25, "centre", "slot", 20260821, False)
+    result = run_case(job)
+    assert result["status"] == "SKIP" and "final" in result["detail"], result
