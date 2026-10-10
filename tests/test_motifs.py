@@ -535,12 +535,18 @@ def test_stems_are_never_drawn_straight_by_choice(cell_kwargs):
 
 # ----- a placed diamond leaves room for the pen --------------------------------
 
-from topology_validator import PEN_RADIUS_PX
+from topology_validator import MIN_REGION_AREA_PX2, PEN_RADIUS_PX
+import motifs.geometric as geometric_module
+
+
+def _colourable(ctx, instance):
+    """The validator's own face rule: area at least the floor, and non-empty eroded by the pen radius."""
+    polygon = Polygon(ctx.polyline(instance.vectors[0]))
+    return polygon.area >= MIN_REGION_AREA_PX2 and not polygon.buffer(-PEN_RADIUS_PX).is_empty
 
 
 @pytest.mark.parametrize("depth", [(0.4, 0.6), (0.38, 0.62), (0.35, 0.65)])
 def test_a_drawn_diamond_is_wide_enough_to_colour(depth, cell_kwargs):
-    # A small slot shrinks the diamond; its interior, less half the stroke, must still hold the pen tip.
     drawn = 0
     for seed in range(80):
         ctx = make_ctx(cell_kwargs, seed, stroke_width=2.0)
@@ -551,6 +557,26 @@ def test_a_drawn_diamond_is_wide_enough_to_colour(depth, cell_kwargs):
         except MotifError:
             continue
         drawn += 1
-        polygon = Polygon(ctx.polyline(inst.vectors[0]))
-        assert not polygon.buffer(-(ctx.stroke_width / 2.0 + PEN_RADIUS_PX)).is_empty, (seed, polygon.bounds)
+        assert _colourable(ctx, inst), (seed, Polygon(ctx.polyline(inst.vectors[0])).bounds)
     assert drawn > 0 or depth == (0.4, 0.6)  # the smallest slot may refuse every diamond
+
+
+def test_a_thin_concave_diamond_falls_back_to_the_straight_one(cell_kwargs, monkeypatch):
+    calls = []
+    real = geometric_module._holds_pen
+    monkeypatch.setattr(geometric_module, "_holds_pen", lambda ctx, outline: calls.append(real(ctx, outline)) or calls[-1])
+    fell_back = 0
+    for half_width in (0.2, 0.21, 0.22):  # a slot just big enough for a straight diamond, too small for a bowed one
+        for seed in range(60):
+            ctx = make_ctx(cell_kwargs, seed, stroke_width=2.5)
+            ctx.slot = [CellPoint(0.39, -half_width), CellPoint(0.39, half_width),
+                        CellPoint(0.61, half_width), CellPoint(0.61, -half_width)]
+            calls.clear()
+            try:
+                inst = find_motif("diamond")["generator"](ctx)
+            except MotifError:
+                continue
+            if calls[:2] == [False, True]:  # the bowed outline failed and the straight one passed
+                fell_back += 1
+                assert len(inst.vectors[0].points) == 4 and _colourable(ctx, inst)
+    assert fell_back > 0

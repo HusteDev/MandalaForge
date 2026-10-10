@@ -96,6 +96,8 @@ Neighbouring cells must draw the same seam, so its parameters come from `MotifCo
 - `band` draws two seam arcs at radials `r1` in [0.25, 0.45] and `r2` in [0.55, 0.75] from `ring_rng`. Arcs alone would leave the band's base floating and form an annulus round the centre that validation rejects, so each cell also draws one mirror-symmetric curved lens at angular 0 whose tips meet both arcs. `ring_band` is kept as an alias for the name.
 - `scallop` draws one page-space circular lobe per cell through the seam ends `(rb, ±1.0)` and an apex. The apex shrinks toward `rb` in steps of 0.9 until the lobe stays within ±1.
 
+Three choices made during implementation depart from the aesthetics spec. The band's lens tie: the spec drew two arcs only, but untied arcs leave a floating base and an annulus round the centre that validation rejects, so each cell adds a lens that meets both arcs. The stem in every cell of a seam ring: the spec left seam rings to connect through their seams, but a ring of scallops then fell below the faces-per-cell floor, so every cell carries a stem. The scallop apex shrink: the lobe's apex is pulled toward the seam radial in 0.9 steps because a fixed apex could cross the ±1 edge and break the shared seam.
+
 `MotifContext.to_cell` is the inverse of `to_cartesian`, for generators that build a shape in page space (a circle, an arc) and map it back into cell space. `motifs/geometry.py` also offers `cubic_points`, `page_arc_points`, `page_circle_points` and `insert_vertex_on_outline`.
 
 ## Line weights
@@ -128,7 +130,7 @@ Every motif in the registry is one of four shapes. A new motif should be one of 
 
 ### Enclosing outline
 
-One closed vector. It has no open ends, so it satisfies closure on its own, and its interior can declare a slot. `petal` is the model: a mirror-symmetric outline built from two quadratic runs per side, optionally wavy, passing `slot_outline=outline` so a child can nest inside. In a `side` ring its widest vertex is the side-touch vertex. `diamond` is the slot-only version, a pure island inside its parent. An enclosing base still needs contact with the structure, which comes from inward overflow, from `spans_cell`, or from a stem.
+One closed vector. It has no open ends, so it satisfies closure on its own, and its interior can declare a slot. `petal` is the model: a mirror-symmetric outline built from two cubic runs per side in a lotus profile, passing `slot_outline=outline` so a child can nest inside. In a `side` ring its widest vertex is the side-touch vertex. `diamond` is the slot-only version, a pure island inside its parent. Half the time (`DIAMOND_CONCAVE_CHANCE`) its four edges bow inward by 0.15 to 0.35 of the half-width, which keeps the tip a point; a bowed diamond in a small slot can be too thin to colour, so `_holds_pen` applies the validator's own rule (area of at least `MIN_REGION_AREA_PX2` and non-empty when eroded by `PEN_RADIUS_PX`), falls back to the straight diamond in the same slot when the bowed one fails it, and raises `MotifError` (the child is dropped) when neither passes. An enclosing base still needs contact with the structure, which comes from inward overflow, from `spans_cell`, or from a stem.
 
 ### Outline with midrib
 
@@ -140,7 +142,7 @@ A closed shape that reaches both angular limits by construction (`spans_cell: Tr
 
 ### Pure reach
 
-No vectors at all, only a reach end. `stem` declares one inward `ReachEnd` at `CellPoint(0.0, 0.0)` with a declared maximum of 0.9 ring depths (the resolver casts inward reaches to the neighbour ring's inner boundary instead), wavy at complexity 0.6 and above. It has the `attachment` role: it is never a base, and the composer hangs it off a base that needs contact. The assembler generates attachments only to record their reach ends; the resolver draws the line.
+No vectors at all, only a reach end. `stem` declares one inward `ReachEnd` at `CellPoint(0.0, 0.0)` with a declared maximum of 0.9 ring depths (the resolver casts inward reaches to the neighbour ring's inner boundary instead). Its line is drawn in one of three curved styles chosen by the resolver (`bow`, `s` or `wavy`, weights 2, 2 and 1; see Closure, overflow and reaches). It has the `attachment` role: it is never a base, and the composer hangs it off a base that needs contact. The assembler generates attachments only to record their reach ends; the resolver draws the line.
 
 ## Traps
 

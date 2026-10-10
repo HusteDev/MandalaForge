@@ -232,3 +232,50 @@ def test_slot_job_whose_frames_are_pulled_back_below_the_gate_is_skipped():
     job = ("diamond", "geometric", (8, 8, 8, 12), 0.15, 25, "centre", "slot", 20260821, False)
     result = run_case(job)
     assert result["status"] == "SKIP" and "final" in result["detail"], result
+
+
+def _slot_job_generator(monkeypatch, valid):
+    """Run the pulled-back diamond slot job (every final slot refuses it), optionally with an invalid report."""
+    import coloring_generator
+    if not valid:
+        real = coloring_generator.DesignGenerator.generate
+
+        def generate(self, *args, **kwargs):
+            out = real(self, *args, **kwargs)
+            self.last_validation_result.is_valid = False
+            self.last_validation_result.issues = ["Un-colorable region at (1.0, 1.0) - injected"]
+            return out
+        monkeypatch.setattr(coloring_generator.DesignGenerator, "generate", generate)
+    return ("diamond", "geometric", (8, 8, 8, 12), 0.15, 25, "centre", "slot", 20260821, False)
+
+
+def test_refused_slot_job_with_an_invalid_design_fails(monkeypatch):
+    result = run_case(_slot_job_generator(monkeypatch, valid=False))
+    assert result["status"] == "FAIL" and "Un-colorable" in result["detail"], result
+
+
+def test_final_slot_skip_is_tagged_in_the_detail():
+    result = run_case(_slot_job_generator(None, valid=True))
+    assert result["status"] == "SKIP" and result["detail"].startswith("[final-slot]"), result
+
+
+def test_slot_job_with_an_admitting_final_slot_and_no_child_fails(monkeypatch):
+    import qa_patterns
+    monkeypatch.setattr(qa_patterns, "_final_slot_refusals", lambda entry, generator: [])
+    result = run_case(_slot_job_generator(None, valid=True))
+    assert result["status"] == "FAIL" and "never placed" in result["detail"], result
+
+
+def test_tangent_check_needs_both_touch_vertices():
+    from qa_patterns import _tangent
+    entry = dict(find_motif("petal"))
+    good = entry["generator"]
+
+    def one_sided(context):
+        instance = good(context)
+        vector = instance.vectors[0]
+        vector.points = [p for p in vector.points if not (p.angular == -1.0 and p.radial == context.side_touch_radial)]
+        return instance
+
+    entry["generator"] = one_sided
+    assert not _tangent(entry)

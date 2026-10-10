@@ -66,6 +66,8 @@ REGISTRY_ROLE = {'base': 'base', 'slot': 'slot', 'contact': 'attachment'}
 # A design must carry at least this share of one face per cell outside ring 0.
 REGION_FLOOR = 0.75
 
+# Prefix of a SKIP detail for a slot job refused by the frames' final (post pull-back) slots.
+FINAL_SLOT_TAG = '[final-slot]'
 STATUSES = ('PASS', 'SKIP', 'FAIL', 'CONTRACT', 'ERROR')
 
 
@@ -213,8 +215,9 @@ def _placed_count(generator, name, role):
 
 def _final_slot_refusals(entry, generator):
     """
-    Why each placed frame's final slot refuses the child, in order; empty when any frame has no slot
-    to measure or one that admits it (so a child that is still missing is a genuine failure).
+    Why each placed frame's final slot refuses the child, in order. Frames that declare no slot are
+    skipped; the list is empty when any frame's slot admits the child (so a child that is still
+    missing is a genuine failure) or when no frame has a slot to measure.
     """
     reasons = []
     for node in generator.assembled.nodes:
@@ -284,17 +287,7 @@ def run_case(job):
     dropped = 0 if role != 'slot' else sum(
         1 for node in generator.assembled.nodes
         if node.child_dropped and node.recipe.slot_child is not None and node.recipe.slot_child.motif == name)
-    if placed == 0 and role == 'slot' and not probe:
-        # The gate measured pass one; pull-backs and nestling reshape a frame afterwards. When the slot
-        # every frame really ended with refuses the child, nothing could have been placed.
-        refusals = _final_slot_refusals(entry, generator)
-        if refusals:
-            return result('SKIP', "no final frame slot admits the child; " + refusals[0], dropped)
-    if placed == 0:
-        return result('FAIL', f"forced motif never placed ({dropped} dropped)", dropped)
-    # A child that does not fit its cell's real slot is dropped gracefully: reported, not failed.
-    partial = f"{placed} placed, {dropped} dropped" if dropped else ''
-
+    # The design must be valid and meet the region floor whether or not the motif was placed.
     report = generator.last_validation_result
     if not report.is_valid:
         return result('FAIL', report.issues[0] if report.issues else 'invalid', dropped)
@@ -303,6 +296,17 @@ def run_case(job):
     regions = report.stats.get('num_regions', 0)
     if regions < floor:
         return result('FAIL', f"only {regions} regions for {cells} cells (floor {floor:.0f})", dropped)
+    if placed == 0 and role == 'slot' and not probe:
+        # The gate measured pass one; pull-backs and nestling reshape a frame afterwards. When the slot
+        # every frame really ended with refuses the child, nothing could have been placed. Only a design
+        # that is otherwise sound gets here, and the skip carries its own tag so shrinkage stays visible.
+        refusals = _final_slot_refusals(entry, generator)
+        if refusals:
+            return result('SKIP', f"{FINAL_SLOT_TAG} no final frame slot admits the child; " + refusals[0], dropped)
+    if placed == 0:
+        return result('FAIL', f"forced motif never placed ({dropped} dropped)", dropped)
+    # A child that does not fit its cell's real slot is dropped gracefully: reported, not failed.
+    partial = f"{placed} placed, {dropped} dropped" if dropped else ''
     return result('PASS', partial, dropped)
 
 
@@ -450,7 +454,8 @@ def _tangent(entry):
             instance = entry['generator'](context)
             found = [(vector.points, k) for vector in instance.vectors if vector.closed
                      for k, p in enumerate(vector.points) if p.radial == radial and abs(p.angular) == 1.0]
-            if not found:
+            sides = {points[k].angular for points, k in found}
+            if sides != {1.0, -1.0}:  # both touch vertices must exist
                 return False
             if any(tangent_error_deg(context, points, k) > TANGENT_LIMIT_DEG for points, k in found):
                 return False
@@ -555,6 +560,10 @@ def main():
                     print(f"  {result['name']:14} {result['label']:48} "
                           f"[{result['status']}] {result['detail']}")
 
+    final_slot = sum(1 for r in results if r['detail'].startswith(FINAL_SLOT_TAG))
+    if final_slot:
+        print(f"\n{final_slot} slot job(s) skipped because pull-backs left every frame's slot too small "
+              f"({FINAL_SLOT_TAG}); a rising count means frames are shrinking.")
     print("-" * len(header))
     total_pass = sum(1 for r in results if r['status'] == 'PASS')
     print(f"{total_pass}/{len(results)} cases passed across "
