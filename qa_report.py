@@ -11,10 +11,13 @@ Usage:
     python qa_report.py                  # 5 random seeds, default params
     python qa_report.py --seeds 1 2 3    # specific seeds
     python qa_report.py --rings 5 --divisions 8 --complexity 0.7 --vary
-    python qa_report.py --corpus         # pinned regression corpus (180 designs)
+    python qa_report.py --corpus         # pinned regression corpus (180 designs) with its quotas
     python qa_report.py --force-mode layered  # force a position mode on every ring past the innermost
 
-Exits non-zero if any design fails validation, so it can gate CI.
+Exits non-zero if any design fails validation, so it can gate CI. A corpus run
+also exits non-zero when it misses a quota (spec 11): at least a quarter of the
+rings of its botanical and geometric designs layered (kept their back), and
+every embellishment drawn in at least ten rings.
 """
 
 import argparse
@@ -24,8 +27,13 @@ import random
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import redirect_stdout
+from dataclasses import replace
 
 from coloring_generator import DesignGenerator
+from composer import ring_stream_seed
+from motifs import find_motif
+from motifs.contract import MotifError
+from motifs.embellish import EMBELLISHMENT_ORDER
 from topology_validator import debug_overlay_svg, structural_components
 
 
@@ -39,17 +47,111 @@ CORPUS_SEEDS = [42, 777, 12345, 254302, 955789, 984322]
 CORPUS_COMPLEXITIES = [0.15, 0.5, 0.85]
 CORPUS_RINGS = 4
 CORPUS_DIVISIONS = 12
+# The corpus forces the layered position mode on every eligible ring of the jobs with these seeds, because
+# the natural rate of layered rings is far below the quota (spec 11). Forcing only makes a ring layered where
+# a back motif fits; categories with no back motifs keep their natural modes.
+CORPUS_LAYERED_SEEDS = CORPUS_SEEDS[:5]
+
+# Corpus quotas (spec 11): the share of the rings of botanical and geometric designs that are layered (and
+# kept their back), and the rings each embellishment must be drawn in, across the corpus.
+LAYERED_CATEGORIES = ('botanical', 'geometric')
+LAYERED_SHARE = 0.25
+EMBELLISHMENT_MIN = 10
 
 
-def corpus_jobs(out_dir, overlay_mode, num_rings=CORPUS_RINGS, num_divisions=CORPUS_DIVISIONS):
-    """The pinned corpus as run_one jobs: 5 categories x 3 complexities x 6 seeds x 2 division modes."""
+def corpus_jobs(out_dir, overlay_mode, num_rings=CORPUS_RINGS, num_divisions=CORPUS_DIVISIONS,
+                layered_seeds=CORPUS_LAYERED_SEEDS):
+    """
+    The pinned corpus as run_one jobs: 5 categories x 3 complexities x 6 seeds x 2 division modes, each with
+    its forced position mode: `layered` for the seeds in `layered_seeds`, else None.
+    """
     return [
-        (seed, num_rings, num_divisions, complexity, [category], vary, out_dir, overlay_mode)
+        (seed, num_rings, num_divisions, complexity, [category], vary, out_dir, overlay_mode,
+         'layered' if seed in layered_seeds else None)
         for category in CORPUS_CATEGORIES
         for complexity in CORPUS_COMPLEXITIES
         for seed in CORPUS_SEEDS
         for vary in (False, True)
     ]
+
+
+def corpus_quota_failures(rows):
+    """
+    Each corpus quota the result `rows` miss, as a sentence (empty when both hold): fewer than
+    `LAYERED_SHARE` of the rings of the botanical and geometric designs layered, and each embellishment
+    drawn in fewer than `EMBELLISHMENT_MIN` rings. A ring counts as layered only if it kept its back.
+    """
+    failures = []
+    layered_rows = [row for row in rows if set(row['categories']) & set(LAYERED_CATEGORIES)]
+    layered = sum(row['layered_rings'] for row in layered_rows)
+    rings = sum(row['rings'] for row in layered_rows)
+    if rings and layered < LAYERED_SHARE * rings:
+        failures.append(f"layered rings {layered}/{rings} = {layered / rings:.1%} (< {LAYERED_SHARE:.0%})")
+    for name in EMBELLISHMENT_ORDER:
+        count = sum(row['embellishments'].get(name, 0) for row in rows)
+        if count < EMBELLISHMENT_MIN:
+            failures.append(f"embellishment {name} appears {count} times (< {EMBELLISHMENT_MIN})")
+    return failures
+
+
+def drawn_names(generate, context, names):
+    """
+    Which of `names` (in `EMBELLISHMENT_ORDER`) the generator draws in `context`. An instance counts drops,
+    not names, but the pipeline runs the names in order, each from its own stream, so a run with the first
+    k names is the full run up to its k-th name: the k-th name was drawn when adding it adds no drop.
+    """
+    drawn, before = [], 0
+    for k in range(1, len(names) + 1):
+        try:
+            dropped = generate(replace(context, rng=random.Random(context.node_seed),
+                                       embellishments=tuple(names[:k]))).dropped_embellishments
+        except MotifError:
+            return drawn
+        if dropped == before:
+            drawn.append(names[k - 1])
+        before = dropped
+    return drawn
+
+
+def _back_context(ring, front_context):
+    """The context the assembler draws a layered ring's back in (`Assembler._back_context`)."""
+    seed = ring_stream_seed(ring.ring_seed, ring.ring_index, "back")
+    return replace(front_context, rng=random.Random(seed), node_seed=seed, ring_stream_seed=seed,
+                   position="divider", angular_limits=1.0, radial_limits=(0.0, 1.0), slot=None,
+                   side_touch_radial=None, embellishments=tuple(ring.back.embellishments))
+
+
+def drawn_embellishments(generator):
+    """
+    For each embellishment, the number of rings of the design in which some base node drew it (a layered
+    ring's back included). A node that dropped none of its embellishments drew them all; otherwise each
+    name is checked by regenerating the node with the names up to it (`drawn_names`).
+    """
+    rings_by_index = {ring.ring_index: ring for ring in generator.plan.rings}
+    found = {}
+    for node in generator.assembled.nodes:
+        if node.parent is not None:
+            continue
+        credited = {name for name, rings in found.items() if node.ring_index in rings}
+        names = [name for name in node.recipe.embellishments if name not in credited]
+        ring = rings_by_index.get(node.ring_index)
+        back_names = []
+        if node.back_seed is not None and ring is not None and ring.back is not None:
+            back_names = [name for name in ring.back.embellishments if name not in credited]
+        if not names and not back_names:
+            continue
+        if node.instance.dropped_embellishments == 0:
+            drawn = names + back_names
+        else:
+            entry = find_motif(node.recipe.motif)
+            drawn = drawn_names(entry['generator'], node.context, list(node.recipe.embellishments)) if entry else []
+            if back_names:
+                back_context = _back_context(ring, node.context)
+                drawn += drawn_names(find_motif(ring.back.motif)['generator'], back_context,
+                                     list(ring.back.embellishments))
+        for name in drawn:
+            found.setdefault(name, set()).add(node.ring_index)
+    return {name: len(found[name]) for name in EMBELLISHMENT_ORDER if name in found}
 
 
 def floating_base_boxes(assembled):
@@ -116,6 +218,7 @@ def run_one(job):
             'error': f"{type(exc).__name__}: {exc}"[:300],
             'stats': {}, 'issues': [], 'fallbacks': 0, 'patterns': [], 'reaches': 0,
             'base_symmetry': None, 'side_touch_rings': 0, 'layered_rings': 0, 'back_dropped_rings': 0,
+            'rings': num_rings, 'embellishments': {},
         }
 
     report = generator.last_validation_result
@@ -148,6 +251,8 @@ def run_one(job):
         'side_touch_rings': sum(1 for ring in generator.plan.rings if ring.contact_mode == 'side'),
         'layered_rings': sum(1 for ring in generator.plan.rings if ring.back is not None),
         'back_dropped_rings': sum(1 for ring in generator.plan.rings if ring.back_dropped),
+        'rings': len(generator.plan.rings),
+        'embellishments': drawn_embellishments(generator),
     }
 
 
@@ -175,7 +280,9 @@ def main():
 
     if args.corpus:
         overlay_mode = args.overlays or 'failures'
-        jobs = [job + (args.force_mode,) for job in corpus_jobs(args.out, overlay_mode, args.rings, args.divisions)]
+        jobs = corpus_jobs(args.out, overlay_mode, args.rings, args.divisions)
+        if args.force_mode:  # an explicit mode replaces the corpus's own forcing on every job
+            jobs = [job[:8] + (args.force_mode,) for job in jobs]
     else:
         overlay_mode = args.overlays or 'always'
         seeds = args.seeds if args.seeds else [random.randint(0, 1000000) for _ in range(args.count)]
@@ -195,8 +302,8 @@ def main():
         results = [run_one(job) for job in jobs]
 
     print(f"{'DESIGN':38} {'STATUS':6} {'VARY':>4} {'B':>3} {'REGIONS':>7} {'DANGL':>6} {'FLOAT':>5} "
-          f"{'UNCOL':>5} {'LANE':>4} {'REACH':>5} {'FB':>3}")
-    print("-" * 98)
+          f"{'UNCOL':>5} {'LANE':>4} {'REACH':>5} {'FB':>3} {'LAYR':>4} {'BDRP':>4}  EMBELLISHMENTS")
+    print("-" * 124)
     for result in results:
         stats = result['stats']
         symmetry = result['base_symmetry'] if result['base_symmetry'] is not None else '-'
@@ -204,7 +311,9 @@ def main():
               f"{stats.get('num_regions', 0):>7} {stats.get('num_dangles', 0):>6} "
               f"{stats.get('num_floating_open', 0):>5} "
               f"{stats.get('num_uncolorable_regions', 0):>5} "
-              f"{stats.get('num_free_lanes', 0):>4} {result['reaches']:>5} {result['fallbacks']:>3}")
+              f"{stats.get('num_free_lanes', 0):>4} {result['reaches']:>5} {result['fallbacks']:>3} "
+              f"{result['layered_rings']:>4} {result['back_dropped_rings']:>4}  "
+              + " ".join(f"{name}={count}" for name, count in result['embellishments'].items()))
 
     bad = [r for r in results if r['status'] != 'PASS']
     if bad:
@@ -218,16 +327,28 @@ def main():
 
     fallback_total = sum(r['fallbacks'] for r in results)
     reach_total = sum(r['reaches'] for r in results)
-    print("-" * 98)
+    print("-" * 124)
     print(f"{len(results) - len(bad)}/{len(results)} designs passed. "
           f"Reaches: {reach_total}. Safe-fallback cells used: {fallback_total}.")
     print(f"Layered rings: {sum(r['layered_rings'] for r in results)}; "
           f"back layers dropped: {sum(r['back_dropped_rings'] for r in results)}.")
+    quota_failures = []
+    if args.corpus:
+        layered_rows = [r for r in results if set(r['categories']) & set(LAYERED_CATEGORIES)]
+        layered = sum(r['layered_rings'] for r in layered_rows)
+        rings = sum(r['rings'] for r in layered_rows)
+        print(f"layered rings: {layered}/{rings} botanical+geometric rings (>= {LAYERED_SHARE:.0%})")
+        print("embellishments: " + " ".join(
+            f"{name}={sum(r['embellishments'].get(name, 0) for r in results)}" for name in EMBELLISHMENT_ORDER)
+            + f" (rings drawn in, each >= {EMBELLISHMENT_MIN})")
+        quota_failures = corpus_quota_failures(results)
+        for failure in quota_failures:
+            print(f"QUOTA MISSED: {failure}")
     if overlay_mode != 'never':
         scope = "failing designs" if overlay_mode == 'failures' else "all designs"
         print(f"Overlays for {scope} written to {args.out}/qa_overlay_<design>.svg")
 
-    sys.exit(1 if bad else 0)
+    sys.exit(1 if bad or quota_failures else 0)
 
 
 if __name__ == '__main__':

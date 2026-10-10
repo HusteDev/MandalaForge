@@ -23,3 +23,39 @@ def test_run_one_forces_a_position_mode_and_counts_layered_rings(tmp_path):
     assert result["status"] == "PASS"
     assert result["layered_rings"] + result["back_dropped_rings"] == 3
     assert result["layered_rings"] >= 1
+
+
+def test_corpus_quotas_are_checked():
+    from qa_report import corpus_quota_failures
+    rows = [{"categories": ["botanical"], "layered_rings": 0, "rings": 4, "embellishments": {}}]
+    failures = corpus_quota_failures(rows)
+    assert failures   # names the layered share and each missing embellishment
+    assert any("layered" in failure for failure in failures)
+    for name in ("echo", "veins", "fan", "dot", "beads"):
+        assert any(name in failure for failure in failures), (name, failures)
+
+
+def test_corpus_quotas_pass_when_both_are_met():
+    from qa_report import corpus_quota_failures
+    counts = {name: 10 for name in ("echo", "veins", "fan", "dot", "beads")}
+    rows = [
+        {"categories": ["botanical"], "layered_rings": 1, "rings": 4, "embellishments": counts},
+        {"categories": ["celtic"], "layered_rings": 0, "rings": 4, "embellishments": {}},
+    ]
+    assert corpus_quota_failures(rows) == []
+    rows[0]["embellishments"] = dict(counts, dot=9)
+    assert corpus_quota_failures(rows) == ["embellishment dot appears 9 times (< 10)"]
+
+
+def test_corpus_forces_layered_on_the_first_three_seeds():
+    from qa_report import CORPUS_SEEDS, corpus_jobs
+    jobs = corpus_jobs(out_dir="test_output", overlay_mode="never")
+    forced = {job[0] for job in jobs if job[8] == "layered"}
+    assert forced and forced <= set(CORPUS_SEEDS)
+    assert set(CORPUS_SEEDS[:3]) <= forced
+
+
+def test_run_one_counts_rings_and_drawn_embellishments(tmp_path):
+    result = run_one((42, 4, 12, 0.85, ["botanical"], False, str(tmp_path), "never"))
+    assert result["rings"] == 4
+    assert sum(result["embellishments"].values()) >= 1, result["embellishments"]

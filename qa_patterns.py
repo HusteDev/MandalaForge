@@ -8,9 +8,17 @@ fixtures, and drives the REAL generation pipeline. Forcing disables the fallback
 chain (a rejection is a visible failure, not a silent substitution) and never
 applies to ring 0.
 
-It also checks six properties of each motif's generator on a standard cell:
+It also runs each motif with each embellishment it accepts (forced onto every
+node of the motif under test), and each layered front with each back motif in
+forced layered rings. Across the matrix, every such embellishment must be drawn
+somewhere and every front/back pair must keep its back somewhere, or the motif
+fails: a pairing that is always dropped is not covered.
+
+It checks eight properties of each motif's generator on a standard cell:
 determinism, narrower radial limits never reaching further, angular containment,
-an honest slot declaration, seam ends on the cell edges and smooth side touch.
+an honest slot declaration, seam ends on the cell edges, smooth side touch, back
+ends that are seam ends or front-outline vertices after the occlusion cut (CUT),
+and determinism and monotony with every accepted embellishment (EMB).
 
 Usage:
     python qa_patterns.py                        # smoke tier, every motif
@@ -31,10 +39,13 @@ from typing import List, Set
 
 from assembler import stroke_width_for
 from coloring_generator import DesignGenerator
-from composer import Composer, ComposerSettings, node_rng, ring_stream_seed
+from composer import (CellRecipe, Composer, ComposerSettings, node_rng, pick_embellishments, ring_stream_seed,
+                      touch_heights_of)
 from motifs import MOTIFS, find_motif, safe_motif
 from motifs.contract import MotifError
+from motifs.embellish import EMBELLISHMENT_ORDER, INTERIOR_FILLS
 from motifs.geometry import CellPoint, MotifContext, SmartVector
+from motifs.layering import LayeringError, compose_layered
 
 CATEGORIES = ['botanical', 'geometric', 'celtic', 'art_deco', 'abstract']
 POSITIONS = ('centre', 'divider', 'both')
@@ -81,20 +92,25 @@ def _supports(entry, position, role):
 SLOT_FRAME = 'petal'
 
 
-def _fixture_plan(generator):
+def _fixture_composer(generator):
     """
-    The plan the generator will draw for this fixture: a composer with the
-    generator's own settings, as `generate()` builds it (planning draws
-    nothing). The gates read each forced ring's division count, centre share,
-    contact mode and side-touch radial from it.
+    The composer `generate()` builds for this fixture, with the generator's own settings. The gates
+    read each forced ring's division count, centre share, contact mode and side-touch radial from
+    its plan, and the pairing jobs edit that plan before assembling it.
     """
     settings = ComposerSettings(
         num_divisions=generator.num_divisions, vary_divisions=generator.vary_divisions,
         ring_divisions=generator.ring_divisions, complexity=generator.complexity,
         min_pattern_size=generator.min_pattern_size, categories=generator.categories,
         force_motif=generator.force_motif, ring_seeds=generator.ring_seeds,
+        force_position_mode=generator.force_position_mode,
     )
-    return Composer(generator.seed, generator.rings, settings).plan()
+    return Composer(generator.seed, generator.rings, settings)
+
+
+def _fixture_plan(generator):
+    """The plan `_fixture_composer` draws (planning draws nothing)."""
+    return _fixture_composer(generator).plan()
 
 
 def _gate_skip(entry, generator, position, role='base'):
@@ -239,15 +255,172 @@ def _final_slot_refusals(entry, generator):
     return reasons
 
 
+# ------------------------------------------------------- pairing jobs (spec 11)
+
+def layered_fronts():
+    """The motifs a layered ring may draw in front: non-seam bases that touch at base height."""
+    return [entry for entry in MOTIFS
+            if 'base' in entry['roles'] and not entry.get('seams', False) and 'base' in touch_heights_of(entry)]
+
+
+def layered_pairs():
+    """Every (front, back) motif pair a layered ring can draw."""
+    backs = [entry['name'] for entry in MOTIFS if 'back' in entry['roles']]
+    return [(front['name'], back) for front in layered_fronts() for back in backs]
+
+
+def _assemble_edited(generator, edit):
+    """
+    Plan as `generate()` does, let `edit(composer, plan)` change the plan, then assemble and validate it
+    exactly as `generate()` would (a failing layered ring drops its back and assembles again). Returns
+    what `edit` returns.
+    """
+    generator.composer = _fixture_composer(generator)
+    generator.plan = generator.composer.plan()
+    edited = edit(generator.composer, generator.plan)
+    generator.assembled = generator._assemble()
+    generator._validate()
+    return edited
+
+
+def _force_embellishment(name, embellishment):
+    """A plan edit giving every base node of `name` past ring 0 exactly `[embellishment]`."""
+    def edit(composer, plan):
+        edited = 0
+        for ring in plan.rings[1:]:
+            for entry in ring.sequence:
+                for node in (entry.centre, entry.divider):
+                    if node is None or node.motif != name or node.is_fallback:
+                        continue
+                    node.embellishments = [embellishment]
+                    if embellishment in INTERIOR_FILLS:  # an interior fill takes the slot (spec 6.4)
+                        node.slot_child = None
+                    edited += 1
+        return edited
+    return edit
+
+
+def _force_layered_pair(front_name, back_name):
+    """
+    A plan edit drawing `front_name` in front of `back_name` in every layered ring past ring 0 where both
+    pass the composer's own size gates. Fronts are composed as the composer composes them (embellishments
+    and slot chain from the node's streams), keeping the planned node's contact flags; the back's
+    embellishments are picked from the stream `_plan_back` uses. Returns the edited ring indices.
+    """
+    front, back = find_motif(front_name), find_motif(back_name)
+
+    def edit(composer, plan):
+        edited = []
+        for ring in plan.rings[1:]:
+            if ring.back is None:
+                continue
+            cell_width, ring_depth = composer._ring_metrics(ring.ring_index, ring.divisions)
+            if not (composer._passes(front, cell_width, ring_depth) and composer._passes(back, cell_width, ring_depth)):
+                continue
+            for s, entry in enumerate(ring.sequence):
+                old = entry.centre
+                node = composer._compose(front, node_rng(ring.ring_seed, ring.ring_index, s, 0, 'centre'),
+                                         ring.ring_index, ring.ring_seed, s, 'centre', cell_width, ring_depth, 0)
+                node.provides_contact = old.provides_contact
+                node.attachments = old.attachments
+                entry.centre = node
+            ring.back = CellRecipe(back['name'], back['category'])
+            ring.back.embellishments = pick_embellishments(
+                back, composer.settings.complexity,
+                node_rng(ring.ring_seed, ring.ring_index, 0, 0, 'divider', 'pick:emb'))
+            edited.append(ring.ring_index)
+        return edited
+    return edit
+
+
+def _run_variant(entry, category, ring_divisions, complexity, min_white, position, seed, probe, variant, result):
+    """
+    One pairing job. `('emb', name)` forces the motif as a base with exactly that embellishment on every
+    node; `drawn` counts the forced nodes that drew it, `dropped` those where it did not fit. `('back',
+    name)` forces layered rings with the motif in front of that back; `drawn` counts the forced rings that
+    kept their back, `dropped` those that dropped it (spec 5.4). A drop is legitimate in one case; the
+    summary fails a pairing that is never drawn anywhere in the matrix.
+    """
+    kind, other = variant
+    name = entry['name']
+    try:
+        with redirect_stdout(io.StringIO()):
+            if kind == 'emb':
+                generator = DesignGenerator(
+                    seed=seed, num_rings=len(ring_divisions), num_divisions=ring_divisions[0],
+                    complexity=complexity, min_pattern_size=min_white, categories=[category],
+                    ring_divisions=list(ring_divisions),
+                    force_motif={'name': name, 'position': position, 'role': 'base'},
+                )
+                if not probe:
+                    reason = _gate_skip(entry, generator, position, 'base')
+                    if reason:
+                        return result('SKIP', reason)
+                edited = _assemble_edited(generator, _force_embellishment(name, other))
+            else:
+                categories = sorted({category, find_motif(other)['category']})
+                generator = DesignGenerator(
+                    seed=seed, num_rings=len(ring_divisions), num_divisions=ring_divisions[0],
+                    complexity=complexity, min_pattern_size=min_white, categories=categories,
+                    ring_divisions=list(ring_divisions), force_position_mode='layered',
+                )
+                edited = _assemble_edited(generator, _force_layered_pair(name, other))
+    except MotifError as exc:
+        return result('CONTRACT', str(exc))
+    except ValueError as exc:  # includes AssemblyError
+        text = str(exc)
+        if 'Invalid' in text or 'MotifError' in text:
+            return result('CONTRACT', text)
+        return result('ERROR', f"{type(exc).__name__}: {text}")
+    except Exception as exc:
+        return result('ERROR', f"{type(exc).__name__}: {exc}")
+
+    if not edited:
+        return result('SKIP', "no ring admits the pairing")
+    report = generator.last_validation_result
+    if kind == 'emb':
+        forced = [node for node in generator.assembled.nodes
+                  if node.parent is None and node.ring_index > 0 and node.recipe.motif == name
+                  and node.recipe.embellishments == [other]]
+        drawn = sum(1 for node in forced if node.instance.dropped_embellishments == 0)
+        dropped = len(forced) - drawn
+    else:
+        rings = [ring for ring in generator.plan.rings if ring.ring_index in edited]
+        drawn = sum(1 for ring in rings if ring.back is not None)
+        dropped = sum(1 for ring in rings if ring.back_dropped)
+    if not report.is_valid:
+        return result('FAIL', report.issues[0] if report.issues else 'invalid', dropped, drawn)
+    cells = sum(ring_divisions[1:])
+    floor = REGION_FLOOR * cells
+    regions = report.stats.get('num_regions', 0)
+    if regions < floor:
+        return result('FAIL', f"only {regions} regions for {cells} cells (floor {floor:.0f})", dropped, drawn)
+    if kind == 'emb' and not forced:
+        return result('FAIL', "forced motif never placed", dropped, drawn)
+    noun = 'drawn' if kind == 'emb' else 'kept'
+    return result('PASS', f"{drawn} {noun}, {dropped} dropped" if dropped else '', dropped, drawn)
+
+
 def run_case(job):
-    name, category, ring_divisions, complexity, min_white, position, role, seed, probe = job
+    name, category, ring_divisions, complexity, min_white, position, role, seed, probe, *rest = job
+    variant = rest[0] if rest else None
     # An explicit division list's base symmetry is its gcd (spec 13.1).
     symmetry = Composer.base_symmetry(ring_divisions[0], False, list(ring_divisions), None)
     label = (f"div{'-'.join(map(str, ring_divisions))}_B{symmetry}_c{complexity}"
-             f"_mws{min_white}_{position}_{role}")
+             f"_mws{min_white}_{position}_{role}" + (f"_{variant[0]}-{variant[1]}" if variant else ''))
 
-    def result(status, detail='', dropped=0):
-        return {'name': name, 'label': label, 'status': status, 'detail': detail[:200], 'dropped': dropped}
+    def result(status, detail='', dropped=0, drawn=0):
+        return {'name': name, 'label': label, 'status': status, 'detail': detail[:200], 'dropped': dropped,
+                'variant': variant, 'drawn': drawn}
+
+    if variant is not None:
+        entry = find_motif(name)
+        if entry is None:
+            return result('ERROR', f"unknown motif {name}")
+        if variant[0] == 'emb' and not _supports(entry, position, 'base'):
+            return result('SKIP', f"{position}/base unsupported")
+        return _run_variant(entry, category, ring_divisions, complexity, min_white, position, seed, probe,
+                            variant, result)
 
     entry = find_motif(name)
     if entry is None:
@@ -318,7 +491,7 @@ PROPERTY_CELL = dict(inner_radius=100.0, outer_radius=160.0, wedge_angle=30.0,
 
 
 def _generate(entry, seed, **over):
-    context = MotifContext(**PROPERTY_CELL, rng=random.Random(seed), **over)
+    context = MotifContext(**dict(PROPERTY_CELL, rng=random.Random(seed), **over))
     if 'base' not in entry['roles']:
         # A motif that cannot stand alone needs a slot to sit in.
         context.slot = [CellPoint(0.2, -0.4), CellPoint(0.2, 0.4),
@@ -391,14 +564,15 @@ def max_turn_deg(context: MotifContext, points: List[CellPoint], closed: bool, s
     return worst
 
 
-def _deterministic(entry):
-    first, second = _generate(entry, 11), _generate(entry, 11)
-    return [v.points for v in first.vectors] == [v.points for v in second.vectors]
+def _deterministic(entry, **over):
+    first, second = _generate(entry, 11, **over), _generate(entry, 11, **over)
+    return ([(v.points, v.closed, v.weight) for v in first.vectors]
+            == [(v.points, v.closed, v.weight) for v in second.vectors])
 
 
-def _monotone(entry):
-    wide = _points(_generate(entry, 5, radial_limits=(-0.25, 1.25)))
-    narrow = _points(_generate(entry, 5, radial_limits=(-0.1, 1.1)))
+def _monotone(entry, **over):
+    wide = _points(_generate(entry, 5, radial_limits=(-0.25, 1.25), **over))
+    narrow = _points(_generate(entry, 5, radial_limits=(-0.1, 1.1), **over))
     if not narrow:
         return True
     high = max(p.radial for p in wide) if wide else 0
@@ -462,10 +636,89 @@ def _tangent(entry):
     return True
 
 
+# The front every back is cut against in the CUT check; the complexity the EMB check embellishes at, and
+# the white spaces it tries for each embellishment alone.
+CUT_FRONT = 'petal'
+EMB_COMPLEXITY = 0.9
+EMB_WHITE_SPACES = (10.0, 5.0)
+
+
+def _cut(entry):
+    """
+    CUT (spec 11): for a motif with role "back", `compose_layered` with a `CUT_FRONT` front touching at base
+    height and this back, at seeds 0 to 5, leaves every open back end either a seam end (angular exactly
+    +-1.0) or exactly a vertex of a front outline, so every occlusion cut is a vertex of the front. A seed
+    whose composite raises `LayeringError` is a legitimate drop (spec 5.4), but at least one seed must
+    compose. A motif with no "back" role passes.
+    """
+    if 'back' not in entry['roles']:
+        return True
+    front = find_motif(CUT_FRONT)
+    composed = 0
+    for seed in range(6):
+        front_context = MotifContext(**PROPERTY_CELL, rng=random.Random(seed), node_seed=seed,
+                                     side_touch_radial=TOUCH_RADIALS['base'])
+        back_seed = 1000 + seed
+        back_context = MotifContext(**PROPERTY_CELL, rng=random.Random(back_seed), node_seed=back_seed,
+                                    ring_stream_seed=back_seed, position='divider', angular_limits=1.0,
+                                    radial_limits=(0.0, 1.0))
+        try:
+            instance = compose_layered(front_context, front, back_context, entry)
+        except LayeringError:
+            continue
+        composed += 1
+        vertices = {(p.radial, p.angular) for v in instance.vectors
+                    if v.layer != 'back' and v.closed for p in v.points}
+        for vector in instance.vectors:
+            if vector.layer != 'back' or vector.closed:
+                continue
+            for end in (vector.points[0], vector.points[-1]):
+                if abs(end.angular) != 1.0 and (end.radial, end.angular) not in vertices:
+                    return False
+    return composed > 0
+
+
+def embellishment_sets(entry):
+    """
+    The largest embellishment sets the motif accepts together, in `EMBELLISHMENT_ORDER`: everything it
+    accepts, with one interior fill at a time (spec 6.4 keeps at most one).
+    """
+    accepted = entry['embellishments']
+    fills = [name for name in accepted if name in INTERIOR_FILLS] or [None]
+    return [tuple(name for name in EMBELLISHMENT_ORDER
+                  if name in accepted and (name not in INTERIOR_FILLS or name == fill))
+            for fill in fills] if accepted else []
+
+
+def _embellished(entry):
+    """
+    EMB (spec 11): DET and MONO hold at `EMB_COMPLEXITY` with each of the motif's `embellishment_sets` and
+    with each accepted embellishment alone. So the check is never vacuous, each embellishment alone must
+    also be drawn on the standard cell at one of `EMB_WHITE_SPACES` (a band's beads need more room between
+    its arcs than 10px of white leaves on the standard cell), and DET and MONO hold there too.
+    """
+    base = dict(complexity=EMB_COMPLEXITY, node_seed=17, ring_stream_seed=23)
+    for names in embellishment_sets(entry):
+        if not (_deterministic(entry, embellishments=names, **base)
+                and _monotone(entry, embellishments=names, **base)):
+            return False
+    for name in entry['embellishments']:
+        drawn_at = [white for white in EMB_WHITE_SPACES
+                    if _generate(entry, 11, embellishments=(name,), min_white_space=white,
+                                 **base).dropped_embellishments == 0]
+        if not drawn_at:
+            return False
+        over = dict(base, embellishments=(name,), min_white_space=drawn_at[0])
+        if not (_deterministic(entry, **over) and _monotone(entry, **over)):
+            return False
+    return True
+
+
 def property_checks(entry):
     """Run the generator property checks on the standard test cell."""
     checks = {'deterministic': _deterministic, 'monotone': _monotone,
-              'angular': _angular, 'slot': _slot, 'seam': _seam, 'tangent': _tangent}
+              'angular': _angular, 'slot': _slot, 'seam': _seam, 'tangent': _tangent,
+              'cut': _cut, 'embellished': _embellished}
     outcome = {}
     for key, check in checks.items():
         try:
@@ -477,17 +730,49 @@ def property_checks(entry):
 
 # ------------------------------------------------------------------------ CLI
 
+def _variants(entry, matrix):
+    """
+    The pairing jobs' (position, role, variant) triples for one motif: each accepted embellishment as a
+    base in each single position, and, for a layered front, each back in a forced layered ring.
+    """
+    triples = [(position, 'base', ('emb', name))
+               for name in entry['embellishments']
+               for position in matrix['position'] if position != 'both']
+    triples += [('layered', 'base', ('back', back))
+                for front, back in layered_pairs() if front == entry['name']]
+    return triples
+
+
 def build_jobs(entries, matrix, seed, probe):
+    """Every forced job, then every pairing job; a job's tenth field is its pairing variant (None for none)."""
     return [
         (entry['name'], entry['category'], ring_divisions, complexity, min_white,
-         position, role, seed, probe)
+         position, role, seed, probe, variant)
         for entry in entries
+        for position, role, variant in (
+            [(position, role, None) for position in matrix['position'] for role in matrix['role']]
+            + _variants(entry, matrix))
         for ring_divisions in matrix['ring_divisions']
         for complexity in matrix['complexity']
         for min_white in matrix['min_white']
-        for position in matrix['position']
-        for role in matrix['role']
     ]
+
+
+def uncovered_pairings(results):
+    """
+    The pairing variants, per motif, that ran but were never drawn anywhere in `results`: an embellishment
+    no forced node drew, or a back no forced layered ring kept. Each is a coverage failure of its motif.
+    """
+    ran, drawn = {}, set()
+    for result in results:
+        variant = result.get('variant')
+        if variant is None or result['status'] == 'SKIP':
+            continue
+        ran.setdefault(result['name'], set()).add(variant)
+        if result.get('drawn', 0):
+            drawn.add((result['name'], variant))
+    return {name: sorted(v for v in variants if (name, v) not in drawn)
+            for name, variants in ran.items() if any((name, v) not in drawn for v in variants)}
 
 
 def main():
@@ -519,7 +804,8 @@ def main():
 
     matrix = MATRIX_SMOKE if args.tier == 'smoke' else MATRIX_FULL
     jobs = build_jobs(entries, matrix, args.seed, args.probe)
-    print(f"{len(entries)} motif(s) x {len(jobs) // len(entries)} cases "
+    pairing = sum(1 for job in jobs if job[9] is not None)
+    print(f"{len(entries)} motif(s): {len(jobs) - pairing} forced + {pairing} pairing "
           f"= {len(jobs)} runs ({args.tier} tier, {args.jobs} workers)\n")
 
     if args.jobs > 1 and len(jobs) > 1:
@@ -532,8 +818,9 @@ def main():
     for result in results:
         by_motif.setdefault(result['name'], []).append(result)
 
+    uncovered = uncovered_pairings(results)
     header = (f"{'MOTIF':16} {'PASS':>5} {'SKIP':>5} {'FAIL':>5} {'CONTR':>6} {'ERR':>4} {'DROP':>5} "
-              f"{'DET':>5} {'MONO':>5} {'ANG':>5} {'SLOT':>5} {'SEAM':>5} {'TANG':>5}")
+              f"{'DET':>5} {'MONO':>5} {'ANG':>5} {'SLOT':>5} {'SEAM':>5} {'TANG':>5} {'CUT':>5} {'EMB':>5}")
     print(header)
     print("-" * len(header))
     failed = []
@@ -541,16 +828,19 @@ def main():
         name = entry['name']
         rows = by_motif.get(name, [])
         counts = {k: sum(1 for r in rows if r['status'] == k) for k in STATUSES}
-        dropped = sum(r.get('dropped', 0) for r in rows)  # slot children dropped where they did not fit
+        # Slot children, embellishments and back layers dropped where they did not fit.
+        dropped = sum(r.get('dropped', 0) for r in rows)
         props = property_checks(entry)
         mark = {True: 'ok', False: 'BAD'}
-        if counts['FAIL'] or counts['CONTRACT'] or counts['ERROR'] or not all(props.values()):
+        if (counts['FAIL'] or counts['CONTRACT'] or counts['ERROR'] or not all(props.values())
+                or name in uncovered):
             failed.append(name)
         print(f"{name:16} {counts['PASS']:>5} {counts['SKIP']:>5} {counts['FAIL']:>5} "
               f"{counts['CONTRACT']:>6} {counts['ERROR']:>4} {dropped:>5} "
               f"{mark[props['deterministic']]:>5} {mark[props['monotone']]:>5} "
               f"{mark[props['angular']]:>5} {mark[props['slot']]:>5} "
-              f"{mark[props['seam']]:>5} {mark[props['tangent']]:>5}")
+              f"{mark[props['seam']]:>5} {mark[props['tangent']]:>5} "
+              f"{mark[props['cut']]:>5} {mark[props['embellished']]:>5}")
 
     if failed:
         print("\nFailing cases:")
@@ -559,6 +849,9 @@ def main():
                 if result['status'] not in ('PASS', 'SKIP'):
                     print(f"  {result['name']:14} {result['label']:48} "
                           f"[{result['status']}] {result['detail']}")
+            for kind, other in uncovered.get(name, []):
+                what = 'embellishment' if kind == 'emb' else 'back'
+                print(f"  {name:14} {what} {other} was never drawn in any case of the matrix")
 
     final_slot = sum(1 for r in results if r['detail'].startswith(FINAL_SLOT_TAG))
     if final_slot:
@@ -568,6 +861,15 @@ def main():
     total_pass = sum(1 for r in results if r['status'] == 'PASS')
     print(f"{total_pass}/{len(results)} cases passed across "
           f"{len(entries) - len(failed)}/{len(entries)} motifs.")
+    pairings = {}
+    for result in results:
+        if result.get('variant') is not None and result['status'] == 'PASS':
+            tally = pairings.setdefault((result['name'], result['variant']), [0, 0])
+            tally[0] += result['drawn']
+            tally[1] += result['dropped']
+    if pairings:
+        print("Pairings drawn/dropped: " + ", ".join(
+            f"{name}+{kind}:{other}={drawn}/{dropped}" for (name, (kind, other)), (drawn, dropped) in sorted(pairings.items())))
     return 1 if failed else 0
 
 

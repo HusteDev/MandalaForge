@@ -279,3 +279,85 @@ def test_tangent_check_needs_both_touch_vertices():
 
     entry["generator"] = one_sided
     assert not _tangent(entry)
+
+
+def test_property_checks_include_cut_and_embellished():
+    from motifs import MOTIFS
+    for entry in MOTIFS:
+        outcome = property_checks(entry)
+        assert {"cut", "embellished"} <= set(outcome) and all(outcome.values()), (entry["name"], outcome)
+
+
+def test_cut_check_fails_a_back_end_that_is_neither_a_seam_end_nor_a_front_vertex(monkeypatch):
+    import qa_patterns
+    from motifs.geometry import CellPoint
+    real = qa_patterns.compose_layered
+
+    def stray_end(front_context, front_entry, back_context, back_entry):
+        instance = real(front_context, front_entry, back_context, back_entry)
+        back = next(v for v in instance.vectors if v.layer == "back")
+        back.points[-1] = CellPoint(back.points[-1].radial + 0.01, back.points[-1].angular * 0.5)
+        return instance
+
+    entry = find_motif("leaf")
+    assert qa_patterns._cut(entry)
+    monkeypatch.setattr(qa_patterns, "compose_layered", stray_end)
+    assert not qa_patterns._cut(entry)
+
+
+def test_cut_check_passes_a_motif_with_no_back_role():
+    from qa_patterns import _cut
+    assert _cut(find_motif("scallop"))
+
+
+def test_embellished_check_fails_a_generator_whose_embellished_output_is_not_deterministic():
+    import random
+    from qa_patterns import _embellished
+    entry = dict(find_motif("petal"))
+    good = entry["generator"]
+    noise = random.Random()
+
+    def wobbly(context):
+        instance = good(context)
+        if context.embellishments:
+            from motifs.geometry import CellPoint
+            p = instance.vectors[-1].points[0]
+            instance.vectors[-1].points[0] = CellPoint(p.radial, p.angular + noise.random() * 1e-3)
+        return instance
+
+    assert _embellished(entry)
+    entry["generator"] = wobbly
+    assert not _embellished(entry)
+
+
+def test_embellishment_sets_keep_at_most_one_interior_fill():
+    from qa_patterns import embellishment_sets
+    assert embellishment_sets(find_motif("petal")) == [("echo", "veins", "dot"), ("echo", "fan", "dot")]
+    assert embellishment_sets(find_motif("band")) == [("beads",)]
+    assert embellishment_sets(find_motif("scallop")) == []
+
+
+def test_matrix_covers_each_accepted_embellishment_and_each_front_back_pair():
+    from qa_patterns import build_jobs, layered_pairs
+    from motifs import MOTIFS
+    jobs = build_jobs(MOTIFS, MATRIX_SMOKE, 1, False)
+    variants = {(job[0], job[9]) for job in jobs if len(job) > 9 and job[9] is not None}
+    for entry in MOTIFS:
+        for name in entry["embellishments"]:
+            assert (entry["name"], ("emb", name)) in variants
+    assert ("petal", ("back", "leaf")) in variants and ("leaf", ("back", "petal")) in variants
+    assert set(layered_pairs()) == {("petal", "petal"), ("petal", "leaf"), ("leaf", "petal"), ("leaf", "leaf")}
+
+
+def test_run_case_draws_a_forced_embellishment():
+    job = ("petal", "botanical", (8, 8, 8, 12), 0.9, 10, "centre", "base", 20260821, False, ("emb", "veins"))
+    result = run_case(job)
+    assert result["status"] == "PASS" and "veins" in result["label"], result
+    assert result["drawn"] >= 1, result
+
+
+def test_run_case_runs_a_forced_front_and_back_in_a_layered_ring():
+    job = ("leaf", "botanical", (8, 8, 8, 12), 0.5, 10, "layered", "base", 20260821, False, ("back", "petal"))
+    result = run_case(job)
+    assert result["status"] == "PASS" and "back-petal" in result["label"], result
+    assert result["drawn"] + result["dropped"] >= 1, result
