@@ -542,7 +542,9 @@ def _touch(asm: Assembler, node: PlacedNode, side: str, neighbour: int) -> Optio
     start). Then the neighbour's ink comes to the tip instead (spec 13.3, fix
     round): the tip's projection is inserted into it as a vertex, which moves
     onto the tip, bending that ink by at most `TOUCH_GAP_PX`. When that vertex
-    is guarded too, the near miss is accepted.
+    is guarded too and only the node's own ink ends on the tip (an embellishment
+    ending on its host's base or tip vertex), the tip moves anyway and that ink's
+    end moves with it, so nothing comes loose; otherwise the near miss is accepted.
     """
     extreme = _extreme_vertex(node, side)
     if extreme is None:
@@ -560,8 +562,14 @@ def _touch(asm: Assembler, node: PlacedNode, side: str, neighbour: int) -> Optio
     if nearest is None:
         return None
     other = nearest[1]
+    own: List[PlacedPath] = []
     if _shared_with_other_ink(asm, path, path.coords[i]):
-        return _touch_from_the_other_side(asm, path.coords[i], other)
+        touched = _touch_from_the_other_side(asm, path.coords[i], other)
+        if touched is not None:
+            return touched
+        own = [mine for mine in node.paths if mine is not path and _has_vertex(mine, path.coords[i])]
+        if not own or _shared_with_other_ink(asm, path, path.coords[i], {id(mine) for mine in own}):
+            return None
     projected = nearest_points(path_geometry(other), vertex)[0]
     landed = insert_vertex(other, (projected.x, projected.y))
     asm.reindex(other)
@@ -576,7 +584,18 @@ def _touch(asm: Assembler, node: PlacedNode, side: str, neighbour: int) -> Optio
         path.radials[index] = _radial(node.context, landed)
     asm.reindex(path)
     asm.mirror_move(path, old, landed)
+    for mine in own:
+        for index, point in enumerate(mine.coords):
+            if math.hypot(point[0] - old[0], point[1] - old[1]) <= SAME_VERTEX_PX:
+                mine.coords[index] = landed
+                mine.radials[index] = _radial(node.context, landed)
+        asm.reindex(mine)
+        asm.mirror_move(mine, old, landed)
     return path
+
+
+def _has_vertex(path: PlacedPath, vertex: PointTuple) -> bool:
+    return any(math.hypot(x - vertex[0], y - vertex[1]) <= SAME_VERTEX_PX for x, y in path.coords)
 
 
 def _touch_from_the_other_side(asm: Assembler, tip: PointTuple, other: PlacedPath) -> Optional[PlacedPath]:
@@ -647,8 +666,9 @@ def final_touches(asm: Assembler) -> None:
                 continue
             _, path, i = extreme
             before = path.coords[i]
-            touched = [path] + [other for other in asm.index.candidates(Point(before).buffer(TOUCH_GAP_PX))
-                                if other.ring_index == neighbour]
+            # The node's own ink too: an embellishment ending on the tip may move with it.
+            touched = list(node.paths) + [other for other in asm.index.candidates(Point(before).buffer(TOUCH_GAP_PX))
+                                          if other.ring_index == neighbour]
             saved = asm.snapshot(touched)
             moved = _touch(asm, node, side, neighbour)
             if moved is None:

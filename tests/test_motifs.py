@@ -142,9 +142,10 @@ def test_petal_outline_is_closed_unique_and_mirror_symmetric(cell_kwargs):
 
 
 def test_leaf_midrib_touches_outline(cell_kwargs):
-    inst = find_motif("leaf")["generator"](make_ctx(cell_kwargs))
-    assert inst.kind == "enclosing" and len(inst.vectors) == 2
-    outline, midrib = inst.vectors
+    # The midrib is the veins embellishment (spec 6.3): outline, midrib, then the side veins.
+    inst = find_motif("leaf")["generator"](make_ctx(cell_kwargs, embellishments=("veins",)))
+    assert inst.kind == "enclosing" and len(inst.vectors) > 2
+    outline, midrib = inst.vectors[:2]
     assert midrib.points[0] == CellPoint(0.0, 0.0) and midrib.points[0] in outline.points
     assert midrib.points[-1] in outline.points
 
@@ -262,23 +263,25 @@ def test_stem_is_a_pure_reach(cell_kwargs):
     assert inst.declaration.reach_ends[0].direction == "inward"
 
 
-def test_leaf_midrib_is_dropped_when_its_halves_are_too_thin_to_colour(cell_kwargs):
-    ctx = make_ctx(cell_kwargs, 7)
+def test_leaf_veins_are_dropped_when_the_halves_are_too_thin_to_colour(cell_kwargs):
+    ctx = make_ctx(cell_kwargs, 7, embellishments=("veins",))
     ctx.slot = [CellPoint(0.2, -0.2), CellPoint(0.2, 0.2), CellPoint(0.8, 0.2), CellPoint(0.8, -0.2)]
     narrow = find_motif("leaf")["generator"](ctx)
     assert ctx.angular_to_px(0.2, 0.5) < ctx.min_white_space
-    assert len(narrow.vectors) == 1 and narrow.vectors[0].closed
+    assert len(narrow.vectors) == 1 and narrow.vectors[0].closed and narrow.dropped_embellishments == 1
 
-    wide_ctx = make_ctx(cell_kwargs, 7)
+    # The leaf in the wider slot is about 12px from axis to belly: room for a midrib with 5px of white.
+    wide_ctx = make_ctx(cell_kwargs, 7, embellishments=("veins",), min_white_space=5.0)
     wide_ctx.slot = slot_for(cell_kwargs)
-    assert len(find_motif("leaf")["generator"](wide_ctx).vectors) == 2
+    wide = find_motif("leaf")["generator"](wide_ctx)
+    assert len(wide.vectors) > 2 and wide.dropped_embellishments == 0
 
 
-def test_leaf_midrib_is_dropped_outside_a_slot_when_the_halves_are_too_thin(cell_kwargs):
+def test_leaf_veins_are_dropped_outside_a_slot_when_the_halves_are_too_thin(cell_kwargs):
     gen = find_motif("leaf")["generator"]
-    thin = gen(make_ctx(cell_kwargs, 7, angular_limits=0.1))
-    assert len(thin.vectors) == 1 and thin.vectors[0].closed
-    assert len(gen(make_ctx(cell_kwargs, 7)).vectors) == 2
+    thin = gen(make_ctx(cell_kwargs, 7, angular_limits=0.1, embellishments=("veins",)))
+    assert len(thin.vectors) == 1 and thin.vectors[0].closed and thin.dropped_embellishments == 1
+    assert len(gen(make_ctx(cell_kwargs, 7, embellishments=("veins",))).vectors) > 2
 
 
 # ----- revision 2: side touch and ring fill ---------------------------------

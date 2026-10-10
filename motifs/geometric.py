@@ -5,13 +5,10 @@ from __future__ import annotations
 import math
 from typing import Dict, List, Optional
 
-from shapely.geometry import Polygon
-
 from motifs.contract import MotifError, MotifInstance, build_instance, require_full_budget
-from motifs.embellish import apply_embellishments
+from motifs.embellish import apply_embellishments, holds_pen as _holds_pen
 from motifs.geometry import CellPoint, MotifContext, SmartVector, cubic_points, mirror_points, quad_points
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
-from topology_validator import MIN_REGION_AREA_PX2, PEN_RADIUS_PX
 
 
 DIAMOND_CONCAVE_CHANCE = 0.5
@@ -54,17 +51,6 @@ def _diamond(mid: float, half_height: float, width: float, bow: Optional[float])
     right = lower + upper[1:]
     left = mirror_points(right)[1:-1][::-1]
     return right + left
-
-
-def _holds_pen(context: MotifContext, outline: List[CellPoint]) -> bool:
-    """
-    Whether the closed outline is a face the validator would accept: at least `MIN_REGION_AREA_PX2`,
-    and still non-empty when eroded by `PEN_RADIUS_PX` (the radius already covers half the stroke
-    plus the marker tip), exactly as `topology_validator` judges a region.
-    """
-    polygon = Polygon(context.polyline(SmartVector(list(outline), closed=True)))
-    return (polygon.is_valid and polygon.area >= MIN_REGION_AREA_PX2
-            and not polygon.buffer(-PEN_RADIUS_PX).is_empty)
 
 
 def generate_diamond(context: MotifContext) -> MotifInstance:

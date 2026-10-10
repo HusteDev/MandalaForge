@@ -160,15 +160,21 @@ def test_guarded_tips_are_touched_from_the_other_side():
     # Seed 87 (c0.5) pulls a ring-2 leaf back outward and a ring-3 leaf back inward, so their tips meet at the
     # shared boundary. Both apexes are shared with their midribs and neither can move onto the other, so the
     # ring-3 outline must come to the ring-2 apex. (Seed 3 at c0.7 was the case until embellishments: its leaves
-    # now carry echoes, which move the midrib inside, off the apex.)
+    # now carry echoes, which move the midrib inside, off the apex.) A leaf's midrib is its veins embellishment,
+    # so the participating leaves must have drawn veins and no echo.
     g = DesignGenerator(seed=87, num_rings=4, num_divisions=12, complexity=0.5,
                         categories=["botanical", "geometric"], vary_divisions=True)
     g.generate()
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
     nodes = g.assembled.nodes
-    leaves = [n for n in nodes if n.recipe.motif == "leaf" and n.parent is None]
-    # No echo, so each leaf's midrib still ends on its outline's apex.
-    assert not any("echo" in n.recipe.embellishments for n in leaves if n.ring_index in (2, 3))
+    leaves = [n for n in nodes if n.recipe.motif == "leaf" and n.parent is None and n.ring_index in (2, 3)]
+    # Veins drawn and no echo, so each leaf's midrib ends on its outline's apex and guards it.
+    assert leaves and all(n.recipe.embellishments == ["veins"] and n.instance.dropped_embellishments == 0
+                          for n in leaves)
+    for leaf in leaves:
+        outline, midrib = leaf.paths[:2]
+        apex = outline.coords[max(range(len(outline.radials)), key=lambda i: outline.radials[i])]
+        assert apex in (midrib.coords[0], midrib.coords[-1])
     assert any(n.pull_backs.get("outward") for n in leaves if n.ring_index == 2)
     assert any(n.pull_backs.get("inward") for n in leaves if n.ring_index == 3)
     outer = [n.paths[0] for n in nodes if n.ring_index == 3 and n.recipe.motif == "leaf" and n.parent is None]
@@ -177,6 +183,25 @@ def test_guarded_tips_are_touched_from_the_other_side():
     for outline in inner:
         apex = outline.coords[max(range(len(outline.radials)), key=lambda i: outline.radials[i])]
         assert any(apex in other.coords for other in outer)
+
+
+def test_a_tip_guarded_only_by_its_own_veins_moves_with_them():
+    # Seed 955789 (c0.5): ring-1 divider petals carry veins, so the midrib guards each petal's base. Pulled back
+    # inward, the base sits a hair from ring 0's band at its seam vertex, which is guarded too; the near miss left
+    # a gap the face around the centre leaked through. The base now moves onto the band, its midrib with it.
+    g = DesignGenerator(seed=955789, num_rings=4, num_divisions=12, complexity=0.5,
+                        categories=["botanical", "geometric"])
+    g.generate()
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+    petals = [n for n in g.assembled.nodes if n.ring_index == 1 and n.recipe.motif == "petal"
+              and n.parent is None and n.recipe.embellishments == ["veins"] and n.instance.dropped_embellishments == 0]
+    assert petals and any(n.pull_backs.get("inward") for n in petals)
+    ring0 = [p for p in g.assembled.paths if p.ring_index == 0]
+    for petal in petals:
+        outline, midrib = petal.paths[:2]
+        base = outline.coords[min(range(len(outline.radials)), key=lambda i: outline.radials[i])]
+        assert base == midrib.coords[0]
+        assert any(base in p.coords for p in ring0)
 
 
 def _once_per_wedge_stems(g):

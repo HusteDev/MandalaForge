@@ -469,13 +469,14 @@ def test_pull_back_touch_never_detaches_a_leafs_midrib():
             dict(inner_radius=200, outer_radius=240)]
     plan = DesignPlan(1, {"categories": ["botanical", "geometric"], "positions": "centre"}, [
         RingPlan(0, 8, 1.0, [CellEntry(CellRecipe("ring_band", "geometric", provides_contact=True), None)], 1),
-        RingPlan(1, 12, 1.0, [CellEntry(CellRecipe("leaf", "botanical"), None)], 11),  # apex at radial 1.18
+        # The midrib is the veins embellishment; the leaf's apex is at radial 1.18.
+        RingPlan(1, 12, 1.0, [CellEntry(CellRecipe("leaf", "botanical", embellishments=["veins"]), None)], 11),
         RingPlan(2, 12, 1.0, [CellEntry(CellRecipe("ring_band", "geometric", provides_contact=True), None)], 1),
     ])
     a = Assembler(plan, geom, CENTER, 0.5, 10.0, composer_for(geom))
     a.pass_one()
     leaf = next(n for n in a.nodes if n.recipe.motif == "leaf" and max(n.paths[0].radials) > 1.03)
-    outline, midrib = leaf.paths
+    outline, midrib = leaf.paths[:2]
     apex = outline.coords[max(range(len(outline.radials)), key=lambda i: outline.radials[i])]
     assert apex in (midrib.coords[0], midrib.coords[-1])
     # Ring-2 ink square to the apex's radius, 2px short of it: the apex crosses it and must be pulled back.
@@ -486,7 +487,7 @@ def test_pull_back_touch_never_detaches_a_leafs_midrib():
     stroke = add_ink(a, 2, [(foot[0] - uy * 15.0, foot[1] + ux * 15.0), (foot[0] + uy * 15.0, foot[1] - ux * 15.0)])
     a.resolve_overflow(leaf, "outward")
     assert leaf.pull_backs.get("outward")
-    outline, midrib = leaf.paths
+    outline, midrib = leaf.paths[:2]
     apex = outline.coords[max(range(len(outline.radials)), key=lambda i: outline.radials[i])]
     assert apex in (midrib.coords[0], midrib.coords[-1])
     # The pulled-back revision-2 leaf (apex drawn at 1.18) no longer meets the hand-placed stroke, whose own two
