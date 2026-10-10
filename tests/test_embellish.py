@@ -6,7 +6,7 @@ import pytest
 from shapely.geometry import LineString, Point, Polygon
 
 from coloring_generator import DesignGenerator
-from motifs import find_motif
+from motifs import find_motif, safe_motif
 from motifs.contract import Anatomy, MotifAnalyzer
 from motifs.embellish import (
     EMBELLISHMENT_ORDER, INTERIOR_FILLS, apply_embellishments, embellishment_rng,
@@ -279,3 +279,159 @@ def test_fill_is_deterministic_and_never_reaches_further_out(name, cell_kwargs):
     assert [v.points for v in a.vectors] == [v.points for v in b.vectors]
     narrow = entry["generator"](replace(ctx, rng=random.Random(5), radial_limits=(0.0, 0.8)))
     assert max(p.radial for v in narrow.vectors for p in v.points) <= 0.8 + 1e-9
+
+
+# ----- beads on bands (Task 11) ---------------------------------------------------------------------------
+
+from motifs.geometry import CellPoint
+from tests.test_composer import plan_for
+
+
+def _band(cell_kwargs, seed=1, ring=5, **over):
+    ctx = make_ctx(cell_kwargs, seed, ring_stream_seed=ring, embellishments=("beads",), **over)
+    return ctx, find_motif("band")["generator"](ctx)
+
+
+def _beads(inst):
+    return [v for v in inst.vectors if v.closed and v.weight == "detail"]
+
+
+def _centre(bead):
+    radials = [p.radial for p in bead.points]
+    angulars = [p.angular for p in bead.points]
+    return CellPoint((min(radials) + max(radials)) / 2.0, (min(angulars) + max(angulars)) / 2.0)
+
+
+# At the fixture's 10px white space no bead fits a band in a 60px-deep ring (a 10px bead needs the band 32px
+# thick between its arcs), so the bead tests draw with 4px white space.
+def test_beads_are_the_same_in_every_cell(cell_kwargs):
+    make = lambda s: find_motif("band")["generator"](make_ctx(
+        cell_kwargs, s, ring_stream_seed=5, embellishments=("beads",), min_white_space=4.0))
+    a, b = make(1), make(2)
+    assert [v.points for v in a.vectors] == [v.points for v in b.vectors]
+    assert any(v.closed and v.weight == "detail" for v in a.vectors)
+
+
+def test_beads_draw_only_from_the_ring_stream(cell_kwargs):
+    _, a = _band(cell_kwargs, seed=1, node_seed=11, min_white_space=4.0)
+    _, b = _band(cell_kwargs, seed=2, node_seed=99, min_white_space=4.0)
+    assert _beads(a) and [v.points for v in _beads(a)] == [v.points for v in _beads(b)]
+    rows = {tuple(tuple(v.points) for v in _beads(_band(cell_kwargs, ring=r, min_white_space=4.0)[1]))
+            for r in range(8)}
+    assert len(rows) > 1, "the ring stream should decide the beads"
+
+
+def test_seam_recipe_copies_carry_embellishments():
+    for seed in range(40):
+        for ring in plan_for(seed=seed, categories=["geometric"], complexity=1.0).rings:
+            for pos in ("centre", "divider"):
+                nodes = [getattr(e, pos) for e in ring.sequence]
+                # A planned fallback (the category's safe band) is not in the registry; the composer reads it
+                # from `safe_motif`, and it has no seams.
+                if nodes[0] and (find_motif(nodes[0].motif) or safe_motif(nodes[0].category))["seams"]:
+                    assert all(n.embellishments == nodes[0].embellishments for n in nodes)
+
+
+
+def test_seam_recipe_copies_carry_embellishments_when_picks_vary():
+    # At complexity 1.0 a band always takes its one embellishment; at 0.3 it takes none or one, so copies
+    # composed with their own picks would differ. A sequence longer than one entry needs a base symmetry
+    # below the division count, which mixed ring divisions give.
+    picked = set()
+    for seed in range(40):
+        for ring in plan_for(seed=seed, categories=["geometric"], complexity=0.3,
+                             ring_divisions=[8, 8, 8, 12]).rings:
+            for pos in ("centre", "divider"):
+                nodes = [getattr(e, pos) for e in ring.sequence]
+                if nodes[0] and (find_motif(nodes[0].motif) or safe_motif(nodes[0].category))["seams"]:
+                    assert all(n.embellishments == nodes[0].embellishments for n in nodes)
+                    if len(nodes) > 1:
+                        picked.add(tuple(nodes[0].embellishments))
+    assert len(picked) > 1
+
+def test_beads_are_mirrored_rows_in_each_half_cell(cell_kwargs):
+    seen = set()
+    for ring in range(12):
+        ctx, inst = _band(cell_kwargs, ring=ring, min_white_space=4.0)
+        beads = _beads(inst)
+        if not beads:
+            continue
+        r1, r2 = inst.vectors[0].points[0].radial, inst.vectors[1].points[0].radial
+        lens = inst.vectors[2]
+        lens_edge = max(p.angular for p in lens.points)
+        rights = sorted((b for b in beads if _centre(b).angular > 0), key=lambda b: _centre(b).angular)
+        lefts = sorted((b for b in beads if _centre(b).angular < 0), key=lambda b: -_centre(b).angular)
+        assert len(rights) == len(lefts) == len(beads) // 2 and 1 <= len(rights) <= 3
+        seen.add(len(rights))
+        for right, left in zip(rights, lefts):
+            assert sorted((p.radial, -p.angular) for p in left.points) == pytest.approx(
+                sorted((p.radial, p.angular) for p in right.points))
+            assert _centre(right).radial == pytest.approx((r1 + r2) / 2.0)
+            assert lens_edge < min(p.angular for p in right.points) and max(p.angular for p in right.points) < 1.0
+        centres = [_centre(b).angular for b in rights]
+        middle = (r1 + r2) / 2.0
+        start = lens_edge + ctx.px_to_angular(
+            ctx.clearance_px("outline", "detail") - ctx.clearance_px("detail", "detail") / 2.0, middle)
+        gaps = [b - a for a, b in zip([start] + centres, centres + [1.0])]
+        # Evenly spaced across the free span: equal pitch between beads, half a pitch at either end.
+        assert gaps[0] == pytest.approx(gaps[-1], abs=1e-6)
+        assert all(g == pytest.approx(2.0 * gaps[0], abs=1e-6) for g in gaps[1:-1])
+    assert len(seen) > 1, "k should vary with the ring stream"
+
+
+def test_beads_keep_clear_of_ink_neighbours_and_the_seam(cell_kwargs):
+    drawn = 0
+    for ring in range(12):
+        for mws in (3.0, 4.0, 5.0):
+            ctx, inst = _band(cell_kwargs, ring=ring, min_white_space=mws)
+            beads = _beads(inst)
+            drawn += bool(beads)
+            od, dd = ctx.clearance_px("outline", "detail"), ctx.clearance_px("detail", "detail")
+            for bead in beads:
+                line = LineString(ctx.polyline(bead))
+                for other in inst.vectors:
+                    if other is bead:
+                        continue
+                    gap = line.distance(LineString(ctx.polyline(other)))
+                    assert gap >= (dd if other.weight == "detail" else od) - 1e-6
+                # The bead in the neighbouring cell is this one reflected across the seam at angular 1.
+                mirrored = SmartVector([CellPoint(p.radial, 2.0 - p.angular) for p in bead.points], closed=True)
+                if _centre(bead).angular > 0:
+                    assert line.distance(LineString(ctx.polyline(mirrored))) >= dd - 1e-6
+    assert drawn >= 12
+
+
+def test_beads_are_round_on_the_page(cell_kwargs):
+    ctx, inst = _band(cell_kwargs, min_white_space=4.0)
+    assert _beads(inst)
+    for bead in _beads(inst):
+        cx, cy = ctx.to_cartesian(_centre(bead))
+        radii = [math.hypot(x - cx, y - cy) for x, y in (ctx.to_cartesian(p) for p in bead.points)]
+        assert max(radii) - min(radii) < 0.05 * max(radii)
+        assert ctx.min_white_space / 2.0 - 1e-6 <= max(radii) <= ctx.min_white_space + 1e-6
+
+
+def test_beads_that_do_not_fit_are_dropped(cell_kwargs):
+    ctx, inst = _band(cell_kwargs, min_white_space=40.0)
+    assert not _beads(inst) and inst.dropped_embellishments == 1
+
+
+def test_beads_need_a_band(cell_kwargs):
+    inst = find_motif("petal")["generator"](make_ctx(cell_kwargs, 4, embellishments=("beads",)))
+    assert inst.dropped_embellishments == 1 and all(v.weight == "outline" for v in inst.vectors)
+
+
+def test_beaded_bands_are_detail_ink_in_a_valid_design():
+    from assembler import _path_role
+    for seed in range(6):
+        g = DesignGenerator(seed=seed, num_rings=4, ring_divisions=[8, 8, 8, 12], complexity=1.0,
+                            categories=["geometric"])
+        g.generate()
+        beaded = [n for n in g.assembled.nodes if n.recipe.motif == "band" and n.instance is not None
+                  and "beads" in n.recipe.embellishments and _beads(n.instance)]
+        if beaded:
+            assert g.last_validation_result.is_valid
+            assert g.last_validation_result.stats.get("num_floating_base", 0) == 0
+            assert all(_path_role(b, "base") == "detail" for n in beaded for b in _beads(n.instance))
+            return
+    pytest.fail("no seed drew beads on a band")

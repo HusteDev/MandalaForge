@@ -20,8 +20,8 @@ from shapely.ops import polygonize, unary_union
 
 from motifs.contract import Anatomy, MotifError, inset_outline
 from motifs.geometry import (
-    CellPoint, MotifContext, SmartVector, insert_vertex_on_outline, page_arc_points, page_circle_points,
-    salted_seed,
+    CellPoint, MotifContext, SmartVector, insert_vertex_on_outline, mirror_points, page_arc_points,
+    page_circle_points, salted_seed,
 )
 from topology_validator import MIN_REGION_AREA_PX2, PEN_RADIUS_PX
 
@@ -43,6 +43,14 @@ MIN_FAN_RAYS = 3
 FAN_ARC_STEPS = 6
 # Dot: the centre is searched along the lower half of the axis in steps of this many pixels.
 DOT_SEARCH_STEP_PX = 0.5
+# Beads: up to this many in each half of the cell, drawn from the ring stream; the diameter is drawn between
+# these multiples of `min_white_space` and capped to fit, and a row whose diameter falls below the lower one
+# does not fit.
+BEADS_PER_HALF_RANGE = (1, 3)
+BEAD_DIAMETER_RANGE = (1.0, 2.0)
+# These draw from `context.ring_rng`, continuing the stream the host drew its seam ink from, so every cell of
+# the ring draws them alike; the rest draw from their own salted node stream.
+RING_STREAM_EMBELLISHMENTS = ("beads",)
 # Cell-space length of the probe used to find where a vein or ray meets the ring: far past any cell.
 _FAR = 50.0
 
@@ -373,10 +381,117 @@ def _cut_below(outline: List[CellPoint], radial: float) -> Optional[List[CellPoi
     return [CellPoint(y, x) for x, y in list(largest.exterior.coords)[:-1]]
 
 
+def _seam_arc(vectors: Sequence[SmartVector], radial: float) -> bool:
+    """Whether some open vector is an arc at `radial` running the whole cell, seam to seam."""
+    return any(
+        not v.closed and all(abs(p.radial - radial) <= 1e-9 for p in v.points)
+        and min(p.angular for p in v.points) <= -1.0 and max(p.angular for p in v.points) >= 1.0
+        for v in vectors
+    )
+
+
+def _beads(context: MotifContext, state: _State, anatomy: Anatomy, rng: random.Random) -> int:
+    """
+    A row of `k` closed detail circles, round on the page, in each half of a band's cell, mirrored about the
+    axis: centred at the radial halfway between the band's arcs, evenly spaced in angular across the free span
+    from the lens to the seam (a full pitch between beads, half a pitch at either end, so the row runs on
+    evenly through the neighbouring cell's mirrored beads). The span starts past the lens's edge by the
+    outline clearance less half a detail one, so one cap on the diameter keeps every clearance at once.
+    `k` in `BEADS_PER_HALF_RANGE` and the diameter are drawn from the ring stream; the diameter is capped so
+    each bead keeps an outline-to-detail clearance from all other ink and a detail clearance from every
+    other bead, its own row's and the neighbouring cell's. Fewer beads are tried when the drawn number does
+    not fit; returns 1 when not even one does.
+
+    The host is a band: `anatomy` gives its lens (`outline`) and the lens tips, which sit on its two seam arcs.
+    The beads float, as a slot child may; at detail weight they are detail ink, not base structure.
+    """
+    wanted = rng.randint(*BEADS_PER_HALF_RANGE)
+    drawn_radius = rng.uniform(*BEAD_DIAMETER_RANGE) * context.min_white_space / 2.0
+    inner, outer = anatomy.base.radial, anatomy.tip.radial
+    if not (inner < outer and _seam_arc(state.vectors, inner) and _seam_arc(state.vectors, outer)):
+        return 1
+    lens = _cell_polygon(state.vectors[anatomy.outline].points)
+    middle = (inner + outer) / 2.0
+    edge = _side_crossing(lens, middle, 1.0)
+    if edge is None or not 0.0 < edge.angular < 1.0:
+        return 1
+    # The row starts past the lens by the part of its clearance a bead's neighbour does not already ask for,
+    # so the lens keeps an outline clearance exactly when neighbouring beads keep a detail one.
+    start = edge.angular + context.px_to_angular(
+        context.clearance_px("outline", "detail") - context.clearance_px("detail", "detail") / 2.0, middle)
+    if not start < 1.0:
+        return 1
+    least = BEAD_DIAMETER_RANGE[0] * context.min_white_space / 2.0
+    for count in range(wanted, 0, -1):
+        pitch = (1.0 - start) / count
+        centres = [CellPoint(middle, start + pitch * (k + 0.5)) for k in range(count)]
+        radius = min(drawn_radius, _bead_room(context, state.vectors, centres))
+        if radius < least:
+            continue
+        right = [page_circle_points(context, centre, radius) for centre in centres]
+        beads = [SmartVector(points, closed=True, weight="detail") for points in right]
+        beads += [SmartVector(mirror_points(points), closed=True, weight="detail") for points in right]
+        if not all(holds_pen(context, bead.points) for bead in beads):
+            continue
+        if not _beads_keep_clear(context, state.vectors, beads):
+            continue
+        state.vectors.extend(beads)
+        return 0
+    return 1
+
+
+def _bead_room(context: MotifContext, vectors: Sequence[SmartVector], centres: Sequence[CellPoint]) -> float:
+    """
+    The largest page radius beads at `centres` (one half's row, mirrored onto the other) may have: each keeps
+    the clearance from every line of `vectors` and a detail clearance from every other bead, including its
+    reflection across the seam at angular 1, the neighbouring cell's bead. Distances run between centres;
+    a page circle's polygon lies within its radius, so these bound the true gaps.
+    """
+    every = list(centres) + [CellPoint(c.radial, -c.angular) for c in centres]
+    across = context.clearance_px("detail", "detail")
+    room = math.inf
+    for vector in vectors:
+        line = LineString(context.polyline(vector))
+        keep = context.clearance_px(vector.weight, "detail")
+        room = min(room, min(line.distance(Point(context.to_cartesian(c))) for c in every) - keep)
+    points = [Point(context.to_cartesian(c)) for c in every]
+    for index, a in enumerate(points):
+        for b in points[index + 1:]:
+            room = min(room, (a.distance(b) - across) / 2.0)
+    for centre in centres:
+        seam = Point(context.to_cartesian(CellPoint(centre.radial, 2.0 - centre.angular)))
+        room = min(room, (Point(context.to_cartesian(centre)).distance(seam) - across) / 2.0)
+    return room
+
+
+def _across_seam(vector: SmartVector) -> SmartVector:
+    """`vector` reflected across the seam at angular 1: the neighbouring cell's copy of mirrored ink."""
+    return SmartVector([CellPoint(p.radial, 2.0 - p.angular) for p in vector.points], closed=vector.closed,
+                       weight=vector.weight, layer=vector.layer)
+
+
+def _beads_keep_clear(context: MotifContext, vectors: Sequence[SmartVector],
+                      beads: Sequence[SmartVector]) -> bool:
+    """The traced beads' exact gaps: from all other ink, from each other, and from the neighbouring cell's."""
+    lines = [LineString(context.polyline(bead)) for bead in beads]
+    across = context.clearance_px("detail", "detail")
+    for vector in vectors:
+        ink = LineString(context.polyline(vector))
+        keep = context.clearance_px(vector.weight, "detail")
+        if any(ink.distance(line) < keep - 1e-9 for line in lines):
+            return False
+    neighbours = [LineString(context.polyline(_across_seam(bead))) for bead in beads]
+    for index, line in enumerate(lines):
+        others = lines[index + 1:] + neighbours
+        if any(line.distance(other) < across - 1e-9 for other in others):
+            return False
+    return True
+
+
 Handler = Callable[[MotifContext, _State, Anatomy, random.Random], int]
 
 # Implemented embellishments; a name in EMBELLISHMENT_ORDER missing here is dropped until it arrives.
-_HANDLERS: Dict[str, Handler] = {"echo": _echo, "veins": _veins, "fan": _fan, "dot": _dot}
+_HANDLERS: Dict[str, Handler] = {"echo": _echo, "veins": _veins, "fan": _fan, "dot": _dot, "beads": _beads}
 
 
 def apply_embellishments(
@@ -405,7 +520,8 @@ def apply_embellishments(
         if handler is None or anatomy is None:
             dropped += 1
             continue
-        missed = handler(context, state, anatomy, embellishment_rng(context, name))
+        rng = context.ring_rng if name in RING_STREAM_EMBELLISHMENTS else embellishment_rng(context, name)
+        missed = handler(context, state, anatomy, rng)
         dropped += missed
         if name in INTERIOR_FILLS and not missed:
             state.slot_outline = None

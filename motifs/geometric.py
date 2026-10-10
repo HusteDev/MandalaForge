@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Dict, List, Optional
 
-from motifs.contract import MotifError, MotifInstance, build_instance, require_full_budget
+from motifs.contract import Anatomy, MotifError, MotifInstance, build_instance, require_full_budget
 from motifs.embellish import apply_embellishments, holds_pen as _holds_pen
 from motifs.geometry import CellPoint, MotifContext, SmartVector, cubic_points, mirror_points, quad_points
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
@@ -130,9 +130,12 @@ def generate_band(context: MotifContext) -> MotifInstance:
     # The lens ties the arcs together and cuts the annulus between them into faces, one per cell side.
     half_width = _lens_half_width(context, share, (r1 + r2) / 2.0)
     lens = SmartVector(_lens(r1, r2, half_width), closed=True)
-    # The band offers no slot and no anatomy; an embellishment it cannot draw yet is dropped and counted.
-    result = apply_embellishments(context, [*arcs, lens], None, None)
-    return build_instance(context, result.vectors, seams=True, dropped_embellishments=result.dropped)
+    # Its anatomy is the lens, from its tip on the inner arc to its tip on the outer one. The band offers no
+    # slot; its beads continue the ring stream, so they are the same in every cell too.
+    anatomy = Anatomy(base=CellPoint(r1, 0.0), tip=CellPoint(r2, 0.0), outline=2)
+    result = apply_embellishments(context, [*arcs, lens], anatomy, None)
+    return build_instance(context, result.vectors, seams=True, anatomy=anatomy,
+                          dropped_embellishments=result.dropped)
 
 
 GEOMETRIC_MOTIFS: List[Dict] = [

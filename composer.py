@@ -376,10 +376,12 @@ class Composer:
                 width = cell_width * self._budget(mode, centre_share, position)
                 first = getattr(sequence[0], position) if sequence else None
                 if first is not None and self._is_seam(first):
-                    # A seam motif owns its whole position: every entry repeats it, freshly composed.
+                    # A seam motif owns its whole position: every entry repeats it, freshly composed, with
+                    # entry 0's embellishments so every cell draws the same seam ink.
                     nodes[position] = self._compose(
                         self._registry_entry(first), node_rng(ring_seed, ring_index, s, 0, position),
                         ring_index, ring_seed, s, position, width, ring_depth, 0,
+                        embellishments=first.embellishments,
                     )
                     continue
                 # Only entry 0 may pick a seam motif, and never in `both` mode (spec 4.1).
@@ -466,11 +468,16 @@ class Composer:
         chosen = self._pick(candidates, rng)
         tried.append(chosen["name"])
         targets = range(len(ring.sequence)) if seam_position or chosen.get("seams") else [seq_pos]
+        # The tracked entry is composed first; a seam motif's copies carry its embellishments.
+        key_node = self._compose(
+            chosen, rng, ring.ring_index, ring.ring_seed, key_pos, position, cell_width, ring_depth, offset,
+        )
+        copied = key_node.embellishments if chosen.get("seams") else None
         for s in targets:
-            stream = rng if s == key_pos else node_rng(ring.ring_seed, ring.ring_index, s, offset, position, "pick")
-            new_node = self._compose(
-                chosen, stream, ring.ring_index, ring.ring_seed, s, position,
-                cell_width, ring_depth, offset,
+            new_node = key_node if s == key_pos else self._compose(
+                chosen, node_rng(ring.ring_seed, ring.ring_index, s, offset, position, "pick"),
+                ring.ring_index, ring.ring_seed, s, position, cell_width, ring_depth, offset,
+                embellishments=copied,
             )
             self._set_node(ring.sequence[s], position, new_node)
         self._refresh_contact(ring)
@@ -603,13 +610,14 @@ class Composer:
 
     def _compose(self, motif: Dict, rng: random.Random, ring_index: int, ring_seed: int,
                  seq_pos: int, position: str, cell_width: float, ring_depth: float,
-                 offset: int) -> CellRecipe:
+                 offset: int, embellishments: Optional[List[str]] = None) -> CellRecipe:
         """
         A base node: its embellishments, from their own stream so the base picks never shift, then its slot
-        chain, unless an interior fill now fills the slot (spec 6.4).
+        chain, unless an interior fill now fills the slot (spec 6.4). A seam motif's copy passes the
+        `embellishments` of the entry it copies instead of picking its own.
         """
         node = CellRecipe(motif["name"], motif["category"])
-        node.embellishments = pick_embellishments(
+        node.embellishments = list(embellishments) if embellishments is not None else pick_embellishments(
             motif, self.settings.complexity,
             node_rng(ring_seed, ring_index, seq_pos, offset, position, "pick:emb"),
         )
