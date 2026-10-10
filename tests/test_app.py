@@ -89,3 +89,26 @@ def test_generate_rejects_a_malformed_force_motif(client):
     assert r.status_code == 400
     r = client.post("/generate", json={**BASE, "force_motif": "band"})
     assert r.status_code == 400
+
+
+def _has_seam_motif(ring):
+    from motifs import find_motif
+    return any((find_motif(n["motif"]) or {}).get("seams")
+               for e in ring["sequence"] for n in (e["centre"], e["divider"]) if n)
+
+
+@pytest.mark.parametrize("seed, ring_index, ring_seed, kind", [(22, 2, 9, "layered"), (20, 1, 5, "seam")])
+def test_regenerate_ring_with_a_new_ring_seed_keeps_seams_meeting(client, seed, ring_index, ring_seed, kind):
+    # Every cell of the regenerated ring takes the new ring stream together: a back layer's halves and a seam
+    # motif's ends still meet across every divider, so nothing dangles and the design validates.
+    body = {**BASE, "categories": ["botanical", "geometric"], "seed": seed,
+            "ring_index": ring_index, "ring_seed": ring_seed}
+    data = client.post("/regenerate-ring", json=body).get_json()
+    ring = data["plan"]["rings"][ring_index]
+    assert ring["ring_seed"] == ring_seed
+    if kind == "layered":
+        assert ring["position_mode"] == "layered" and ring["back"] is not None
+    else:
+        assert _has_seam_motif(ring)
+    assert data["validation"]["is_valid"], data["validation"]["issues"][:5]
+    assert data["validation"]["dangling_end_count"] == 0

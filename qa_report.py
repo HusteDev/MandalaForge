@@ -12,6 +12,7 @@ Usage:
     python qa_report.py --seeds 1 2 3    # specific seeds
     python qa_report.py --rings 5 --divisions 8 --complexity 0.7 --vary
     python qa_report.py --corpus         # pinned regression corpus (180 designs)
+    python qa_report.py --force-mode layered  # force a position mode on every ring past the innermost
 
 Exits non-zero if any design fails validation, so it can gate CI.
 """
@@ -87,8 +88,12 @@ def _plan_nodes(plan):
 
 
 def run_one(job):
-    """Generate + validate one design. Runs in a worker process."""
-    seed, num_rings, num_divisions, complexity, categories, vary, out_dir, overlay_mode = job
+    """
+    Generate + validate one design. Runs in a worker process. A job is `(seed, num_rings, num_divisions,
+    complexity, categories, vary, out_dir, overlay_mode)`, optionally followed by a forced position mode.
+    """
+    seed, num_rings, num_divisions, complexity, categories, vary, out_dir, overlay_mode, *rest = job
+    force_mode = rest[0] if rest else None
     label = f"{'-'.join(categories)}_c{complexity}_v{int(vary)}_s{seed}"
 
     chatter = io.StringIO()
@@ -101,6 +106,7 @@ def run_one(job):
                 complexity=complexity,
                 categories=categories,
                 vary_divisions=vary,
+                force_position_mode=force_mode,
             )
             svg = generator.generate()
     except Exception as exc:
@@ -109,7 +115,7 @@ def run_one(job):
             'categories': categories, 'vary': vary, 'status': 'ERROR',
             'error': f"{type(exc).__name__}: {exc}"[:300],
             'stats': {}, 'issues': [], 'fallbacks': 0, 'patterns': [], 'reaches': 0,
-            'base_symmetry': None, 'side_touch_rings': 0,
+            'base_symmetry': None, 'side_touch_rings': 0, 'layered_rings': 0, 'back_dropped_rings': 0,
         }
 
     report = generator.last_validation_result
@@ -140,6 +146,8 @@ def run_one(job):
         'reaches': len(assembled.reaches),
         'base_symmetry': generator.plan.base_symmetry,
         'side_touch_rings': sum(1 for ring in generator.plan.rings if ring.contact_mode == 'side'),
+        'layered_rings': sum(1 for ring in generator.plan.rings if ring.back is not None),
+        'back_dropped_rings': sum(1 for ring in generator.plan.rings if ring.back_dropped),
     }
 
 
@@ -156,6 +164,8 @@ def main():
                         help="let each ring pick its own division count (non-corpus runs)")
     parser.add_argument('--complexity', type=float, default=0.5)
     parser.add_argument('--categories', nargs='*', default=['botanical'])
+    parser.add_argument('--force-mode', choices=['centre', 'divider', 'both', 'layered'], default=None,
+                        help="force this position mode on every ring past the innermost where it is eligible")
     parser.add_argument('--out', default='test_output')
     parser.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 2) // 2))
     parser.add_argument('--overlays', choices=['always', 'failures', 'never'], default=None,
@@ -164,12 +174,13 @@ def main():
 
     if args.corpus:
         overlay_mode = args.overlays or 'failures'
-        jobs = corpus_jobs(args.out, overlay_mode, args.rings, args.divisions)
+        jobs = [job + (args.force_mode,) for job in corpus_jobs(args.out, overlay_mode, args.rings, args.divisions)]
     else:
         overlay_mode = args.overlays or 'always'
         seeds = args.seeds if args.seeds else [random.randint(0, 1000000) for _ in range(args.count)]
         jobs = [
-            (seed, args.rings, args.divisions, args.complexity, args.categories, args.vary, args.out, overlay_mode)
+            (seed, args.rings, args.divisions, args.complexity, args.categories, args.vary, args.out, overlay_mode,
+             args.force_mode)
             for seed in seeds
         ]
 
@@ -209,6 +220,8 @@ def main():
     print("-" * 98)
     print(f"{len(results) - len(bad)}/{len(results)} designs passed. "
           f"Reaches: {reach_total}. Safe-fallback cells used: {fallback_total}.")
+    print(f"Layered rings: {sum(r['layered_rings'] for r in results)}; "
+          f"back layers dropped: {sum(r['back_dropped_rings'] for r in results)}.")
     if overlay_mode != 'never':
         scope = "failing designs" if overlay_mode == 'failures' else "all designs"
         print(f"Overlays for {scope} written to {args.out}/qa_overlay_<design>.svg")

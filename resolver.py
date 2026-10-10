@@ -68,6 +68,9 @@ TOUCH_DISC_FLOOR_PX = 2.0 * CLEARANCE_PX
 # extreme vertex within this gap of neighbour ink is moved onto it, and a reach that comes this
 # close to ink lands on it.
 TOUCH_GAP_PX = CLEARANCE_PX
+# Roles of the ink that ties a design together: base outlines, and a layered ring's back outlines, which are
+# cut against their fronts and so belong to the same structure (spec 5.3).
+STRUCTURAL_ROLES = ("base", "back")
 # A node side pulled back this many times is left as it is.
 MAX_PULL_BACKS = 4
 # Rounds of floating-cell replacement per ring before assembly gives up.
@@ -1005,7 +1008,7 @@ def floating_base_cells(asm: Assembler, ring_index: Optional[int] = None) -> Lis
     innermost = min(ring.ring_index for ring in asm.plan.rings)
     counts: Dict[int, int] = {}
     for i, path in enumerate(paths):
-        if path.role == "base" and path.ring_index == innermost:
+        if path.role in STRUCTURAL_ROLES and path.ring_index == innermost:
             counts[ids[i]] = counts.get(ids[i], 0) + 1
     if not counts:
         return []
@@ -1013,7 +1016,7 @@ def floating_base_cells(asm: Assembler, ring_index: Optional[int] = None) -> Lis
     return sorted({
         (path.ring_index, path.cell_index, path.position)
         for i, path in enumerate(paths)
-        if path.role == "base" and ids[i] != structure and ring_index in (None, path.ring_index)
+        if path.role in STRUCTURAL_ROLES and ids[i] != structure and ring_index in (None, path.ring_index)
     })
 
 

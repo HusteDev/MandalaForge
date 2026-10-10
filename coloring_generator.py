@@ -11,7 +11,7 @@ import random
 import math
 from typing import Any
 
-from assembler import Assembler, AssembledDesign
+from assembler import Assembler, AssembledDesign, LayeredRingFailed
 from composer import Composer, ComposerSettings, DesignPlan
 from motifs.geometry import cell_rotation_deg
 from placement import PlacedPath
@@ -42,6 +42,7 @@ class DesignGenerator:
         ring_divisions: list[int] | None = None,
         ring_seeds: dict[int, int] | None = None,
         force_motif: dict[str, str] | None = None,
+        force_position_mode: str | None = None,
         # Debug options
         draw_rings: bool = False,
         draw_divisions: bool = False,
@@ -66,6 +67,8 @@ class DesignGenerator:
         self.ring_divisions = ring_divisions
         self.ring_seeds = dict(ring_seeds or {})
         self.force_motif = force_motif
+        # "centre", "divider", "both" or "layered", forced on every ring past the innermost where eligible.
+        self.force_position_mode = force_position_mode
 
         # Debug options
         self.draw_rings = draw_rings
@@ -172,12 +175,11 @@ class DesignGenerator:
             categories=self.categories,
             force_motif=self.force_motif,
             ring_seeds=self.ring_seeds,
+            force_position_mode=self.force_position_mode,
         )
         self.composer = Composer(self.seed, self.rings, settings)
         self.plan = self.composer.plan()
-        self.assembled = Assembler(
-            self.plan, self.rings, self.center, self.complexity, self.min_pattern_size, self.composer
-        ).assemble()
+        self.assembled = self._assemble()
         print(f"  Ring divisions: {[ring.divisions for ring in self.plan.rings]}")
         print(f"  Placed {len(self.assembled.paths)} paths, {len(self.assembled.reaches)} reaches, "
               f"{self.assembled.dropped_children} dropped children, "
@@ -192,6 +194,25 @@ class DesignGenerator:
 
         print("=== GENERATION COMPLETE ===\n")
         return svg
+
+    def _assemble(self) -> AssembledDesign:
+        """
+        Assemble the plan. A layered ring whose composite fails in pass two loses its back for the whole
+        ring and the design is assembled again (spec 5.4), at most once per ring.
+        """
+        dropped: set[int] = set()
+        while True:
+            try:
+                return Assembler(
+                    self.plan, self.rings, self.center, self.complexity, self.min_pattern_size, self.composer
+                ).assemble()
+            except LayeredRingFailed as failure:
+                ring = next((r for r in self.plan.rings if r.ring_index == failure.ring_index), None)
+                if failure.ring_index in dropped or ring is None or ring.back is None:
+                    raise
+                dropped.add(failure.ring_index)
+                print(f"  {failure}; dropping its back layer and assembling again")
+                self.composer.drop_back(ring)
 
     def generate_ring_fragment(self, ring_index: int, ring_seed: int, validate: bool = True) -> dict[str, Any]:
         """

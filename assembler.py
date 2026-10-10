@@ -24,6 +24,8 @@ from composer import CellRecipe, Composer, DesignPlan, RingPlan, node_seed, ring
 from motifs import find_motif, safe_motif
 from motifs.contract import MotifError, MotifInstance, ReachEnd
 from motifs.geometry import MotifContext, PointTuple, SmartVector, cell_rotation_deg
+import motifs.layering as layering
+from motifs.layering import LayeringError
 from placement import InkIndex, PlacedPath, path_geometry, path_overflow, trace
 import resolver
 
@@ -49,6 +51,17 @@ Regenerated = Tuple["PlacedNode", Optional[MotifInstance], MotifContext, List[Pl
 
 class AssemblyError(ValueError):
     """A cell could not be assembled, even after replacing its base motif."""
+
+
+class LayeredRingFailed(AssemblyError):
+    """
+    A layered ring's composite failed after pass one placed it (a pull-back, or cells placed again in pass
+    two). Its back must be dropped for the whole ring and the design assembled again (spec 5.4).
+    """
+
+    def __init__(self, ring_index: int, message: str = "") -> None:
+        super().__init__(f"ring {ring_index}: layered composite failed in pass two{': ' + message if message else ''}")
+        self.ring_index = ring_index
 
 
 def stroke_width_for(complexity: float) -> float:
@@ -78,6 +91,8 @@ class PlacedNode:
     # Overflow sides pass two has resolved for this node, and how often it pulled each back.
     resolved_sides: Set[str] = field(default_factory=set)
     pull_backs: Dict[str, int] = field(default_factory=dict)
+    # The seed of the back stream a layered ring's centre base drew its back from (None for every other node).
+    back_seed: Optional[int] = None
 
 
 # ------------------------------------------------------------------- the design
@@ -116,12 +131,13 @@ def _registry_entry(recipe: CellRecipe) -> Dict:
 
 def _path_role(vector: SmartVector, node_role: str) -> str:
     """
-    A traced vector's role: "back" beneath the base ink, "detail" for embellishment ink (it floats inside
-    its host, as a slot child may, so it is not base structure), else the node's own role.
+    A traced vector's role: "detail" for embellishment ink, a back layer's included (it floats inside its
+    host, as a slot child may, so it is not base structure), "back" for the back layer's outline beneath
+    the base ink, else the node's own role.
     """
-    if vector.layer == "back":
-        return "back"
-    return "detail" if vector.weight == "detail" else node_role
+    if vector.weight == "detail":
+        return "detail"
+    return "back" if vector.layer == "back" else node_role
 
 
 def _angular_limit(ring: RingPlan, position: str) -> float:
@@ -220,8 +236,13 @@ class Assembler:
         for ring in self.plan.rings:
             self._place_ring(ring, range(ring.divisions))
 
-    def _place_ring(self, ring: RingPlan, cells: Iterable[int]) -> None:
-        """Place `cells` of the ring; a failing base is replaced and those cells placed again."""
+    def _place_ring(self, ring: RingPlan, cells: Iterable[int], drop_back: bool = True) -> None:
+        """
+        Place `cells` of the ring; a failing base is replaced and those cells placed again. A failing
+        layered composite drops the ring's back and places the cells again without counting a replacement
+        (spec 5.4); when only some cells are placed (`drop_back` False), the cells already drawn with the
+        back would keep it, so the ring fails as a whole with `LayeredRingFailed`.
+        """
         if not ring.sequence:
             raise AssemblyError(f"ring {ring.ring_index} has an empty sequence")
         cells = list(cells)
@@ -233,6 +254,11 @@ class Assembler:
                 return
             self._rewind(mark)
             cell_index, position, error = failure
+            if isinstance(error, LayeringError) and ring.back is not None:
+                if not drop_back:
+                    raise LayeredRingFailed(ring.ring_index, str(error)) from error
+                self.composer.drop_back(ring)
+                continue
             seq_pos = cell_index % len(ring.sequence)
             count = replacements.get((seq_pos, position), 0)
             if count >= MAX_BASE_REPLACEMENTS or not self.composer.replace_node(ring, seq_pos, position, "generation"):
@@ -326,6 +352,32 @@ class Assembler:
             embellishments=tuple(recipe.embellishments),
         )
 
+    def _back_context(self, ring: RingPlan, front_context: MotifContext) -> MotifContext:
+        """
+        The back's context (spec 5.2 step 2): the whole cell on a divider, radial limits (0, 1), and the
+        ring's back stream for its rng, its node seed (so its embellishments) and its ring stream, so every
+        cell of the ring draws the same back.
+        """
+        seed = ring_stream_seed(ring.ring_seed, ring.ring_index, "back")
+        return replace(
+            front_context, rng=random.Random(seed), node_seed=seed, ring_stream_seed=seed, position="divider",
+            angular_limits=1.0, radial_limits=(0.0, 1.0), slot=None, side_touch_radial=None,
+            embellishments=tuple(ring.back.embellishments),
+        )
+
+    def _generate(self, ring: RingPlan, recipe: CellRecipe, context: MotifContext,
+                  is_base: bool) -> Tuple[MotifInstance, Optional[int]]:
+        """
+        One node's instance, and the back seed when it is a layered composite: a centre base of a ring
+        with a back is drawn by `compose_layered`, everything else by its own generator.
+        """
+        entry = _registry_entry(recipe)
+        if is_base and context.position == "centre" and ring.back is not None:
+            back_context = self._back_context(ring, context)
+            instance = layering.compose_layered(context, entry, back_context, _registry_entry(ring.back))
+            return instance, back_context.node_seed
+        return entry["generator"](context), None
+
     def _trace_node(self, ring_index: int, cell_index: int, position: str, node_path: Tuple[int, ...],
                     role: str, context: MotifContext, instance: MotifInstance,
                     rotation: float) -> List[PlacedPath]:
@@ -354,14 +406,14 @@ class Assembler:
         depth = len(node_path) - 1
         rng_seed = node_seed(ring.ring_seed, ring.ring_index, node_path[0], depth, position)
         context = self._context(ring, position, recipe, rng_seed, radial_limits, slot, is_base=parent is None)
-        instance = _registry_entry(recipe)["generator"](context)
+        instance, back_seed = self._generate(ring, recipe, context, is_base=parent is None)
 
         rotation = cell_rotation_deg(cell_index, ring.divisions, position)
         role = "base" if parent is None else "slot"
         paths = self._trace_node(ring.ring_index, cell_index, position, node_path, role, context, instance, rotation)
         node = PlacedNode(
             ring.ring_index, cell_index, position, node_path, recipe,
-            rng_seed, instance, paths, context, parent,
+            rng_seed, instance, paths, context, parent, back_seed=back_seed,
         )
         self.nodes.append(node)
         for path in paths:
@@ -633,12 +685,19 @@ class Assembler:
         """
         `node` and its slot descendants generated again from their stored seeds,
         `node` with `radial_limits`. Changes nothing; raises `MotifError` when
-        `node` itself fails. A descendant that no longer fits its parent's slot
-        comes back with instance None, as does everything below it.
+        `node` itself fails. A layered composite is regenerated whole, its back
+        cut again against the new front (spec 5.2); when the composite fails the
+        ring's back must go, which raises `LayeredRingFailed`. A descendant
+        that no longer fits its parent's slot comes back with instance None, as
+        does everything below it.
         """
-        rotation = cell_rotation_deg(node.cell_index, self.ring_plan(node.ring_index).divisions, node.position)
+        ring = self.ring_plan(node.ring_index)
+        rotation = cell_rotation_deg(node.cell_index, ring.divisions, node.position)
         context = replace(node.context, rng=random.Random(node.rng_seed), radial_limits=radial_limits)
-        instance = _registry_entry(node.recipe)["generator"](context)
+        try:
+            instance, _ = self._generate(ring, node.recipe, context, is_base=node.parent is None)
+        except LayeringError as error:
+            raise LayeredRingFailed(node.ring_index, str(error)) from error
         result: List[Regenerated] = [(node, instance, context, self._retrace(node, context, instance, rotation))]
         slot = instance.declaration.slot
         for child in self.subtree(node)[1:]:
@@ -717,7 +776,7 @@ class Assembler:
         self.reaches = [path for path in self.reaches if id(path) not in removed]
 
         mark = self._mark()
-        self._place_ring(ring, cells)
+        self._place_ring(ring, cells, drop_back=False)
         new_nodes, new_paths = self.nodes[mark[0]:], self.paths[mark[1]:]
         new_pending = self.pending_reaches[mark[2]:]
         del self.nodes[mark[0]:], self.paths[mark[1]:], self.pending_reaches[mark[2]:]

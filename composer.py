@@ -89,6 +89,16 @@ class RingPlan:
     side_touch_radial: float = 0.5
     # Revision-2 plans touched at mid height only.
     touch_height: str = "mid"
+    # Layered rings (spec 5.1): one back motif for the whole ring, drawn on every divider, and whether a
+    # failing composite dropped it (spec 5.4).
+    back: Optional[CellRecipe] = None
+    back_dropped: bool = False
+    # "centre", "divider", "both" or "layered"; plans saved before it was stored derive it from their entries.
+    position_mode: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.position_mode:
+            self.position_mode = _derived_position_mode(self)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -100,6 +110,9 @@ class RingPlan:
             "contact_mode": self.contact_mode,
             "side_touch_radial": self.side_touch_radial,
             "touch_height": self.touch_height,
+            "back": None if self.back is None else self.back.to_dict(),
+            "back_dropped": self.back_dropped,
+            "position_mode": self.position_mode,
         }
 
     @classmethod
@@ -113,7 +126,21 @@ class RingPlan:
             contact_mode=d.get("contact_mode", "stem"),
             side_touch_radial=d.get("side_touch_radial", 0.5),
             touch_height=d.get("touch_height", "mid"),
+            back=None if d.get("back") is None else CellRecipe.from_dict(d["back"]),
+            back_dropped=d.get("back_dropped", False),
+            position_mode=d.get("position_mode", ""),
         )
+
+
+def _derived_position_mode(ring: RingPlan) -> str:
+    """The position mode a ring's own content implies, for plans that do not store it."""
+    if ring.back is not None:
+        return "layered"
+    if ring.centre_share < 1.0:
+        return "both"
+    if ring.sequence and all(entry.centre is None and entry.divider is not None for entry in ring.sequence):
+        return "divider"
+    return "centre"
 
 
 @dataclass
@@ -196,7 +223,9 @@ def pick_embellishments(entry: Dict, complexity: float, rng: random.Random) -> L
 BOTH_MIN_CELL_WIDTH_PX = 2 * 14.0
 CONTACT_OVERFLOW = 0.1
 MAX_NODE_DEPTH = 3
-POSITION_MODES = ("centre", "divider", "both")
+POSITION_MODES = ("centre", "divider", "both", "layered")
+# The modes a style may prefer: a layered ring is eligible only outside ring 0 and with a back motif that fits.
+STYLE_POSITION_MODES = POSITION_MODES[:3]
 FORCE_ROLES = ("base", "slot", "contact")
 MIN_DIVISIONS = 4
 MAX_DIVISIONS = 24
@@ -248,6 +277,8 @@ class ComposerSettings:
     categories: List[str] = field(default_factory=lambda: ["botanical"])
     force_motif: Optional[Dict[str, str]] = None
     ring_seeds: Optional[Dict[int, int]] = None
+    # Forces this position mode on every ring past the innermost where it is eligible.
+    force_position_mode: Optional[str] = None
 
 
 class Composer:
@@ -260,13 +291,15 @@ class Composer:
         if force:
             if find_motif(force["name"]) is None:
                 raise ValueError(f"unknown forced motif: {force['name']}")
-            if force["position"] not in POSITION_MODES:
+            if force["position"] not in STYLE_POSITION_MODES:
                 raise ValueError(f"unknown forced position: {force['position']}")
             if force["role"] not in FORCE_ROLES:
                 raise ValueError(f"unknown forced role: {force['role']}")
             if force["position"] == "both" and find_motif(force["name"]).get("seams", False):
                 # A seam motif needs its whole cell and position (spec 4.1), which `both` mode never gives.
                 raise ValueError(f"seam motif {force['name']} cannot be forced in both mode")
+        if settings.force_position_mode is not None and settings.force_position_mode not in POSITION_MODES:
+            raise ValueError(f"unknown forced position mode: {settings.force_position_mode}")
         counts = [settings.num_divisions, *(settings.ring_divisions or [])]
         for count in counts:
             if isinstance(count, bool) or not isinstance(count, int) or not MIN_DIVISIONS <= count <= MAX_DIVISIONS:
@@ -333,7 +366,7 @@ class Composer:
             chosen = [c for c in self.settings.categories if rng.random() < 0.7]
             if not chosen:
                 chosen = list(self.settings.categories)
-            self._style = {"categories": chosen, "positions": rng.choice(POSITION_MODES)}
+            self._style = {"categories": chosen, "positions": rng.choice(STYLE_POSITION_MODES)}
         return self._style
 
     @style.setter
@@ -366,14 +399,17 @@ class Composer:
         cell_width, ring_depth = self._ring_metrics(ring_index, divisions)
         avoid = set(self._inward_base_names(ring_index))
         force = self.settings.force_motif if ring_index > 0 else None
+        # A layered ring's fronts fill the centre position with the whole angular budget (spec 5.1).
+        layered = mode == "layered"
+        fill_mode = "centre" if layered else mode
 
         sequence: List[CellEntry] = []
         for s in range(seq_len):
             nodes: Dict[str, Optional[CellRecipe]] = {"centre": None, "divider": None}
             for position in ("centre", "divider"):
-                if mode not in (position, "both"):
+                if fill_mode not in (position, "both"):
                     continue
-                width = cell_width * self._budget(mode, centre_share, position)
+                width = cell_width * self._budget(fill_mode, centre_share, position)
                 first = getattr(sequence[0], position) if sequence else None
                 if first is not None and self._is_seam(first):
                     # A seam motif owns its whole position: every entry repeats it, freshly composed, with
@@ -387,16 +423,22 @@ class Composer:
                 # Only entry 0 may pick a seam motif, and never in `both` mode (spec 4.1).
                 nodes[position] = self._plan_node(
                     ring_index, ring_seed, s, position, width, ring_depth, avoid, force,
-                    allow_seams=(s == 0 and mode != "both"),
+                    allow_seams=(s == 0 and fill_mode != "both" and not layered), layered=layered,
                 )
             sequence.append(CellEntry(nodes["centre"], nodes["divider"]))
 
         contact_mode = self._contact_mode(ring_index, sequence)
-        touch_height, side_touch_radial = self._touch_height(ring_index, sequence, rng)
+        back = None
+        if layered:
+            # Layered rings always touch at base height (spec 3.2), so the fronts leave their tips free.
+            touch_height, side_touch_radial = "base", rng.uniform(*BASE_TOUCH_RANGE)
+            back = self._plan_back(ring_index, ring_seed, cell_width, ring_depth)
+        else:
+            touch_height, side_touch_radial = self._touch_height(ring_index, sequence, rng)
         if not (force and force["role"] == "contact"):
             self._ensure_contact(ring_index, sequence, contact_mode)
         plan = RingPlan(ring_index, divisions, centre_share, sequence, ring_seed,
-                        contact_mode, side_touch_radial, touch_height)
+                        contact_mode, side_touch_radial, touch_height, back=back, position_mode=mode)
         if ring_seed == self.seed:
             self._canonical_names[ring_index] = self._base_names(plan)
         return plan
@@ -429,11 +471,23 @@ class Composer:
             return False
         if self._substitute(ring, seq_pos, position, side_only=False):
             return True
+        if ring.back is not None:
+            # The safe band has no fill to hide a back behind and touches at mid height only.
+            self.drop_back(ring)
         safe = safe_motif(node.category)
         for target in (ring.sequence if self._is_seam(node) else [entry]):
             self._set_node(target, position, CellRecipe(safe["name"], safe["category"], is_fallback=True))
         self._refresh_contact(ring)
         return True
+
+    def drop_back(self, ring: RingPlan) -> None:
+        """
+        Drop a layered ring's back for the whole ring (spec 5.4): the ring becomes a centre ring that keeps
+        its front entries. Dropping it in one cell only would leave the neighbouring half's seam dangling.
+        """
+        ring.back = None
+        ring.back_dropped = True
+        ring.position_mode = "centre"
 
     def _substitute(self, ring: RingPlan, seq_pos: int, position: str, side_only: bool) -> bool:
         """
@@ -455,11 +509,13 @@ class Composer:
         cell_width, ring_depth = self._ring_metrics(ring.ring_index, ring.divisions)
         mode = "both" if ring.centre_share < 1.0 else position
         cell_width *= self._budget(mode, ring.centre_share, position)
-        allow_seams = mode != "both" and (seam_position or len(ring.sequence) == 1)
+        layered = ring.back is not None
+        allow_seams = mode != "both" and not layered and (seam_position or len(ring.sequence) == 1)
 
         candidates = [
             c for c in self._base_candidates(ring.ring_index, position, cell_width, ring_depth, allow_seams)
             if c["name"] not in tried and (not side_only or ring.touch_height in touch_heights_of(c))
+            and (not layered or "base" in touch_heights_of(c))
         ]
         if not candidates:
             return False
@@ -524,13 +580,58 @@ class Composer:
                     if self._base_candidates(0, m, cell_width, ring_depth)
                 ) or POSITION_MODES[:2]
             else:
-                modes = POSITION_MODES
+                modes = STYLE_POSITION_MODES + (("layered",) if self._layered_eligible(ring_index, divisions) else ())
             weights = [0.6 if m == preferred else 0.2 for m in modes]
             mode = rng.choices(modes, weights=weights)[0]
             if mode == "both" and cell_width < BOTH_MIN_CELL_WIDTH_PX:
                 mode = "centre"
+            forced = self.settings.force_position_mode
+            if forced and ring_index > 0 and self._mode_eligible(forced, ring_index, divisions):
+                mode = forced
         centre_share = rng.uniform(0.45, 0.75) if mode == "both" else 1.0
         return mode, centre_share
+
+    def _mode_eligible(self, mode: str, ring_index: int, divisions: int) -> bool:
+        """Whether a ring past the innermost may take `mode`."""
+        if mode == "layered":
+            return self._layered_eligible(ring_index, divisions)
+        if mode == "both":
+            return self._ring_metrics(ring_index, divisions)[0] >= BOTH_MIN_CELL_WIDTH_PX
+        return True
+
+    def _layered_eligible(self, ring_index: int, divisions: int) -> bool:
+        """
+        A layered ring (spec 5.1) lies outside ring 0, has a back motif that passes its size gates at the
+        whole cell, and a front that can touch at base height.
+        """
+        if ring_index == 0:
+            return False
+        cell_width, ring_depth = self._ring_metrics(ring_index, divisions)
+        return bool(self._back_candidates(cell_width, ring_depth)
+                    and self._layered_front_candidates(ring_index, cell_width, ring_depth))
+
+    def _back_candidates(self, cell_width: float, ring_depth: float) -> List[Dict]:
+        return [
+            m for m in motifs_for_categories(self.settings.categories)
+            if "back" in m["roles"] and self._passes(m, cell_width, ring_depth)
+        ]
+
+    def _layered_front_candidates(self, ring_index: int, cell_width: float, ring_depth: float) -> List[Dict]:
+        """A layered ring's centre candidates: non-seam bases that touch at base height."""
+        return [
+            m for m in self._base_candidates(ring_index, "centre", cell_width, ring_depth, allow_seams=False)
+            if "base" in touch_heights_of(m)
+        ]
+
+    def _plan_back(self, ring_index: int, ring_seed: int, cell_width: float, ring_depth: float) -> CellRecipe:
+        """The ring's one back motif, from its own pick stream, with embellishments picked as a base's are."""
+        chosen = self._pick(self._back_candidates(cell_width, ring_depth),
+                            node_rng(ring_seed, ring_index, 0, 0, "divider", "pick:back"))
+        back = CellRecipe(chosen["name"], chosen["category"])
+        back.embellishments = pick_embellishments(
+            chosen, self.settings.complexity, node_rng(ring_seed, ring_index, 0, 0, "divider", "pick:emb"),
+        )
+        return back
 
     def _ring_metrics(self, ring_index: int, divisions: int) -> Tuple[float, float]:
         geometry = self.ring_geometry[ring_index]
@@ -576,12 +677,15 @@ class Composer:
 
     def _plan_node(self, ring_index: int, ring_seed: int, seq_pos: int, position: str,
                    cell_width: float, ring_depth: float, avoid: set,
-                   force: Optional[Dict[str, str]], allow_seams: bool = True) -> CellRecipe:
+                   force: Optional[Dict[str, str]], allow_seams: bool = True, layered: bool = False) -> CellRecipe:
         rng = node_rng(ring_seed, ring_index, seq_pos, 0, position)
         if force:
             return self._forced_node(force, rng, ring_index, ring_seed, seq_pos, position,
                                      cell_width, ring_depth)
-        candidates = self._base_candidates(ring_index, position, cell_width, ring_depth, allow_seams)
+        if layered:
+            candidates = self._layered_front_candidates(ring_index, cell_width, ring_depth)
+        else:
+            candidates = self._base_candidates(ring_index, position, cell_width, ring_depth, allow_seams)
         if ring_index > 0:
             candidates = [c for c in candidates if c["name"] not in avoid] or candidates
         if not candidates:

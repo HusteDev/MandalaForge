@@ -16,3 +16,10 @@ def test_run_one_reports_base_symmetry_and_side_touch_rings(tmp_path):
     assert 1 <= result["side_touch_rings"] <= 4
     varied = run_one((42, 4, 12, 0.5, ["botanical"], True, str(tmp_path), "never"))
     assert varied["base_symmetry"] in (3, 4, 6)
+
+
+def test_run_one_forces_a_position_mode_and_counts_layered_rings(tmp_path):
+    result = run_one((42, 4, 8, 0.5, ["botanical"], False, str(tmp_path), "never", "layered"))
+    assert result["status"] == "PASS"
+    assert result["layered_rings"] + result["back_dropped_rings"] == 3
+    assert result["layered_rings"] >= 1

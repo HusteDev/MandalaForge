@@ -26,7 +26,8 @@ def test_max_min_pattern_size_drops_nesting_silently():
     assert g.last_validation_result.is_valid
 
 def test_regenerate_ring_changes_neighbour_reaches_not_plan():
-    g = gen(seed=1); g.generate()
+    # Seed 7: ring 3 has stems (re-baselined from seed 1 when the layered mode joined the mode draw, Task 12).
+    g = gen(seed=7); g.generate()
     before_plan = g.plan.rings[3]
     before_reaches = [r.coords for r in g.assembled.reaches if r.ring_index == 3]
     frag = g.generate_ring_fragment(2, 999)
@@ -297,12 +298,13 @@ def test_band_rings_meet_at_their_seams(divisions):
 
 
 def test_inward_stem_never_lands_on_an_outer_rings_overflow():
-    # Seed 9: ring 2's scallop stem runs down the axis of a ring-3 petal dipping into ring 2. Landing on that
+    # Originally seed 9: ring 2's scallop stem runs down the axis of a ring-3 petal dipping into ring 2. Landing on that
     # petal (a ring resolved later, not yet joined to the structure) left ring 2 floating through every substitute.
     # Since beaded bands widened (Task 11), ring 1 keeps its petal, whose tip reaches into ring 2: the stem may
-    # land there, on ink of an inner ring, but never on ring 3's.
+    # land there, on ink of an inner ring, but never on ring 3's. Re-baselined to seed 37 when the layered mode
+    # joined the mode draw (Task 12): ring 2 is all scallop again under ring-3 petals.
     from shapely.geometry import LineString, Point
-    g = DesignGenerator(seed=9, num_rings=4, num_divisions=12, vary_divisions=True, complexity=0.5,
+    g = DesignGenerator(seed=37, num_rings=4, num_divisions=12, vary_divisions=True, complexity=0.5,
                         min_pattern_size=10, categories=["botanical", "geometric"])
     g.generate()
     assert {n.motif for n in _base_nodes_of(g.plan.rings[2])} == {"scallop"}
@@ -338,3 +340,11 @@ def test_base_height_side_touch_rings_assemble_and_validate(seed, vary):
         radial, limit = rings[node.ring_index].side_touch_radial, node.context.angular_limits
         outline = node.instance.vectors[0].points
         assert CellPoint(radial, limit) in outline and CellPoint(radial, -limit) in outline
+
+
+def test_force_position_mode_centre_reaches_every_outer_ring():
+    g = DesignGenerator(seed=42, num_rings=4, ring_divisions=[8, 8, 8, 12], categories=["botanical"],
+                        force_position_mode="centre")
+    g.generate()
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+    assert all(ring.position_mode == "centre" for ring in g.plan.rings[1:])

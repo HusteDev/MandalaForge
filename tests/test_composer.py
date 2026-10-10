@@ -666,3 +666,85 @@ def test_embellishments_round_trip_and_default_empty():
     d = recipe.to_dict()
     del d["embellishments"]
     assert CellRecipe.from_dict(d).embellishments == []
+
+
+# ------------------------------------------------------------------ layered rings (spec 5.1, 5.4)
+
+def layered_plan(seed=123, **over):
+    return plan_for(seed=seed, **{"categories": ["botanical"], "force_position_mode": "layered", **over})
+
+
+def test_layered_is_never_ring_zero():
+    for seed in range(30):
+        for force in (None, "layered"):
+            p = plan_for(seed=seed, categories=["botanical"], force_position_mode=force)
+            assert p.rings[0].back is None and p.rings[0].position_mode != "layered"
+
+
+def test_layered_rings_use_base_touch():
+    seen = 0
+    for seed in range(20):
+        for ring in layered_plan(seed=seed).rings[1:]:
+            assert ring.back is not None and ring.position_mode == "layered"
+            seen += 1
+            assert ring.touch_height == "base" and ring.contact_mode == "side"
+            assert BASE_TOUCH_RANGE[0] <= ring.side_touch_radial <= BASE_TOUCH_RANGE[1]
+            assert ring.centre_share == 1.0
+            assert "back" in find_motif(ring.back.motif)["roles"]
+            for entry in ring.sequence:
+                assert entry.divider is None and entry.centre is not None
+                front = find_motif(entry.centre.motif)
+                assert "base" in touch_heights_of(front) and not front.get("seams", False)
+    assert seen
+
+
+def test_layered_mode_is_drawn_without_forcing():
+    modes = {ring.position_mode for seed in range(40) for ring in plan_for(seed=seed, categories=["botanical"]).rings[1:]}
+    assert "layered" in modes
+
+
+def test_back_round_trips_and_defaults_off():
+    from composer import DesignPlan
+    p = layered_plan()
+    assert DesignPlan.from_json(p.to_json()) == p
+    d = p.rings[1].to_dict()
+    assert d["back"]["motif"] == p.rings[1].back.motif and d["back_dropped"] is False
+    for key in ("back", "back_dropped", "position_mode"):
+        d.pop(key)
+    loaded = RingPlan.from_dict(d)
+    assert loaded.back is None and loaded.back_dropped is False and loaded.position_mode == "centre"
+
+
+def test_back_is_picked_from_its_own_stream():
+    # The back pick never shifts the fronts: the same plan without its back has the same centre entries.
+    p = layered_plan(seed=5, complexity=0.9)
+    assert any(ring.back.embellishments for seed in range(20) for ring in layered_plan(seed=seed, complexity=0.9).rings[1:])
+    again = layered_plan(seed=5, complexity=0.9)
+    assert [r.back for r in p.rings] == [r.back for r in again.rings]
+
+
+def test_drop_back_keeps_the_centre_entries_and_sets_centre_mode():
+    settings = ComposerSettings(categories=["botanical"], force_position_mode="layered")
+    c = Composer(123, GEOM, settings)
+    p = c.plan()
+    ring = p.rings[1]
+    before = [entry.to_dict() for entry in ring.sequence]
+    c.drop_back(ring)
+    assert ring.back is None and ring.back_dropped is True and ring.position_mode == "centre"
+    assert [entry.to_dict() for entry in ring.sequence] == before
+
+
+def test_forced_position_mode_is_validated():
+    with pytest.raises(ValueError):
+        Composer(1, GEOM, ComposerSettings(force_position_mode="sideways"))
+
+
+def test_safe_fallback_in_a_layered_ring_drops_its_back():
+    settings = ComposerSettings(categories=["botanical"], force_position_mode="layered")
+    c = Composer(123, GEOM, settings)
+    ring = c.plan().rings[1]
+    while c.replace_node(ring, 0, "centre", "generation"):
+        if ring.sequence[0].centre.is_fallback:
+            break
+    assert ring.sequence[0].centre.is_fallback
+    assert ring.back is None and ring.back_dropped and ring.position_mode == "centre"
