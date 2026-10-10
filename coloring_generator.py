@@ -43,6 +43,7 @@ class DesignGenerator:
         ring_seeds: dict[int, int] | None = None,
         force_motif: dict[str, str] | None = None,
         force_position_mode: str | None = None,
+        force_embellishments: tuple[str, ...] | None = None,
         # Debug options
         draw_rings: bool = False,
         draw_divisions: bool = False,
@@ -69,6 +70,8 @@ class DesignGenerator:
         self.force_motif = force_motif
         # "centre", "divider", "both" or "layered", forced on every ring past the innermost where eligible.
         self.force_position_mode = force_position_mode
+        # Embellishments added to every base and back that accepts them (QA forcing, see ComposerSettings).
+        self.force_embellishments = tuple(force_embellishments) if force_embellishments else None
 
         # Debug options
         self.draw_rings = draw_rings
@@ -176,6 +179,7 @@ class DesignGenerator:
             force_motif=self.force_motif,
             ring_seeds=self.ring_seeds,
             force_position_mode=self.force_position_mode,
+            force_embellishments=self.force_embellishments,
         )
         self.composer = Composer(self.seed, self.rings, settings)
         self.plan = self.composer.plan()

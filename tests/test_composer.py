@@ -756,3 +756,49 @@ def test_safe_fallback_in_a_layered_ring_drops_its_back():
             break
     assert ring.sequence[0].centre.is_fallback
     assert ring.back is None and ring.back_dropped and ring.position_mode == "centre"
+
+
+# ---------------------------------------------------------------- forced embellishments
+
+def _base_recipes(plan):
+    return [node for ring in plan.rings for entry in ring.sequence
+            for node in (entry.centre, entry.divider) if node is not None]
+
+
+@pytest.mark.parametrize("forced", [("dot",), ("fan", "dot"), ("veins",), ("beads",)])
+def test_forced_embellishments_join_every_accepting_base(forced):
+    for seed in (1, 2, 3):
+        plain = plan_for(seed=seed, complexity=0.5)
+        plan = plan_for(seed=seed, complexity=0.5, force_embellishments=forced)
+        for before, node in zip(_base_recipes(plain), _base_recipes(plan)):
+            accepted = find_motif(node.motif)["embellishments"] if find_motif(node.motif) else ()
+            for name in forced:
+                assert (name in node.embellishments) == (name in accepted), (node.motif, node.embellishments)
+            fills = [name for name in node.embellishments if name in INTERIOR_FILLS]
+            assert len(fills) <= 1
+            if fills:
+                assert node.slot_child is None
+            # Forcing only adds: picks that do not clash with a forced interior fill are kept, in order.
+            kept = [n for n in before.embellishments
+                    if not (n in INTERIOR_FILLS and any(f in INTERIOR_FILLS and f != n for f in forced))]
+            assert set(kept) <= set(node.embellishments)
+            assert node.embellishments == [n for n in EMBELLISHMENT_ORDER if n in node.embellishments]
+
+
+def test_forced_embellishments_reach_a_layered_back():
+    backs = [ring.back for seed in range(1, 9)
+             for ring in plan_for(seed=seed, categories=["botanical"], force_position_mode="layered",
+                                  force_embellishments=("echo", "dot")).rings if ring.back is not None]
+    assert backs and all("echo" in back.embellishments for back in backs)
+    assert all("dot" in back.embellishments for back in backs if back.motif == "petal")
+    assert any(back.motif == "petal" for back in backs)
+
+
+def test_no_forced_embellishments_leaves_the_plan_unchanged():
+    assert plan_for(seed=9).to_json() == plan_for(seed=9, force_embellishments=()).to_json()
+
+
+@pytest.mark.parametrize("bad", [("sparkle",), ("veins", "fan"), ("dot", "dot")])
+def test_forced_embellishments_are_validated(bad):
+    with pytest.raises(ValueError):
+        Composer(1, GEOM, ComposerSettings(force_embellishments=bad))

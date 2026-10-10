@@ -104,6 +104,7 @@ def _fixture_composer(generator):
         min_pattern_size=generator.min_pattern_size, categories=generator.categories,
         force_motif=generator.force_motif, ring_seeds=generator.ring_seeds,
         force_position_mode=generator.force_position_mode,
+        force_embellishments=generator.force_embellishments,
     )
     return Composer(generator.seed, generator.rings, settings)
 

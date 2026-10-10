@@ -52,6 +52,17 @@ CORPUS_DIVISIONS = 12
 # a back motif fits; categories with no back motifs keep their natural modes.
 CORPUS_LAYERED_SEEDS = CORPUS_SEEDS[:5]
 
+# The corpus forces embellishments on these jobs, keyed by (category, complexity, seed, vary), because unforced
+# picks draw too few fans and dots (spec 11): a fan is accepted by petals only and seldom picked, and at
+# complexity 0.6 and above two echoes leave no room for a dot. Forcing adds the names to the picks of every
+# host that accepts them (`ComposerSettings.force_embellishments`); these are the fewest jobs found that meet
+# the quota.
+CORPUS_EMBELLISHMENT_JOBS = {
+    ('botanical', 0.15, 42, False): ('dot',),
+    ('botanical', 0.15, 42, True): ('dot',),
+    ('botanical', 0.15, 777, False): ('fan', 'dot'),
+}
+
 # Corpus quotas (spec 11): the share of the rings of botanical and geometric designs that are layered (and
 # kept their back), and the rings each embellishment must be drawn in, across the corpus.
 LAYERED_CATEGORIES = ('botanical', 'geometric')
@@ -60,14 +71,17 @@ EMBELLISHMENT_MIN = 10
 
 
 def corpus_jobs(out_dir, overlay_mode, num_rings=CORPUS_RINGS, num_divisions=CORPUS_DIVISIONS,
-                layered_seeds=CORPUS_LAYERED_SEEDS):
+                layered_seeds=CORPUS_LAYERED_SEEDS, embellishment_jobs=None):
     """
     The pinned corpus as run_one jobs: 5 categories x 3 complexities x 6 seeds x 2 division modes, each with
-    its forced position mode: `layered` for the seeds in `layered_seeds`, else None.
+    its forced position mode (`layered` for the seeds in `layered_seeds`, else None) and its forced
+    embellishments (from `embellishment_jobs`, keyed by `(category, complexity, seed, vary)`, else None).
     """
+    embellishment_jobs = CORPUS_EMBELLISHMENT_JOBS if embellishment_jobs is None else embellishment_jobs
     return [
         (seed, num_rings, num_divisions, complexity, [category], vary, out_dir, overlay_mode,
-         'layered' if seed in layered_seeds else None)
+         'layered' if seed in layered_seeds else None,
+         embellishment_jobs.get((category, complexity, seed, vary)))
         for category in CORPUS_CATEGORIES
         for complexity in CORPUS_COMPLEXITIES
         for seed in CORPUS_SEEDS
@@ -196,6 +210,7 @@ def run_one(job):
     """
     seed, num_rings, num_divisions, complexity, categories, vary, out_dir, overlay_mode, *rest = job
     force_mode = rest[0] if rest else None
+    force_embellishments = rest[1] if len(rest) > 1 else None
     label = f"{'-'.join(categories)}_c{complexity}_v{int(vary)}_s{seed}"
 
     chatter = io.StringIO()
@@ -209,6 +224,7 @@ def run_one(job):
                 categories=categories,
                 vary_divisions=vary,
                 force_position_mode=force_mode,
+                force_embellishments=force_embellishments,
             )
             svg = generator.generate()
     except Exception as exc:
@@ -282,7 +298,7 @@ def main():
         overlay_mode = args.overlays or 'failures'
         jobs = corpus_jobs(args.out, overlay_mode, args.rings, args.divisions)
         if args.force_mode:  # an explicit mode replaces the corpus's own forcing on every job
-            jobs = [job[:8] + (args.force_mode,) for job in jobs]
+            jobs = [job[:8] + (args.force_mode,) + job[9:] for job in jobs]
     else:
         overlay_mode = args.overlays or 'always'
         seeds = args.seeds if args.seeds else [random.randint(0, 1000000) for _ in range(args.count)]

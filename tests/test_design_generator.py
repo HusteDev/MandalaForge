@@ -348,3 +348,12 @@ def test_force_position_mode_centre_reaches_every_outer_ring():
     g.generate()
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
     assert all(ring.position_mode == "centre" for ring in g.plan.rings[1:])
+
+
+def test_forced_embellishments_reach_the_plan_and_validate():
+    g = DesignGenerator(seed=42, num_rings=4, num_divisions=12, complexity=0.5, categories=["botanical"],
+                        force_embellishments=("dot",))
+    g.generate()
+    assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
+    petals = [node for node in g.assembled.nodes if node.parent is None and node.recipe.motif == "petal"]
+    assert petals and all("dot" in node.recipe.embellishments for node in petals)

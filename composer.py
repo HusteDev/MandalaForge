@@ -280,6 +280,23 @@ class ComposerSettings:
     # Forces this position mode on every ring past the innermost where it is eligible. It cannot be combined
     # with force_motif, which forces its own position.
     force_position_mode: Optional[str] = None
+    # Embellishments added to the picks of every base and back that accepts them (QA forcing, as
+    # force_position_mode is). A forced interior fill replaces a picked one, and takes the slot.
+    force_embellishments: Optional[Tuple[str, ...]] = None
+
+
+def force_embellishment_picks(entry: Dict, picked: List[str], forced: Sequence[str]) -> List[str]:
+    """
+    `picked` with every name of `forced` that `entry` accepts added, in `EMBELLISHMENT_ORDER`. A forced
+    interior fill displaces a picked one, so a node keeps at most one. Draws nothing, so the streams and
+    every unforced pick stay as they were.
+    """
+    accepted = entry.get("embellishments", ())
+    added = [name for name in forced if name in accepted]
+    if any(name in INTERIOR_FILLS for name in added):
+        picked = [name for name in picked if name not in INTERIOR_FILLS]
+    names = set(picked) | set(added)
+    return [name for name in EMBELLISHMENT_ORDER if name in names]
 
 
 class Composer:
@@ -303,6 +320,14 @@ class Composer:
             raise ValueError(f"unknown forced position mode: {settings.force_position_mode}")
         if settings.force_position_mode is not None and force:
             raise ValueError("force_position_mode cannot be combined with force_motif, which forces its own position")
+        forced_names = list(settings.force_embellishments or ())
+        unknown = [name for name in forced_names if name not in EMBELLISHMENT_ORDER]
+        if unknown:
+            raise ValueError(f"unknown forced embellishment(s): {unknown}")
+        if len(set(forced_names)) != len(forced_names):
+            raise ValueError(f"forced embellishments repeat a name: {forced_names}")
+        if sum(1 for name in forced_names if name in INTERIOR_FILLS) > 1:
+            raise ValueError(f"at most one interior fill may be forced, got {forced_names}")
         counts = [settings.num_divisions, *(settings.ring_divisions or [])]
         for count in counts:
             if isinstance(count, bool) or not isinstance(count, int) or not MIN_DIVISIONS <= count <= MAX_DIVISIONS:
@@ -631,10 +656,14 @@ class Composer:
         chosen = self._pick(self._back_candidates(cell_width, ring_depth),
                             node_rng(ring_seed, ring_index, 0, 0, "divider", "pick:back"))
         back = CellRecipe(chosen["name"], chosen["category"])
-        back.embellishments = pick_embellishments(
-            chosen, self.settings.complexity, node_rng(ring_seed, ring_index, 0, 0, "divider", "pick:emb"),
-        )
+        back.embellishments = self._embellishments(
+            chosen, node_rng(ring_seed, ring_index, 0, 0, "divider", "pick:emb"))
         return back
+
+    def _embellishments(self, motif: Dict, rng: random.Random) -> List[str]:
+        """A node's picks (spec 6.4), with the settings' forced embellishments added where accepted."""
+        picked = pick_embellishments(motif, self.settings.complexity, rng)
+        return force_embellishment_picks(motif, picked, self.settings.force_embellishments or ())
 
     def _ring_metrics(self, ring_index: int, divisions: int) -> Tuple[float, float]:
         geometry = self.ring_geometry[ring_index]
@@ -724,10 +753,8 @@ class Composer:
         `embellishments` of the entry it copies instead of picking its own.
         """
         node = CellRecipe(motif["name"], motif["category"])
-        node.embellishments = list(embellishments) if embellishments is not None else pick_embellishments(
-            motif, self.settings.complexity,
-            node_rng(ring_seed, ring_index, seq_pos, offset, position, "pick:emb"),
-        )
+        node.embellishments = list(embellishments) if embellishments is not None else self._embellishments(
+            motif, node_rng(ring_seed, ring_index, seq_pos, offset, position, "pick:emb"))
         if set(node.embellishments) & set(INTERIOR_FILLS):
             return node
         self._nest(node, motif, rng, ring_index, ring_seed, seq_pos, position,

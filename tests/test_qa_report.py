@@ -59,3 +59,17 @@ def test_run_one_counts_rings_and_drawn_embellishments(tmp_path):
     result = run_one((42, 4, 12, 0.85, ["botanical"], False, str(tmp_path), "never"))
     assert result["rings"] == 4
     assert sum(result["embellishments"].values()) >= 1, result["embellishments"]
+
+
+def test_run_one_forces_embellishments(tmp_path):
+    job = (42, 4, 12, 0.15, ["botanical"], False, str(tmp_path), "never", None, ("dot",))
+    result = run_one(job)
+    assert result["status"] == "PASS" and result["embellishments"].get("dot", 0) >= 1, result["embellishments"]
+
+
+def test_corpus_forces_embellishments_only_on_its_chosen_jobs():
+    from qa_report import CORPUS_EMBELLISHMENT_JOBS
+    jobs = corpus_jobs(out_dir="test_output", overlay_mode="never")
+    forced = [job for job in jobs if job[9]]
+    assert forced and all((job[4][0], job[3], job[0], job[5]) in CORPUS_EMBELLISHMENT_JOBS for job in forced)
+    assert len(jobs) == 180
