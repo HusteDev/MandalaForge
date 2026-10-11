@@ -17,6 +17,13 @@ body {
     min-height: 100vh;
 }
 
+/* body is a flex row, so without an explicit width #main-content shrinks to
+   its content: long debug-bar text would then widen the whole page. Pin it
+   to the viewport so the layout width never depends on what is displayed. */
+#main-content {
+    width: 100%;
+}
+
 .app-container {
     display: flex;
     flex-wrap: wrap;
@@ -24,6 +31,8 @@ body {
     padding: 2rem;
     width: 100%;
     max-width: 1400px;
+    margin: 0 auto;
+    box-sizing: border-box;
 }
 
 .controls-container {
@@ -352,7 +361,7 @@ button:disabled {
 }
 
 .mandala-container {
-    flex: 2;
+    flex: 2 1 0;
     min-width: 500px;
     height: 90vh;
     max-height: 90vh;
