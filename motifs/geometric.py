@@ -75,14 +75,18 @@ def generate_diamond(context: MotifContext) -> MotifInstance:
     return build_instance(context, [SmartVector(points, closed=True)])
 
 
-# The band's inner and outer arc radials, drawn from the ring stream; wider when the band carries beads.
-BAND_INNER_RANGE = (0.25, 0.45)
-BAND_OUTER_RANGE = (0.55, 0.75)
+# The band's inner and outer arc radials, drawn from the ring stream. A plain band's arcs sit near the ring's
+# edges, so the band fills its ring and its stems are short connectors rather than long spokes; a beaded band
+# keeps the ranges its beads were fitted to.
+BAND_INNER_RANGE = (0.08, 0.15)
+BAND_OUTER_RANGE = (0.85, 0.92)
 BEADED_BAND_INNER_RANGE = (0.12, 0.25)
 BEADED_BAND_OUTER_RANGE = (0.75, 0.88)
 LENS_STEPS = 8
-# The lens's half-width as a share of the angular budget, drawn from the ring stream.
-LENS_SHARE_RANGE = (0.2, 0.4)
+# The lens's half-width as a share of the angular budget, drawn from the ring stream: a fat lens on a plain band,
+# a narrower one on a beaded band so a bead has room in the face beside it.
+LENS_SHARE_RANGE = (0.3, 0.45)
+BEADED_LENS_SHARE_RANGE = (0.2, 0.4)
 
 
 def _lens_half_width(context: MotifContext, share: float, radial: float) -> float:
@@ -122,11 +126,11 @@ def generate_band(context: MotifContext) -> MotifInstance:
     require_full_budget(context, "band")
     ring = context.ring_rng
     # Every seam-deciding value comes from the ring stream, so every cell of the ring draws the same band.
-    # A beaded band draws the same values from wider ranges, so a row of beads has room between its arcs.
+    # A beaded band draws the same values, in the same order, from its own ranges, so a row of beads has room.
     beaded = "beads" in context.embellishments
     r1 = ring.uniform(*(BEADED_BAND_INNER_RANGE if beaded else BAND_INNER_RANGE))
     r2 = ring.uniform(*(BEADED_BAND_OUTER_RANGE if beaded else BAND_OUTER_RANGE))
-    share = ring.uniform(*LENS_SHARE_RANGE)
+    share = ring.uniform(*(BEADED_LENS_SHARE_RANGE if beaded else LENS_SHARE_RANGE))
 
     low, high = context.radial_limits
     r1, r2 = max(low, r1), min(high, r2)

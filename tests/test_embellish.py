@@ -313,21 +313,28 @@ def test_beads_are_the_same_in_every_cell(cell_kwargs):
 
 
 def test_beaded_band_draws_wider_arcs_from_the_same_draws(cell_kwargs):
+    # A plain band fills its ring (arcs near the ring edges, a fatter lens) so its stems are short connectors, not
+    # long spokes across empty space; a beaded band keeps its ranges, so its beads keep their room beside the lens.
     from motifs.geometric import (
         BAND_INNER_RANGE, BAND_OUTER_RANGE, BEADED_BAND_INNER_RANGE, BEADED_BAND_OUTER_RANGE,
+        LENS_SHARE_RANGE, BEADED_LENS_SHARE_RANGE,
     )
     assert (BEADED_BAND_INNER_RANGE, BEADED_BAND_OUTER_RANGE) == ((0.12, 0.25), (0.75, 0.88))
-    assert (BAND_INNER_RANGE, BAND_OUTER_RANGE) == ((0.25, 0.45), (0.55, 0.75))
+    assert (BAND_INNER_RANGE, BAND_OUTER_RANGE) == ((0.08, 0.15), (0.85, 0.92))
+    assert (LENS_SHARE_RANGE, BEADED_LENS_SHARE_RANGE) == ((0.3, 0.45), (0.2, 0.4))
     for ring in range(20):
         plain = find_motif("band")["generator"](make_ctx(cell_kwargs, 1, ring_stream_seed=ring))
         beaded = find_motif("band")["generator"](make_ctx(cell_kwargs, 1, ring_stream_seed=ring,
                                                           embellishments=("beads",)))
         (p1, p2), (b1, b2) = [(i.vectors[0].points[0].radial, i.vectors[1].points[0].radial) for i in (plain, beaded)]
-        assert 0.25 <= p1 <= 0.45 and 0.55 <= p2 <= 0.75
+        assert 0.08 <= p1 <= 0.15 and 0.85 <= p2 <= 0.92
         assert 0.12 <= b1 <= 0.25 and 0.75 <= b2 <= 0.88
-        # The same draws, in the same order: each radial sits at the same share of its range.
-        assert (b1 - 0.12) / 0.13 == pytest.approx((p1 - 0.25) / 0.2)
-        assert (b2 - 0.75) / 0.13 == pytest.approx((p2 - 0.55) / 0.2)
+        # The same draws, in the same order: each radial and the lens width sit at the same share of their ranges.
+        assert (b1 - 0.12) / 0.13 == pytest.approx((p1 - 0.08) / 0.07)
+        assert (b2 - 0.75) / 0.13 == pytest.approx((p2 - 0.85) / 0.07)
+        hp, hb = [max(p.angular for p in i.vectors[2].points) for i in (plain, beaded)]
+        assert 0.3 <= hp <= 0.45 and 0.2 <= hb <= 0.4
+        assert (hb - 0.2) / 0.2 == pytest.approx((hp - 0.3) / 0.15)
 
 
 def test_beads_draw_only_from_the_ring_stream(cell_kwargs):

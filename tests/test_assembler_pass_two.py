@@ -1,5 +1,6 @@
 from collections import Counter
 import math
+import pytest
 from shapely.geometry import LineString
 from assembler import Assembler, AssemblyError
 from composer import Composer, ComposerSettings, CellRecipe, CellEntry, RingPlan, DesignPlan
@@ -20,6 +21,17 @@ def validate(design):
 # draws a petal that dips 0.25 of a ring depth, as the revision-1 limit did, leaving a 6.9px gap above the band:
 # overflow clear of its neighbour, and a stem to draw across the gap.
 PETAL_LIMITS = (-0.5, 1.3)
+
+# These tests exercise reaches across the gap between ring 1's petals and ring 0's band, measured against a band
+# whose arcs sit mid-ring. A plain band now fills its ring (arcs at 0.08-0.15 and 0.85-0.92, from user feedback),
+# which leaves no gap on this 60px ring for a petal dip to clear, so the module keeps the band geometry the
+# scenarios were built on: the same draws, from the ranges a plain band used before.
+@pytest.fixture(autouse=True)
+def _mid_ring_band(monkeypatch):
+    from motifs import geometric
+    monkeypatch.setattr(geometric, "BAND_INNER_RANGE", (0.25, 0.45))
+    monkeypatch.setattr(geometric, "BAND_OUTER_RANGE", (0.55, 0.75))
+    monkeypatch.setattr(geometric, "LENS_SHARE_RANGE", (0.2, 0.4))
 
 def shallow_plan(**kwargs):
     plan = manual_plan(**kwargs)

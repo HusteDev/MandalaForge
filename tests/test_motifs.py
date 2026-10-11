@@ -181,7 +181,7 @@ def test_band_arcs_are_constant_radial_in_their_ranges(cell_kwargs):
         arcs = [v for v in inst.vectors if not v.closed]
         assert len(arcs) == 2
         (r1,), (r2,) = ({p.radial for p in arc.points} for arc in arcs)
-        assert 0.25 <= r1 <= 0.45 and 0.55 <= r2 <= 0.75
+        assert 0.08 <= r1 <= 0.15 and 0.85 <= r2 <= 0.92
         for arc in arcs:
             assert arc.points[0].angular == -1.0 and arc.points[-1].angular == 1.0
 
