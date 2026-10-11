@@ -7,7 +7,9 @@ from typing import Dict, List, Optional
 
 from motifs.contract import Anatomy, MotifError, MotifInstance, build_instance, require_full_budget
 from motifs.embellish import apply_embellishments, holds_pen as _holds_pen
-from motifs.geometry import CellPoint, MotifContext, SmartVector, cubic_points, mirror_points, quad_points
+from motifs.geometry import (
+    CellPoint, MotifContext, SmartVector, cubic_points, mirror_points, page_arc_points, quad_points,
+)
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
 
 
@@ -149,6 +151,148 @@ def generate_band(context: MotifContext) -> MotifInstance:
                           dropped_embellishments=result.dropped)
 
 
+# The spike: a star point on a rounded cup. Its tip length is a share of the ring depth (past the outer
+# boundary, up to the outward overflow), and without side touch its base corners sit at a drawn radial and a
+# drawn share of the angular budget.
+SPIKE_LENGTH_RANGE = (0.95, 1.15)
+SPIKE_CORNER_RANGE = (0.08, 0.2)
+SPIKE_WIDTH_RANGE = (0.75, 1.0)
+# Each concave side is a cubic from a base corner to the tip. Its first control sits at the corner's angular,
+# so the side leaves the corner along the divider (smooth touch, spec 3.3), this share of the corner-to-tip
+# radial above it; kept small so the side turns inward at once and every sample stays inside the chord.
+SPIKE_LEAVE_RANGE = (0.01, 0.025)
+# The second control: its radial as a share of the corner-to-tip radial, and its angular as a share of the
+# corner's half-width. A lower angular share draws a deeper concave side and a finer tip. In shares of the
+# corner-to-tip run, the side at parameter t lies inside the chord exactly when
+# `(1 - t) * leave / t + waist + pinch < 1`, so the first sample (t = 1/8) holds it for every draw:
+# 7 * 0.025 + 0.5 + 0.3 = 0.975.
+SPIKE_WAIST_RANGE = (0.3, 0.5)
+SPIKE_PINCH_RANGE = (0.15, 0.3)
+# The cup below the corners leaves the base vertex across the axis, its control this share of the half-width
+# out, and arrives at the corner along the divider, its control this share of the cup's height below it.
+SPIKE_CUP_SPREAD = 0.3
+SPIKE_CUP_RISE = 0.8
+SPIKE_STEPS = 8
+
+
+def _spike(base: float, corner: float, width: float, tip: float, leave: float, waist: float,
+           pinch: float) -> List[CellPoint]:
+    """
+    A closed, mirror-symmetric spike: the base vertex `(base, 0)`, a cup out to the corner `(corner, width)`,
+    a concave side to the sharp tip `(tip, 0)`, and the left side back. Both controls next to each corner
+    sit at the corner's angular, so the outline runs along the divider there.
+    """
+    rise, run = corner - base, tip - corner
+    cup = cubic_points(
+        CellPoint(base, 0.0), CellPoint(base, width * SPIKE_CUP_SPREAD),
+        CellPoint(corner - rise * SPIKE_CUP_RISE, width), CellPoint(corner, width), SPIKE_STEPS,
+    )
+    side = cubic_points(
+        CellPoint(corner, width), CellPoint(corner + run * leave, width),
+        CellPoint(corner + run * waist, width * pinch), CellPoint(tip, 0.0), SPIKE_STEPS,
+    )
+    right = cup + side[1:]
+    return right + mirror_points(right)[1:-1][::-1]
+
+
+def generate_spike(context: MotifContext) -> MotifInstance:
+    rng = context.rng
+    # Every parameter is drawn before any limit is applied, whether side touch uses the corner draws or not.
+    length = rng.uniform(*SPIKE_LENGTH_RANGE)
+    corner = rng.uniform(*SPIKE_CORNER_RANGE)
+    width = context.angular_limits * rng.uniform(*SPIKE_WIDTH_RANGE)
+    leave = rng.uniform(*SPIKE_LEAVE_RANGE)
+    waist = rng.uniform(*SPIKE_WAIST_RANGE)
+    pinch = rng.uniform(*SPIKE_PINCH_RANGE)
+
+    low, high = context.radial_limits
+    base = max(low, 0.0)
+    if context.side_touch_radial is not None and not context.slot:
+        # The base corners are the side-touch vertices: the spike is widest there, at the full budget.
+        corner, width = context.side_touch_radial, context.angular_limits
+    tip = min(high, length)
+    if not base < corner < tip:
+        raise MotifError("spike does not fit its radial limits")
+    points = _spike(base, corner, width, tip, leave, waist, pinch)
+    anatomy = Anatomy(base=points[0], tip=points[2 * SPIKE_STEPS], outline=0)
+    result = apply_embellishments(context, [SmartVector(points, closed=True)], anatomy, points)
+    return build_instance(
+        context, result.vectors, slot_outline=result.slot_outline, anatomy=anatomy,
+        dropped_embellishments=result.dropped, slot_outline_weight=result.slot_outline_weight,
+    )
+
+
+# The bead without side touch (an overflow or stem ring): its centre radial and its radius as a share of the
+# largest that fits the budget and half the ring depth, drawn from the node stream.
+BEAD_CENTRE_RANGE = (0.35, 0.65)
+BEAD_SIZE_RANGE = (0.6, 0.95)
+# Samples per half outline: the top, the angular extreme and the bottom are always vertices.
+BEAD_HALF_STEPS = 12
+
+
+def _bead_outline(context: MotifContext, centre: float, half_width: float, along_px: float) -> List[CellPoint]:
+    """
+    A closed, mirror-symmetric bead centred on `(centre, 0)`, `half_width` across in angular units and
+    `along_px` from the centre to the top and the bottom. When `along_px` is the across radius in pixels it
+    is `page_circle_points`' circle, round on the page; a smaller `along_px` squashes it into an oval with the
+    same ends. The ends `(centre, ±half_width)` are exact vertices, and the outline runs radially through them.
+    """
+    across_px = context.angular_to_px(half_width, centre)
+    if along_px == across_px:
+        right = page_arc_points(context, CellPoint(centre, 0.0), across_px, 0.0, 180.0, BEAD_HALF_STEPS)
+    else:
+        right = []
+        for index in range(BEAD_HALF_STEPS + 1):
+            theta = math.pi * index / BEAD_HALF_STEPS
+            right.append(CellPoint(centre + context.px_to_radial(along_px * math.cos(theta)),
+                                   half_width * math.sin(theta)))
+    along = context.px_to_radial(along_px)
+    quarter = BEAD_HALF_STEPS // 2
+    right[0], right[quarter], right[-1] = (
+        CellPoint(centre + along, 0.0), CellPoint(centre, half_width), CellPoint(centre - along, 0.0))
+    return right + mirror_points(right)[1:-1][::-1]
+
+
+def generate_bead(context: MotifContext) -> MotifInstance:
+    rng = context.rng
+    # Every parameter is drawn before the slot or the limits are looked at, whichever branch draws.
+    centre = rng.uniform(*BEAD_CENTRE_RANGE)
+    size = rng.uniform(*BEAD_SIZE_RANGE)
+    low, high = context.radial_limits
+
+    if context.slot:
+        # A slot child is the largest true circle the slot polygon contains.
+        box = fit_slot_box(context, "bead")
+        mid = box.radial_mid
+        radius_px = min(context.radial_to_px(box.radial_max - box.radial_min) / 2.0,
+                        context.angular_to_px(box.half_width, mid))
+
+        def build(scale: float) -> List[CellPoint]:
+            return _bead_outline(context, mid, context.px_to_angular(radius_px * scale, mid), radius_px * scale)
+
+        points = fit_inside_slot(context, "bead", build)
+    elif context.side_touch_radial is not None:
+        # The horizontal diameter's ends are the side-touch vertices; a circle when it fits the radial limits,
+        # else an oval with the same ends, squashed radially to fit.
+        centre = context.side_touch_radial
+        across_px = context.angular_to_px(context.angular_limits, centre)
+        along_px = min(across_px, context.radial_to_px(centre - low), context.radial_to_px(high - centre))
+        if not low < centre < high or along_px <= 0.0:
+            raise MotifError("bead does not fit its radial limits")
+        points = _bead_outline(context, centre, context.angular_limits, along_px)
+    else:
+        if not low < centre < high:
+            raise MotifError("bead does not fit its radial limits")
+        largest_px = min(context.angular_to_px(context.angular_limits, centre), context.ring_depth / 2.0)
+        radius_px = min(largest_px * size, context.radial_to_px(centre - low), context.radial_to_px(high - centre))
+        points = _bead_outline(context, centre, context.px_to_angular(radius_px, centre), radius_px)
+    if not _holds_pen(context, points):
+        raise MotifError("bead is too small to colour")
+    anatomy = Anatomy(base=points[BEAD_HALF_STEPS], tip=points[0], outline=0)
+    result = apply_embellishments(context, [SmartVector(points, closed=True)], anatomy, None)
+    return build_instance(context, result.vectors, anatomy=anatomy, dropped_embellishments=result.dropped)
+
+
 GEOMETRIC_MOTIFS: List[Dict] = [
     {
         "name": "diamond",
@@ -183,5 +327,39 @@ GEOMETRIC_MOTIFS: List[Dict] = [
         "max_overflow_inward": 0.0,
         "max_overflow_outward": 0.0,
         "slot_estimate": None,
+    },
+    {
+        "name": "bead",
+        "category": "geometric",
+        "generator": generate_bead,
+        "positions": ["divider"],
+        "roles": ["base", "slot"],
+        "touch": True,
+        "side_touch_heights": ("base", "mid"),
+        "seams": False,
+        "embellishments": ("echo",),
+        "spans_cell": False,
+        "min_cell_width_px": 10.0,
+        "min_ring_depth_px": 10.0,
+        "max_overflow_inward": 0.0,
+        "max_overflow_outward": 0.2,
+        "slot_estimate": None,
+    },
+    {
+        "name": "spike",
+        "category": "geometric",
+        "generator": generate_spike,
+        "positions": ["centre", "divider"],
+        "roles": ["base", "back"],
+        "touch": True,
+        "side_touch_heights": ("base",),
+        "seams": False,
+        "embellishments": ("echo", "fan"),
+        "spans_cell": False,
+        "min_cell_width_px": 14.0,
+        "min_ring_depth_px": 18.0,
+        "max_overflow_inward": 0.0,
+        "max_overflow_outward": 0.2,
+        "slot_estimate": (0.4, 0.4),
     },
 ]
