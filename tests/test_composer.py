@@ -88,12 +88,14 @@ def test_force_motif_disables_fallback_but_keeps_the_stem_repair():
     assert node.motif == "petal" and len(node.attachments) == 1
 
 def test_style_weights_categories_instead_of_filtering_them():
-    # Composer seed 2 gives ring 0 a scallop, so the variety filter leaves band allowed in ring 1.
+    # Ring 0 is always a seam ring, so ring 1 avoids band; ring 2 sits on a non-seam ring 1 (composer seed 2), so
+    # the variety filter leaves band allowed there.
     c = Composer(2, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
     c.style = {"categories": ["botanical"], "positions": "centre"}
+    assert not set(c._inward_base_names(2)) & SEAM_NAMES
     bases = set()
     for ring_seed in range(30):
-        for e in c.plan_ring(1, ring_seed).sequence:
+        for e in c.plan_ring(2, ring_seed).sequence:
             for node in (e.centre, e.divider):
                 if node is not None:
                     bases.add(node.motif)
@@ -802,3 +804,75 @@ def test_no_forced_embellishments_leaves_the_plan_unchanged():
 def test_forced_embellishments_are_validated(bad):
     with pytest.raises(ValueError):
         Composer(1, GEOM, ComposerSettings(force_embellishments=bad))
+
+
+# ----- seam rings never stack (user feedback: bands joined by spokes look mechanical) -----
+
+def _has_seam_base(ring):
+    return any((find_motif(n.motif) or {}).get("seams", False) for n in _base_nodes(ring))
+
+
+def test_a_ring_after_a_seam_ring_plans_no_seam_base():
+    seen = 0
+    for seed in range(60):
+        for vary in (False, True):
+            for complexity in (0.3, 0.9):
+                p = Composer(seed, GEOM, ComposerSettings(complexity=complexity, vary_divisions=vary,
+                                                          categories=["botanical", "geometric"])).plan()
+                for inner, outer in zip(p.rings, p.rings[1:]):
+                    if _has_seam_base(inner):
+                        seen += 1
+                        assert not _has_seam_base(outer), (seed, vary, complexity, outer.ring_index)
+    assert seen > 100  # ring 0 is a seam ring in every plan, so the rule is exercised
+
+
+def test_ring_zero_still_gets_a_spans_cell_seam_base():
+    for seed in range(20):
+        p = plan_for(seed)
+        assert _has_seam_base(p.rings[0]) and not any(n.is_fallback for n in _base_nodes(p.rings[0]))
+
+
+def test_substitute_avoids_a_seam_base_beside_a_seam_ring():
+    from composer import CellEntry
+    c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
+    plan = c.plan()
+    assert _has_seam_base(plan.rings[0])
+    ring = plan.rings[1]
+    ring.sequence = [CellEntry(CellRecipe("petal", "botanical"), None)]
+    ring.contact_mode, ring.touch_height, ring.back, ring.centre_share = "side", "mid", None, 1.0
+    picked = []
+    while c.replace_node(ring, 0, "centre", "generation") and not ring.sequence[0].centre.is_fallback:
+        picked.append(ring.sequence[0].centre.motif)
+    assert picked and not set(picked) & SEAM_NAMES
+    assert ring.sequence[0].centre.is_fallback
+
+
+def test_substitute_avoids_a_seam_base_inside_a_seam_ring():
+    # The outward neighbour counts too: a ring under a seam ring never substitutes a seam motif.
+    from composer import CellEntry
+    c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
+    plan = c.plan()
+    outer = plan.rings[2]
+    outer.sequence = [CellEntry(CellRecipe("scallop", "botanical"), None)]
+    ring = plan.rings[1]
+    ring.sequence = [CellEntry(CellRecipe("petal", "botanical"), None)]
+    ring.contact_mode, ring.touch_height, ring.back, ring.centre_share = "side", "mid", None, 1.0
+    plan.rings[0].sequence = [CellEntry(CellRecipe("petal", "botanical"), None)]
+    picked = []
+    while c.replace_node(ring, 0, "centre", "generation") and not ring.sequence[0].centre.is_fallback:
+        picked.append(ring.sequence[0].centre.motif)
+    assert picked and not set(picked) & SEAM_NAMES
+
+
+def test_substitute_prefers_a_base_its_neighbours_do_not_use():
+    from composer import CellEntry
+    c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
+    plan = c.plan()
+    plan.rings[0].sequence = [CellEntry(CellRecipe("leaf", "botanical"), None)]
+    plan.rings[2].sequence = [CellEntry(CellRecipe("leaf", "botanical"), None)]
+    ring = plan.rings[1]
+    ring.sequence = [CellEntry(CellRecipe("band", "geometric"), None)]
+    ring.contact_mode, ring.touch_height, ring.back, ring.centre_share = "side", "mid", None, 1.0
+    assert c.replace_node(ring, 0, "centre", "generation") is True
+    # band was tried; leaf is used by both neighbours; scallop is a seam, still allowed (no seam neighbour).
+    assert ring.sequence[0].centre.motif in {"petal", "scallop"}

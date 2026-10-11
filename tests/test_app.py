@@ -97,7 +97,8 @@ def _has_seam_motif(ring):
                for e in ring["sequence"] for n in (e["centre"], e["divider"]) if n)
 
 
-@pytest.mark.parametrize("seed, ring_index, ring_seed, kind", [(22, 2, 9, "layered"), (20, 1, 5, "seam")])
+# The seam case regenerates ring 2: ring 1 sits on ring 0, always a seam ring, so it never takes a seam motif.
+@pytest.mark.parametrize("seed, ring_index, ring_seed, kind", [(22, 2, 9, "layered"), (20, 2, 5, "seam")])
 def test_regenerate_ring_with_a_new_ring_seed_keeps_seams_meeting(client, seed, ring_index, ring_seed, kind):
     # Every cell of the regenerated ring takes the new ring stream together: a back layer's halves and a seam
     # motif's ends still meet across every divider, so nothing dangles and the design validates.

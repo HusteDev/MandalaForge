@@ -26,8 +26,10 @@ def test_max_min_pattern_size_drops_nesting_silently():
     assert g.last_validation_result.is_valid
 
 def test_regenerate_ring_changes_neighbour_reaches_not_plan():
-    # Seed 7: ring 3 has stems (re-baselined from seed 1 when the layered mode joined the mode draw, Task 12).
-    g = gen(seed=7); g.generate()
+    # Seed 11: ring 3 has stems (re-baselined from seed 1 when the layered mode joined the mode draw, Task 12, then
+    # from seed 7 when seam rings stopped stacking: seed 7's ring 2 became a band, so ring 3 got a repair stem that
+    # a regenerated ring 2 no longer needs).
+    g = gen(seed=11); g.generate()
     before_plan = g.plan.rings[3]
     before_reaches = [r.coords for r in g.assembled.reaches if r.ring_index == 3]
     frag = g.generate_ring_fragment(2, 999)
@@ -217,8 +219,9 @@ def test_base_symmetry_one_still_gets_three_inward_contacts_per_ring():
     # the band between rings could be one face running round the centre. Ring 1's stem sits on the first of its
     # three sequence entries, so the contacts are spaced among the four cells holding it. (Seed 11: since band and
     # scallop became seam motifs, whose rings get a stem in every cell, seed 20260821 no longer plans a
-    # once-per-wedge stem on a three-entry ring.)
-    g = DesignGenerator(seed=11, ring_divisions=[7, 12], complexity=0.5, min_pattern_size=10,
+    # once-per-wedge stem on a three-entry ring. Seed 237: since a ring beside a seam ring takes no seam motif,
+    # seed 11's ring 1 no longer has three entries.)
+    g = DesignGenerator(seed=237, ring_divisions=[7, 12], complexity=0.5, min_pattern_size=10,
                         categories=["botanical", "geometric"])
     g.generate()
     report = g.last_validation_result

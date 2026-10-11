@@ -340,6 +340,8 @@ class Composer:
         self._style: Optional[Dict[str, Any]] = None
         self._symmetry: Optional[int] = None
         self._canonical_names: Dict[int, Tuple[str, ...]] = {}
+        # The rings of the last plan, which a substitute reads its neighbours' current bases from.
+        self._live_rings: Dict[int, RingPlan] = {}
         self._tried: Dict[Tuple[int, int, int, str], List[str]] = {}
 
     # ------------------------------------------------------------------ public
@@ -416,6 +418,7 @@ class Composer:
             self.plan_ring(i, ring_seeds.get(i, self.seed))
             for i in range(len(self.ring_geometry))
         ]
+        self._live_rings = {ring.ring_index: ring for ring in rings}
         style = {**self.style, "categories": list(self.style["categories"])}
         return DesignPlan(self.seed, style, rings, symmetry)
 
@@ -540,11 +543,11 @@ class Composer:
         layered = ring.back is not None
         allow_seams = mode != "both" and not layered and (seam_position or len(ring.sequence) == 1)
 
-        candidates = [
+        candidates = self._avoiding(ring.ring_index, [
             c for c in self._base_candidates(ring.ring_index, position, cell_width, ring_depth, allow_seams)
             if c["name"] not in tried and (not side_only or ring.touch_height in touch_heights_of(c))
             and (not layered or "base" in touch_heights_of(c))
-        ]
+        ], self._neighbour_base_names(ring.ring_index))
         if not candidates:
             return False
         offset = 3 * len(tried)
@@ -690,6 +693,33 @@ class Composer:
             self.plan_ring(inner, self.seed)  # records the canonical names as it plans
         return self._canonical_names[inner]
 
+    def _neighbour_base_names(self, ring_index: int) -> Tuple[str, ...]:
+        """
+        Base names of the rings either side, for a substitute: their current bases when the composer planned
+        them in its last `plan`, else the canonical names it recorded, else none.
+        """
+        names: set = set()
+        for k in (ring_index - 1, ring_index + 1):
+            if k in self._live_rings:
+                names.update(self._base_names(self._live_rings[k]))
+            else:
+                names.update(self._canonical_names.get(k, ()))
+        return tuple(sorted(names))
+
+    @staticmethod
+    def _avoiding(ring_index: int, candidates: List[Dict], avoid) -> List[Dict]:
+        """
+        The avoid rule. Beside a seam ring (a band or scallop), no seam motif is a candidate, even when that
+        leaves none (the caller then takes its safe path): two seam rings in a row read as a stack of
+        mechanical bands. A motif a neighbour uses is avoided only while another candidate is left. Ring 0
+        avoids nothing: it needs a spans_cell base, and those are the seam motifs.
+        """
+        if ring_index == 0:
+            return candidates
+        if any((find_motif(name) or {}).get("seams", False) for name in avoid):
+            candidates = [c for c in candidates if not c.get("seams", False)]
+        return [c for c in candidates if c["name"] not in avoid] or candidates
+
     # ------------------------------------------------------------ node building
 
     @staticmethod
@@ -719,7 +749,7 @@ class Composer:
         else:
             candidates = self._base_candidates(ring_index, position, cell_width, ring_depth, allow_seams)
         if ring_index > 0:
-            candidates = [c for c in candidates if c["name"] not in avoid] or candidates
+            candidates = self._avoiding(ring_index, candidates, avoid)
         if not candidates:
             safe = safe_motif(self.settings.categories[0])
             return CellRecipe(safe["name"], safe["category"], is_fallback=True)
