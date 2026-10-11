@@ -565,6 +565,23 @@ def max_turn_deg(context: MotifContext, points: List[CellPoint], closed: bool, s
     return worst
 
 
+def turn_at(context: MotifContext, points: List[CellPoint], index: int) -> float:
+    """
+    The page-space turning angle, in degrees, at the vertex `points[index]` of a closed outline (indices
+    wrap): the angle between the traced piece arriving at the vertex and the traced piece leaving it, each
+    the last or first subdivision `polyline` draws, as `max_turn_deg` reads it. 0 is straight on.
+    """
+    count = len(points)
+    here = points[index % count]
+    before = next((points[(index - k) % count] for k in range(1, count) if points[(index - k) % count] != here), here)
+    after = next((points[(index + k) % count] for k in range(1, count) if points[(index + k) % count] != here), here)
+    arriving = context.polyline(SmartVector([before, here]))
+    leaving = context.polyline(SmartVector([here, after]))
+    incoming = (arriving[-1][0] - arriving[-2][0], arriving[-1][1] - arriving[-2][1])
+    outgoing = (leaving[1][0] - leaving[0][0], leaving[1][1] - leaving[0][1])
+    return _angle_between_deg(incoming, outgoing)
+
+
 def _deterministic(entry, **over):
     first, second = _generate(entry, 11, **over), _generate(entry, 11, **over)
     return ([(v.points, v.closed, v.weight) for v in first.vectors]
