@@ -59,6 +59,14 @@ def test_regenerated_ring_widths_replay_from_ring_seeds():
     assert _widths(replay) == _widths(g)
     assert replay.generate() == g.generate()
 
+def test_a_slightly_shallower_leaf_ring_keeps_its_side_veins():
+    # Regenerating ring 3 narrows ring 2's leaves from 77 to 60 px; the face above the highest vein then
+    # missed its clearance by 0.05 px and the leaves fell from 4 vein pairs to 1. Lowering the highest vein
+    # keeps 3 pairs (leaf, stem, midrib and 6 side veins per cell).
+    g = gen(seed=11, ring_divisions=None, num_divisions=12, complexity=0.5, ring_seeds={3: 202}); g.generate()
+    assert sum(1 for path in g.assembled.paths if path.ring_index == 2) >= 12 * 8
+    assert g.last_validation_result.is_valid
+
 def test_validation_summary_shape():
     g = gen(); g.generate()
     assert set(g.validation_summary()) == {"is_valid", "issue_count", "tiny_region_count", "dangling_end_count",
