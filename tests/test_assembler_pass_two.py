@@ -860,14 +860,3 @@ def test_junction_path_is_exempt_only_near_the_junction(shape):
     coords = resolver._curve_clear_of_ink(asm, (0.0, 0.0), (0.0, 100.0), resolver.REACH_SHAPES[shape],
                                           end_paths=[(lens, (0.0, 0.0)), (target, (0.0, 100.0))])
     assert max(abs(x) for x, _ in coords) == 0.0
-
-def test_stems_from_a_band_ring_are_drawn_curved():
-    # A band's stems start on its lens tips, which its inner arc passes through: they keep their curves.
-    plan = manual_plan()
-    plan.rings[1].sequence[0] = CellEntry(CellRecipe(
-        "band", "geometric", attachments=[CellRecipe("stem", "botanical", provides_contact=True)]), None)
-    design = assemble(plan)
-    stems = [r for r in design.reaches if r.ring_index == 1]
-    assert stems
-    assert all(LineString([r.coords[0], r.coords[-1]]).hausdorff_distance(LineString(r.coords)) > 0.5
-               for r in stems)

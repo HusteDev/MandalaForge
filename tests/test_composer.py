@@ -865,14 +865,51 @@ def test_substitute_avoids_a_seam_base_inside_a_seam_ring():
 
 
 def test_substitute_prefers_a_base_its_neighbours_do_not_use():
+    # The base both neighbours use is avoided while another candidate is left, whatever the ring seed.
     from composer import CellEntry
     c = Composer(1, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
     plan = c.plan()
-    plan.rings[0].sequence = [CellEntry(CellRecipe("leaf", "botanical"), None)]
-    plan.rings[2].sequence = [CellEntry(CellRecipe("leaf", "botanical"), None)]
     ring = plan.rings[1]
-    ring.sequence = [CellEntry(CellRecipe("band", "geometric"), None)]
-    ring.contact_mode, ring.touch_height, ring.back, ring.centre_share = "side", "mid", None, 1.0
-    assert c.replace_node(ring, 0, "centre", "generation") is True
-    # band was tried; leaf is used by both neighbours; scallop is a seam, still allowed (no seam neighbour).
-    assert ring.sequence[0].centre.motif in {"petal", "scallop"}
+    for used, current in (("leaf", "band"), ("petal", "leaf")):
+        category = find_motif(used)["category"]
+        plan.rings[0].sequence = [CellEntry(CellRecipe(used, category), None)]
+        plan.rings[2].sequence = [CellEntry(CellRecipe(used, category), None)]
+        picked = set()
+        for ring_seed in range(1000, 1012):
+            ring.ring_seed = ring_seed
+            ring.sequence = [CellEntry(CellRecipe(current, find_motif(current)["category"]), None)]
+            ring.contact_mode, ring.touch_height, ring.back, ring.centre_share = "side", "mid", None, 1.0
+            assert c.replace_node(ring, 0, "centre", "generation") is True
+            picked.add(ring.sequence[0].centre.motif)
+        assert used not in picked and current not in picked, (used, picked)
+
+
+# ----- regenerated rings look outward too (a regeneration never stacks under a canonical seam ring) -----
+
+def _stacked(plan):
+    return [(a.ring_index, b.ring_index) for a, b in zip(plan.rings, plan.rings[1:])
+            if _has_seam_base(a) and _has_seam_base(b)]
+
+
+def test_regenerated_ring_never_takes_a_seam_base_under_a_canonical_seam_ring():
+    # Reported case: seed 11 with ring 2 regenerated (ring seed 1001) planned a band under the canonical band.
+    p = plan_for(11, ring_seeds={2: 1001})
+    assert _has_seam_base(p.rings[3])
+    assert not _has_seam_base(p.rings[2])
+    assert _stacked(p) == []
+
+
+def test_single_ring_regenerations_never_stack_seam_rings():
+    for seed in range(25):
+        for ring in range(len(GEOM)):
+            for k in range(9):
+                p = plan_for(seed, ring_seeds={ring: 1000 + k})
+                assert _stacked(p) == [], (seed, ring, 1000 + k)
+
+
+def test_regenerated_ring_plan_depends_only_on_the_design_seed_and_its_ring_seed():
+    # Looking outward reads only the canonical outer ring, so the other rings' seeds never leak in.
+    alone = plan_for(11, ring_seeds={2: 1001}).rings[2]
+    with_inner = plan_for(11, ring_seeds={1: 77, 2: 1001}).rings[2]
+    with_both = plan_for(11, ring_seeds={1: 77, 2: 1001, 3: 5}).rings[2]
+    assert alone.to_dict() == with_inner.to_dict() == with_both.to_dict()

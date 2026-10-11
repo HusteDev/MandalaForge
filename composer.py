@@ -429,6 +429,9 @@ class Composer:
         mode, centre_share = self._position_mode(ring_index, divisions, rng)
         cell_width, ring_depth = self._ring_metrics(ring_index, divisions)
         avoid = set(self._inward_base_names(ring_index))
+        # A regenerated ring also looks outward: the canonical ring there planned against the canonical ring
+        # here, not this regeneration, so only this ring can keep the two from stacking seam rings.
+        outward_seam = ring_seed != self.seed and self._outward_has_seam(ring_index)
         force = self.settings.force_motif if ring_index > 0 else None
         # A layered ring's fronts fill the centre position with the whole angular budget (spec 5.1).
         layered = mode == "layered"
@@ -454,7 +457,8 @@ class Composer:
                 # Only entry 0 may pick a seam motif, and never in `both` mode (spec 4.1).
                 nodes[position] = self._plan_node(
                     ring_index, ring_seed, s, position, width, ring_depth, avoid, force,
-                    allow_seams=(s == 0 and fill_mode != "both" and not layered), layered=layered,
+                    allow_seams=(s == 0 and fill_mode != "both" and not layered and not outward_seam),
+                    layered=layered,
                 )
             sequence.append(CellEntry(nodes["centre"], nodes["divider"]))
 
@@ -692,6 +696,19 @@ class Composer:
         if inner not in self._canonical_names:
             self.plan_ring(inner, self.seed)  # records the canonical names as it plans
         return self._canonical_names[inner]
+
+    def _outward_has_seam(self, ring_index: int) -> bool:
+        """
+        Whether the canonical (design-seed) ring just outside has a seam base. That ring looks only inward, at
+        the canonical ring here, so planning it never recurses back, and a regeneration's plan still depends
+        only on the design seed and its own ring seed. Ring 0 needs a seam base, so it never looks outward.
+        """
+        outer = ring_index + 1
+        if ring_index == 0 or outer >= len(self.ring_geometry):
+            return False
+        if outer not in self._canonical_names:
+            self.plan_ring(outer, self.seed)  # records the canonical names as it plans
+        return any((find_motif(name) or {}).get("seams", False) for name in self._canonical_names[outer])
 
     def _neighbour_base_names(self, ring_index: int) -> Tuple[str, ...]:
         """
