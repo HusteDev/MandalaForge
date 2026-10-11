@@ -417,25 +417,33 @@ document.addEventListener('DOMContentLoaded', () => {
     // GENERATE MANDALA
     // ==========================================================================
 
-    const generateMandala = async () => {
-        if (!validateCategories()) return;
-
-        const userInputSeed = seedInput.value.trim();
-
-        let seedForGeneration;
-        if (userInputSeed) {
-            seedForGeneration = userInputSeed;
-        } else if (activeSeed) {
-            seedForGeneration = activeSeed;
+    // restore: a saved design's {params, ringSeeds}. It is rebuilt from those exactly,
+    // ring regenerations included, instead of from the controls.
+    const generateMandala = async (restore = null) => {
+        let payload;
+        if (restore) {
+            payload = { ...restore.params };
         } else {
-            seedForGeneration = Math.floor(Math.random() * 1000000);
-        }
+            if (!validateCategories()) return;
 
-        const payload = buildGenerationPayload(seedForGeneration);
+            const userInputSeed = seedInput.value.trim();
+
+            let seedForGeneration;
+            if (userInputSeed) {
+                seedForGeneration = userInputSeed;
+            } else if (activeSeed) {
+                seedForGeneration = activeSeed;
+            } else {
+                seedForGeneration = Math.floor(Math.random() * 1000000);
+            }
+
+            payload = buildGenerationPayload(seedForGeneration);
+        }
         // A fresh design has no per-ring regenerations
         currentRingSeeds = {};
+        const requestBody = restore ? { ...payload, ring_seeds: restore.ringSeeds || {} } : payload;
 
-        console.log('Sending payload:', payload);
+        console.log('Sending payload:', requestBody);
         resetRingSelection();
         mandalaDesign.innerHTML = '<div class="loader">Generating...</div>';
 
@@ -443,7 +451,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch('/generate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
+                body: JSON.stringify(requestBody),
             });
 
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -581,23 +589,142 @@ document.addEventListener('DOMContentLoaded', () => {
     // GALLERY
     // ==========================================================================
 
-    // ring_seeds and plan let a restored design regenerate further rings without
-    // losing the ones regenerated before it was saved.
-    const saveToGallery = (svgContent, params, ringSeeds, plan) => {
+    const THUMBNAIL_SIZE = 320;
+
+    // A small JPEG of the whole design, drawn from the on-screen SVG. Resolves to a
+    // data URL, or null if the browser cannot rasterise it.
+    const createThumbnail = () => new Promise((resolve) => {
+        const currentSvg = mandalaDesign.querySelector('svg');
+        if (!currentSvg) {
+            resolve(null);
+            return;
+        }
+
+        const svgClone = currentSvg.cloneNode(true);
+        svgClone.querySelectorAll('.selected-ring').forEach(node => {
+            node.classList.remove('selected-ring');
+        });
+        svgClone.removeAttribute('style');
+        svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        // An <img> needs an intrinsic size; fall back to the viewBox when width/height are absent
+        const viewBox = (svgClone.getAttribute('viewBox') || '').split(/[\s,]+/).map(parseFloat);
+        let width = parseFloat(svgClone.getAttribute('width'));
+        let height = parseFloat(svgClone.getAttribute('height'));
+        if (!(width > 0 && height > 0)) {
+            width = viewBox[2] > 0 ? viewBox[2] : THUMBNAIL_SIZE;
+            height = viewBox[3] > 0 ? viewBox[3] : THUMBNAIL_SIZE;
+            svgClone.setAttribute('width', width);
+            svgClone.setAttribute('height', height);
+        }
+
+        const markup = new XMLSerializer().serializeToString(svgClone);
+        const url = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }));
+        const image = new Image();
+        image.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = THUMBNAIL_SIZE;
+            canvas.height = THUMBNAIL_SIZE;
+            const context = canvas.getContext('2d');
+            // JPEG has no transparency, so paint the paper white first
+            context.fillStyle = '#ffffff';
+            context.fillRect(0, 0, THUMBNAIL_SIZE, THUMBNAIL_SIZE);
+            const scale = Math.min(THUMBNAIL_SIZE / width, THUMBNAIL_SIZE / height);
+            const drawWidth = width * scale;
+            const drawHeight = height * scale;
+            context.drawImage(image, (THUMBNAIL_SIZE - drawWidth) / 2, (THUMBNAIL_SIZE - drawHeight) / 2, drawWidth, drawHeight);
+            URL.revokeObjectURL(url);
+            resolve(canvas.toDataURL('image/jpeg', 0.85));
+        };
+        image.onerror = () => {
+            URL.revokeObjectURL(url);
+            resolve(null);
+        };
+        image.src = url;
+    });
+
+    // Write the gallery, dropping the oldest entries if the browser's storage is full.
+    const persistGallery = () => {
+        while (true) {
+            try {
+                localStorage.setItem('mandalaGallery', JSON.stringify(galleryItems));
+                return;
+            } catch (err) {
+                if (galleryItems.length <= 1) {
+                    console.error('Could not store the saved designs:', err);
+                    return;
+                }
+                galleryItems = galleryItems.slice(0, -1);
+            }
+        }
+    };
+
+    // A saved design is its seed specs (params and ring_seeds) plus a JPEG thumbnail.
+    // The design itself is regenerated from the specs when it is opened again.
+    const saveToGallery = async (params, ringSeeds) => {
+        const thumbnail = await createThumbnail();
         const item = {
             id: Date.now(),
-            svg: svgContent,
+            thumbnail: thumbnail,
             params: params,
             ring_seeds: { ...(ringSeeds || {}) },
-            plan: plan || null,
             timestamp: new Date().toISOString()
         };
+        // Without a thumbnail keep the SVG so the entry still has a preview
+        if (!thumbnail) item.svg = getCleanCurrentSvgMarkup();
 
         galleryItems.unshift(item);
         if (galleryItems.length > 12) galleryItems = galleryItems.slice(0, 12);
 
-        localStorage.setItem('mandalaGallery', JSON.stringify(galleryItems));
+        persistGallery();
         renderGallery();
+    };
+
+    // Saved params in the shape /generate takes; older entries stored slider strings.
+    const normaliseSavedParams = (params) => ({
+        seed: params.seed,
+        num_rings: parseInt(params.num_rings, 10),
+        num_divisions: parseInt(params.num_divisions, 10),
+        complexity: parseFloat(params.complexity),
+        min_pattern_size: parseFloat(params.min_pattern_size),
+        categories: availableCategories(params.categories),
+        vary_divisions: !!params.vary_divisions
+    });
+
+    // Show a saved design's settings in the controls, so Generate and the pending
+    // indicators start from the restored design.
+    const applyParamsToControls = (params) => {
+        numRingsSlider.value = params.num_rings;
+        numDivisionsSlider.value = params.num_divisions;
+        complexitySlider.value = params.complexity;
+        minPatternSizeSlider.value = params.min_pattern_size;
+        catBotanical.checked = params.categories.includes('botanical');
+        catGeometric.checked = params.categories.includes('geometric');
+        catCeltic.checked = params.categories.includes('celtic');
+        catArtDeco.checked = params.categories.includes('art_deco');
+        catAbstract.checked = params.categories.includes('abstract');
+        varyDivisionsCheck.checked = params.vary_divisions;
+        seedInput.value = params.seed;
+        validateCategories();
+        sliderControls.forEach(control => {
+            control.valueDisplay.textContent = control.format(control.read());
+        });
+    };
+
+    const openSavedDesign = (item) => {
+        if (!item.params || item.params.seed === undefined || item.params.seed === null) {
+            // Nothing to regenerate from: show the stored picture as it was
+            if (!item.svg) return;
+            mandalaDesign.innerHTML = item.svg;
+            currentPlan = item.plan || null;
+            currentRingSeeds = { ...(item.ring_seeds || {}) };
+            prepareRingSelection();
+            return;
+        }
+
+        const params = normaliseSavedParams(item.params);
+        applyParamsToControls(params);
+        activeSeed = params.seed;
+        generateMandala({ params, ringSeeds: item.ring_seeds || {} });
     };
 
     const renderGallery = () => {
@@ -614,42 +741,33 @@ document.addEventListener('DOMContentLoaded', () => {
         galleryItems.forEach(item => {
             const galleryItem = document.createElement('div');
             galleryItem.className = 'gallery-item';
-            galleryItem.innerHTML = item.svg;
-            galleryItem.title = `Saved: ${new Date(item.timestamp).toLocaleString()}`;
-            galleryItem.addEventListener('click', () => {
-                mandalaDesign.innerHTML = item.svg;
-                if (item.params) {
-                    currentDesignParams = {
-                        seed: item.params.seed,
-                        num_rings: parseInt(item.params.num_rings),
-                        num_divisions: parseInt(item.params.num_divisions),
-                        complexity: parseFloat(item.params.complexity),
-                        min_pattern_size: parseFloat(item.params.min_pattern_size),
-                        categories: availableCategories(item.params.categories),
-                        vary_divisions: !!item.params.vary_divisions
-                    };
-                    // Entries saved before ring seeds were stored have neither field
-                    currentPlan = item.plan || null;
-                    currentRingSeeds = { ...(item.ring_seeds || {}) };
-                    activeSeed = currentDesignParams.seed;
-                    syncPendingParameterIndicators();
-                }
-                prepareRingSelection();
-            });
+            if (item.thumbnail) {
+                const image = document.createElement('img');
+                image.src = item.thumbnail;
+                image.alt = item.params ? `Saved design, seed ${item.params.seed}` : 'Saved design';
+                galleryItem.appendChild(image);
+            } else {
+                // Entries saved before thumbnails existed carry the full SVG
+                galleryItem.innerHTML = item.svg || '';
+            }
+            const seedNote = item.params ? `Seed ${item.params.seed}. ` : '';
+            galleryItem.title = `${seedNote}Saved: ${new Date(item.timestamp).toLocaleString()}`;
+            galleryItem.addEventListener('click', () => openSavedDesign(item));
             galleryGrid.appendChild(galleryItem);
         });
     };
 
     saveBtn.addEventListener('click', () => {
         if (mandalaDesign.querySelector('svg')) {
-            saveToGallery(getCleanCurrentSvgMarkup(), currentDesignParams || {
+            saveToGallery(currentDesignParams || {
                 seed: activeSeed,
                 num_rings: numRingsSlider.value,
                 num_divisions: numDivisionsSlider.value,
                 complexity: complexitySlider.value,
                 min_pattern_size: minPatternSizeSlider.value,
-                categories: getSelectedCategories()
-            }, currentRingSeeds, currentPlan);
+                categories: getSelectedCategories(),
+                vary_divisions: varyDivisionsCheck.checked
+            }, currentRingSeeds);
 
             // Visual feedback
             const originalText = saveBtn.textContent;
