@@ -38,6 +38,27 @@ def test_regenerate_ring_changes_neighbour_reaches_not_plan():
     assert frag["ring_seeds"] == {2: 999}
     assert "<svg" in frag["svg"] and '<g id="ring-0"' in frag["svg"]
 
+def _widths(g):
+    return [ring["outer_radius"] - ring["inner_radius"] for ring in g.rings]
+
+def test_regenerate_ring_repicks_its_width_and_keeps_the_overall_radius():
+    g = gen(seed=11); g.generate()
+    before = _widths(g)
+    outer = g.rings[-1]["outer_radius"]
+    g.generate_ring_fragment(3, 999)
+    after = _widths(g)
+    assert after[3] != before[3]
+    assert after[:2] == before[:2]                      # only the neighbour absorbs the change
+    assert abs(sum(after) - sum(before)) < 1e-6
+    assert g.rings[-1]["outer_radius"] == outer
+    assert all(w >= 0.5 * sum(after) / len(after) - 1e-9 for w in after)
+
+def test_regenerated_ring_widths_replay_from_ring_seeds():
+    g = gen(seed=11); g.generate_ring_fragment(1, 5); g.generate_ring_fragment(2, 9)
+    replay = gen(seed=11, ring_seeds={1: 5, 2: 9})
+    assert _widths(replay) == _widths(g)
+    assert replay.generate() == g.generate()
+
 def test_validation_summary_shape():
     g = gen(); g.generate()
     assert set(g.validation_summary()) == {"is_valid", "issue_count", "tiny_region_count", "dangling_end_count",

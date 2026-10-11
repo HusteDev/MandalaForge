@@ -18,6 +18,14 @@ from placement import PlacedPath
 from topology_validator import MIN_REGION_AREA_PX2, PEN_RADIUS_PX, TopologyReport, TopologyValidator
 
 
+# Width bounds for a regenerated ring, as fractions of the mean ring width.
+RING_WIDTH_MIN = 0.6
+RING_WIDTH_MAX = 1.5
+RING_WIDTH_FLOOR = 0.5          # no neighbour is squeezed below this
+RING_WIDTH_MIN_CHANGE = 0.15    # a re-picked width aims to differ by at least this much
+RING_WIDTH_DRAWS = 4
+
+
 class DesignGenerator:
     """
     Generates mandala-style coloring page designs.
@@ -100,6 +108,11 @@ class DesignGenerator:
         Ring spacing varies based on complexity:
         - Low complexity: even spacing
         - High complexity: variable spacing
+
+        A ring in ring_seeds was regenerated, so its width is re-picked from its
+        ring seed and its neighbours absorb the change; the inner and outer
+        radii of the whole design stay fixed. Recomputed from scratch on every
+        call, so the same seeds always give the same rings.
         """
         # Reserve space at center and edge
         min_radius = 15 + (self.complexity * 10)  # 15-25 based on complexity
@@ -107,23 +120,12 @@ class DesignGenerator:
 
         total_span = max_radius - min_radius
 
-        self.rings = []
-
         if self.complexity < 0.1:
             # Even spacing for low complexity
-            ring_width = total_span / self.num_rings
-            for i in range(self.num_rings):
-                inner_r = min_radius + (i * ring_width)
-                outer_r = min_radius + ((i + 1) * ring_width)
-                self.rings.append({
-                    'index': i,
-                    'inner_radius': inner_r,
-                    'outer_radius': outer_r,
-                    'is_first': i == 0,
-                    'is_last': i == self.num_rings - 1
-                })
+            widths = [total_span / self.num_rings] * self.num_rings
         else:
             # Variable spacing based on complexity
+            self.rng = random.Random(self.seed)
             weights = []
             for i in range(self.num_rings):
                 # More variation with higher complexity
@@ -133,25 +135,65 @@ class DesignGenerator:
 
             # Normalize weights
             total_weight = sum(weights)
-            normalized = [w / total_weight for w in weights]
+            widths = [total_span * w / total_weight for w in weights]
 
-            current_radius = min_radius
-            for i, weight in enumerate(normalized):
-                inner_r = current_radius
-                outer_r = current_radius + (total_span * weight)
-                self.rings.append({
-                    'index': i,
-                    'inner_radius': inner_r,
-                    'outer_radius': outer_r,
-                    'is_first': i == 0,
-                    'is_last': i == self.num_rings - 1
-                })
-                current_radius = outer_r
+        self._repick_regenerated_widths(widths, total_span)
+
+        self.rings = []
+        current_radius = min_radius
+        for i, width in enumerate(widths):
+            inner_r = current_radius
+            outer_r = max_radius if i == self.num_rings - 1 else current_radius + width
+            self.rings.append({
+                'index': i,
+                'inner_radius': inner_r,
+                'outer_radius': outer_r,
+                'is_first': i == 0,
+                'is_last': i == self.num_rings - 1
+            })
+            current_radius = outer_r
 
         # Log ring info
         for ring in self.rings:
             width = ring['outer_radius'] - ring['inner_radius']
             print(f"  Ring {ring['index']}: r={ring['inner_radius']:.1f}-{ring['outer_radius']:.1f} (width={width:.1f})")
+
+    def _repick_regenerated_widths(self, widths: list[float], total_span: float):
+        """
+        Re-pick the width of every regenerated ring, in ring order, in place.
+
+        The new width is drawn from the ring's own seed within 0.6x-1.5x the mean
+        ring width, and the adjacent rings shrink or grow to absorb the change,
+        none narrower than half the mean, so the total span is unchanged.
+        """
+        if self.num_rings < 2:
+            return
+        mean = total_span / self.num_rings
+        floor = RING_WIDTH_FLOOR * mean
+        for i in sorted(self.ring_seeds):
+            if not 0 <= i < self.num_rings:
+                continue
+            neighbours = [j for j in (i - 1, i + 1) if 0 <= j < self.num_rings]
+            spare = sum(widths[j] - floor for j in neighbours)
+            lo = RING_WIDTH_MIN * mean
+            hi = min(RING_WIDTH_MAX * mean, widths[i] + spare)
+            if hi <= lo:
+                continue
+            rng = random.Random(f"ring-width:{self.ring_seeds[i]}:{i}")
+            # Prefer a width that visibly differs from the current one.
+            target = max((rng.uniform(lo, hi) for _ in range(RING_WIDTH_DRAWS)),
+                         key=lambda w: min(abs(w - widths[i]), RING_WIDTH_MIN_CHANGE * mean))
+            delta = target - widths[i]
+            if delta > 0:
+                shares = [widths[j] - floor for j in neighbours]
+            else:
+                shares = [widths[j] for j in neighbours]
+            total_share = sum(shares)
+            if total_share <= 0:
+                continue
+            for j, share in zip(neighbours, shares):
+                widths[j] -= delta * share / total_share
+            widths[i] = target
 
     def _polar_to_cartesian(self, radius: float, angle_deg: float) -> tuple[float, float]:
         """Convert polar coordinates to cartesian (centered on canvas)."""
@@ -221,7 +263,8 @@ class DesignGenerator:
 
     def generate_ring_fragment(self, ring_index: int, ring_seed: int, validate: bool = True) -> dict[str, Any]:
         """
-        Re-plan one ring with its own seed and re-assemble the whole design.
+        Re-plan one ring with its own seed, re-pick its width (its neighbours
+        absorb the change) and re-assemble the whole design.
 
         The whole document is returned because a changed ring changes its
         neighbours' reaches and overflow resolution.
@@ -231,6 +274,7 @@ class DesignGenerator:
 
         print(f"\n=== REGENERATING RING {ring_index} ===")
         self.ring_seeds[ring_index] = ring_seed
+        self._calculate_rings()
         svg = self.generate(validate)
         return {
             'ring_index': ring_index,
