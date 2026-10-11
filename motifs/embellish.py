@@ -33,14 +33,15 @@ ECHO_TWO_AT = 0.6
 
 # Veins: side veins leave the midrib toward the tip at a drawn angle from it (page degrees); up to this many
 # mirrored pairs, as many as fit. The lowest start sits a drawn share of the midrib's length above its base,
-# the highest at VEIN_LAST_SHARE, the rest evenly between. When the face between the highest vein and the tip
-# is too narrow, the highest start steps down to each of VEIN_LAST_SHARE_FALLBACKS in turn before a pair is
-# given up, so a slightly shorter leaf keeps its veins instead of dropping to one pair.
+# the highest at VEIN_LAST_SHARE, the rest evenly between. When a set does not fit, the highest start steps
+# down through VEIN_LAST_SHARE_FALLBACKS, then the lowest drops to the bottom of VEIN_FIRST_RANGE and the
+# highest steps down again, before a pair is given up, so a shorter leaf keeps its veins spread along the
+# midrib instead of dropping to a single pair.
 VEIN_ANGLE_RANGE = (35.0, 50.0)
 MAX_VEIN_PAIRS = 4
 VEIN_FIRST_RANGE = (0.15, 0.3)
 VEIN_LAST_SHARE = 0.7
-VEIN_LAST_SHARE_FALLBACKS = (0.65, 0.6)
+VEIN_LAST_SHARE_FALLBACKS = (0.65, 0.6, 0.55, 0.5)
 # Fan: at least this many rays, or the fan is dropped; each piece of the hub arc between marks has this many steps.
 MIN_FAN_RAYS = 3
 FAN_ARC_STEPS = 6
@@ -181,7 +182,8 @@ def _veins(context: MotifContext, state: _State, anatomy: Anatomy, rng: random.R
     A midrib along the axis across the innermost ring of ink, from its base crossing to its tip crossing,
     plus mirrored pairs of detail side veins from points on the midrib toward the tip at a drawn 35 to 50
     degrees from it, each ending on that ring. As many pairs as fit, up to `MAX_VEIN_PAIRS`, the highest
-    start lowered through `VEIN_LAST_SHARE_FALLBACKS` before a pair is given up: consecutive
+    start lowered through `VEIN_LAST_SHARE_FALLBACKS` and the lowest dropped to the bottom of its range before a
+    pair is given up: consecutive
     starts at least a detail clearance apart along the midrib, and every face the veins make holding a pen
     with `min_white_space` of white across it somewhere.
     The midrib takes the ring's weight: outline on the host outline, detail inside an echo. Every end is a
@@ -200,12 +202,16 @@ def _veins(context: MotifContext, state: _State, anatomy: Anatomy, rng: random.R
     length_px = context.radial_to_px(tip.radial - base.radial)
     spacing = context.clearance_px("detail", "detail")
     polygon = _cell_polygon(ring.points)
+    lasts = (VEIN_LAST_SHARE,) + VEIN_LAST_SHARE_FALLBACKS
+    spans = [(first, last) for last in lasts]
+    if first > VEIN_FIRST_RANGE[0]:
+        spans += [(VEIN_FIRST_RANGE[0], last) for last in lasts]
     for pairs in range(MAX_VEIN_PAIRS, 0, -1):
-        for last in (VEIN_LAST_SHARE,) + VEIN_LAST_SHARE_FALLBACKS:
-            if last <= first or pairs > 1 and (last - first) * length_px / (pairs - 1) < spacing:
+        for low, high in spans:
+            if high <= low or pairs > 1 and (high - low) * length_px / (pairs - 1) < spacing:
                 continue
-            shares = ([(first + last) / 2.0] if pairs == 1 else
-                      [first + (last - first) * k / (pairs - 1) for k in range(pairs)])
+            shares = ([(low + high) / 2.0] if pairs == 1 else
+                      [low + (high - low) * k / (pairs - 1) for k in range(pairs)])
             drawn = _vein_set(context, ring, polygon, base, tip, shares, angle)
             if drawn is not None:
                 state.vectors[state.innermost] = drawn[0]

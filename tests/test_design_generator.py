@@ -67,6 +67,13 @@ def test_a_slightly_shallower_leaf_ring_keeps_its_side_veins():
     assert sum(1 for path in g.assembled.paths if path.ring_index == 2) >= 12 * 8
     assert g.last_validation_result.is_valid
 
+
+def test_a_much_shallower_leaf_ring_spreads_two_vein_pairs():
+    # Ring seed 101 narrows ring 2 to 45 px: no set ending at 70% fits, but starts from 15% to 50% hold two pairs.
+    g = gen(seed=11, ring_divisions=None, num_divisions=12, complexity=0.5, ring_seeds={3: 101}); g.generate()
+    assert sum(1 for path in g.assembled.paths if path.ring_index == 2) >= 12 * 6
+    assert g.last_validation_result.is_valid
+
 def test_validation_summary_shape():
     g = gen(); g.generate()
     assert set(g.validation_summary()) == {"is_valid", "issue_count", "tiny_region_count", "dangling_end_count",
