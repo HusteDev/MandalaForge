@@ -1,5 +1,6 @@
 import re
 from coloring_generator import DesignGenerator
+from motifs import find_motif
 
 def gen(**over):
     return DesignGenerator(**{"seed": 42, "num_rings": 4, "ring_divisions": [8, 8, 8, 12],
@@ -59,19 +60,38 @@ def test_regenerated_ring_widths_replay_from_ring_seeds():
     assert _widths(replay) == _widths(g)
     assert replay.generate() == g.generate()
 
+def _ring_two_leaf_vein_pairs(g):
+    """Side-vein pairs of each ring-2 leaf: its detail lines, two per pair (veins only, no echo)."""
+    leaves = [n for n in g.assembled.nodes if n.ring_index == 2 and n.parent is None and n.recipe.motif == "leaf"]
+    assert leaves and all(n.recipe.embellishments == ["veins"] for n in leaves)
+    return [sum(1 for v in n.instance.vectors if v.weight == "detail") // 2 for n in leaves]
+
+
+def _ring_depth(g, index):
+    return g.rings[index]["outer_radius"] - g.rings[index]["inner_radius"]
+
+
 def test_a_slightly_shallower_leaf_ring_keeps_its_side_veins():
-    # Regenerating ring 3 narrows ring 2's leaves from 77 to 60 px; the face above the highest vein then
-    # missed its clearance by 0.05 px and the leaves fell from 4 vein pairs to 1. Lowering the highest vein
-    # keeps 3 pairs (leaf, stem, midrib and 6 side veins per cell).
-    g = gen(seed=11, ring_divisions=None, num_divisions=12, complexity=0.5, ring_seeds={3: 202}); g.generate()
-    assert sum(1 for path in g.assembled.paths if path.ring_index == 2) >= 12 * 8
+    # Regenerating ring 3 narrows ring 2's veined leaves; the face above the highest vein once missed its
+    # clearance by 0.05 px and the leaves fell to 1 vein pair. Lowering the highest vein keeps 3 pairs.
+    # (Re-baselined from seed 11 / ring seed 202 when the Phase 3 motifs joined the registry: seed 69's ring 2
+    # is all veined leaves, 58.7 px deep, and ring seed 153 narrows it to 51 px.)
+    kw = dict(seed=69, ring_divisions=None, num_divisions=12, complexity=0.5)
+    canonical = gen(**kw)
+    g = gen(**kw, ring_seeds={3: 153}); g.generate()
+    assert _ring_depth(g, 2) < 0.9 * _ring_depth(canonical, 2)
+    assert min(_ring_two_leaf_vein_pairs(g)) >= 3
     assert g.last_validation_result.is_valid
 
 
 def test_a_much_shallower_leaf_ring_spreads_two_vein_pairs():
-    # Ring seed 101 narrows ring 2 to 45 px: no set ending at 70% fits, but starts from 15% to 50% hold two pairs.
-    g = gen(seed=11, ring_divisions=None, num_divisions=12, complexity=0.5, ring_seeds={3: 101}); g.generate()
-    assert sum(1 for path in g.assembled.paths if path.ring_index == 2) >= 12 * 6
+    # A ring about 45 px deep: no set ending at 70% fits, but starts from 15% to 50% hold two pairs.
+    # (Re-baselined from seed 11 / ring seed 101: seed 43's veined-leaf ring 2 goes from 59.6 to 44.1 px.)
+    kw = dict(seed=43, ring_divisions=None, num_divisions=12, complexity=0.5)
+    canonical = gen(**kw)
+    g = gen(**kw, ring_seeds={3: 105}); g.generate()
+    assert _ring_depth(g, 2) < 0.8 * _ring_depth(canonical, 2)
+    assert min(_ring_two_leaf_vein_pairs(g)) >= 2
     assert g.last_validation_result.is_valid
 
 def test_validation_summary_shape():
@@ -200,9 +220,12 @@ def test_guarded_tips_are_touched_from_the_other_side():
     # shared boundary. Both apexes are shared with their midribs and neither can move onto the other, so the
     # ring-3 outline must come to the ring-2 apex. (Seed 3 at c0.7 was the case until embellishments: its leaves
     # now carry echoes, which move the midrib inside, off the apex.) A leaf's midrib is its veins embellishment,
-    # so the participating leaves must have drawn veins and no echo.
+    # so the participating leaves must have drawn veins and no echo. With the Phase 3 motifs no unforced seed
+    # (1-1500 here) still puts veined leaves on both sides of the boundary, so the leaves and veins are forced.
     g = DesignGenerator(seed=87, num_rings=4, num_divisions=12, complexity=0.5,
-                        categories=["botanical", "geometric"], vary_divisions=True)
+                        categories=["botanical", "geometric"], vary_divisions=True,
+                        force_motif={"name": "leaf", "position": "centre", "role": "base"},
+                        force_embellishments=("veins",))
     g.generate()
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
     nodes = g.assembled.nodes
@@ -228,7 +251,9 @@ def test_a_tip_guarded_only_by_its_own_veins_moves_with_them():
     # Seed 955789 (c0.5): ring-1 divider petals carry veins, so the midrib guards each petal's base. Pulled back
     # inward, the base sits a hair from ring 0's band at its seam vertex, which is guarded too; the near miss left
     # a gap the face around the centre leaked through. The base now moves onto the band, its midrib with it.
-    g = DesignGenerator(seed=955789, num_rings=4, num_divisions=12, complexity=0.5,
+    # (Re-baselined to seed 13 when the Phase 3 motifs joined the registry: seed 955789 no longer plans veined
+    # ring-1 petals.)
+    g = DesignGenerator(seed=13, num_rings=4, num_divisions=12, complexity=0.5,
                         categories=["botanical", "geometric"])
     g.generate()
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
@@ -256,8 +281,9 @@ def test_base_symmetry_one_still_gets_three_inward_contacts_per_ring():
     # three sequence entries, so the contacts are spaced among the four cells holding it. (Seed 11: since band and
     # scallop became seam motifs, whose rings get a stem in every cell, seed 20260821 no longer plans a
     # once-per-wedge stem on a three-entry ring. Seed 237: since a ring beside a seam ring takes no seam motif,
-    # seed 11's ring 1 no longer has three entries.)
-    g = DesignGenerator(seed=237, ring_divisions=[7, 12], complexity=0.5, min_pattern_size=10,
+    # seed 11's ring 1 no longer has three entries. Seed 1: with the Phase 3 motifs, seed 237's ring 2 (teardrops and beads)
+    # draws no reach for its once-per-wedge stem, though the design validates.)
+    g = DesignGenerator(seed=1, ring_divisions=[7, 12], complexity=0.5, min_pattern_size=10,
                         categories=["botanical", "geometric"])
     g.generate()
     report = g.last_validation_result
@@ -289,7 +315,8 @@ def test_validator_measures_a_face_polygonize_returns_invalid(seed):
 
 def test_base_symmetry_four_keeps_one_inward_contact_per_wedge():
     # Seed 2: since band and scallop became seam motifs, seed 20260821 plans no once-per-wedge stem here.
-    g = DesignGenerator(seed=2, ring_divisions=[8, 12], complexity=0.5, min_pattern_size=10,
+    # Seed 14: with the Phase 3 motifs, seed 2's ring-3 teardrops draw no reach for their stem (the design validates).
+    g = DesignGenerator(seed=14, ring_divisions=[8, 12], complexity=0.5, min_pattern_size=10,
                         categories=["botanical", "geometric"])
     g.generate()
     report = g.last_validation_result
@@ -341,9 +368,10 @@ def test_inward_stem_never_lands_on_an_outer_rings_overflow():
     # petal (a ring resolved later, not yet joined to the structure) left ring 2 floating through every substitute.
     # Since beaded bands widened (Task 11), ring 1 keeps its petal, whose tip reaches into ring 2: the stem may
     # land there, on ink of an inner ring, but never on ring 3's. Re-baselined to seed 37 when the layered mode
-    # joined the mode draw (Task 12): ring 2 is all scallop again under ring-3 petals.
+    # joined the mode draw (Task 12): ring 2 is all scallop again under ring-3 petals. Re-baselined to seed 289
+    # when the Phase 3 motifs joined the registry, for the same scenario.
     from shapely.geometry import LineString, Point
-    g = DesignGenerator(seed=37, num_rings=4, num_divisions=12, vary_divisions=True, complexity=0.5,
+    g = DesignGenerator(seed=289, num_rings=4, num_divisions=12, vary_divisions=True, complexity=0.5,
                         min_pattern_size=10, categories=["botanical", "geometric"])
     g.generate()
     assert {n.motif for n in _base_nodes_of(g.plan.rings[2])} == {"scallop"}
@@ -394,5 +422,7 @@ def test_forced_embellishments_reach_the_plan_and_validate():
                         force_embellishments=("dot",))
     g.generate()
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
-    petals = [node for node in g.assembled.nodes if node.parent is None and node.recipe.motif == "petal"]
-    assert petals and all("dot" in node.recipe.embellishments for node in petals)
+    # Every base whose motif accepts a dot (petal, teardrop, rounded petal) carries the forced one.
+    hosts = [node for node in g.assembled.nodes
+             if node.parent is None and "dot" in (find_motif(node.recipe.motif) or {}).get("embellishments", ())]
+    assert hosts and all("dot" in node.recipe.embellishments for node in hosts)

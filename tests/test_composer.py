@@ -219,8 +219,13 @@ def test_botanical_geometric_rings_are_side_mode_with_one_stem_per_wedge():
             p = Composer(seed, GEOM, ComposerSettings(complexity=0.8, vary_divisions=vary,
                                                       categories=["botanical", "geometric"])).plan()
             for r in p.rings:
-                assert r.contact_mode == "side"
                 entries = [find_motif(n.motif) or safe_motif(n.category) for n in _base_nodes(r)]
+                if r.ring_index > 0 and not common_touch_heights(entries):
+                    # Phase 3 bases touch at one height only (spike: base; heart, curl: mid), so a ring mixing
+                    # them shares no height and falls back to overflow or stems (spec 3.2).
+                    assert r.contact_mode != "side"
+                    continue
+                assert r.contact_mode == "side"
                 stems = _stems_in_plan(r)
                 if r.ring_index > 0 and all(e["seams"] for e in entries):
                     # A seam ring's stems are per cell, one on every node.
@@ -326,7 +331,8 @@ def test_downgrade_from_side_mode_clears_once_per_wedge(monkeypatch):
     real = composer_module.find_motif
     def fake(name):
         entry = real(name)
-        if name == "petal":
+        # Every base but the leaf loses side touch, so any substitute for a leaf leaves side mode.
+        if entry is not None and name != "leaf" and not entry["seams"]:
             return {**entry, "side_touch_heights": ()}
         return entry
     monkeypatch.setattr(composer_module, "find_motif", fake)
@@ -336,8 +342,9 @@ def test_downgrade_from_side_mode_clears_once_per_wedge(monkeypatch):
     ring = RingPlan(1, 12, 1.0, seq, 1, contact_mode="side")
     assert seq[0].centre.attachments[0].once_per_wedge
     assert c.replace_node(ring, 1, "centre", "generation") is True
-    # Band is a seam motif, never a substitute in a two-entry sequence, so the only other base is petal.
-    assert ring.sequence[1].centre.motif == "petal"
+    # Band is a seam motif, never a substitute in a two-entry sequence, so the substitute is a non-touching base.
+    substitute = ring.sequence[1].centre.motif
+    assert substitute != "leaf" and not fake(substitute)["side_touch_heights"]
     assert ring.contact_mode == "stem"
     nodes = _base_nodes(ring)
     assert not any(a.once_per_wedge for n in nodes for a in n.attachments)
@@ -371,10 +378,13 @@ def test_floating_node_in_side_ring_tries_side_bases_before_a_stem():
         node = ring.sequence[0].centre
         if node is before or node.is_fallback:
             break
-        assert node.motif not in seen and node.motif in side_names
+        assert node.motif not in seen
         seen.append(node.motif)
-    assert set(seen) == side_names and len(seen) > 1
-    assert ring.contact_mode == "side"
+    # Every side base is tried before any other repair; after them, a non-touching base (spike, at base height
+    # only) may still be substituted, with a stem, before the safe band.
+    tried_side = seen[:len(side_names)]
+    assert set(tried_side) == side_names and len(tried_side) > 1
+    assert not set(seen[len(side_names):]) & side_names
 
 
 def test_unsalted_node_seed_is_unchanged():
@@ -447,6 +457,10 @@ def test_touch_height_is_drawn_from_the_common_heights_of_the_ring():
                                                       categories=["botanical", "geometric"])).plan()
             for r in p.rings:
                 entries = [find_motif(n.motif) or safe_motif(n.category) for n in _base_nodes(r)]
+                if r.ring_index > 0 and not common_touch_heights(entries):
+                    # Bases with no common height (spike beside a heart or curl) leave side mode (spec 3.2).
+                    assert r.contact_mode != "side"
+                    continue
                 assert r.contact_mode == "side" and r.touch_height in common_touch_heights(entries)
                 heights.add(r.touch_height)
     assert heights == {"base", "mid"}
@@ -487,7 +501,12 @@ def test_floating_node_in_base_height_ring_tries_only_base_capable_bases():
             assert c.replace_node(ring, 0, "centre", "floating") is True
             picked[height].add(ring.sequence[0].centre.motif)
             assert ring.contact_mode == "side" and ring.touch_height == height
-    assert picked == {"base": {"leaf", "band"}, "mid": {"leaf", "band"}}
+    # Each pick touches at the ring's height: the base-only spike appears only at base height, the mid-only heart
+    # only at mid height (the curl's gates exclude it from this cell).
+    assert picked == {"base": {"leaf", "band", "teardrop", "rounded_petal", "spike"},
+                      "mid": {"leaf", "band", "teardrop", "rounded_petal", "heart"}}
+    for height, names in picked.items():
+        assert all(height in touch_heights_of(find_motif(name)) for name in names)
 
 
 def test_substitute_that_loses_the_ring_height_leaves_side_mode():
@@ -560,8 +579,14 @@ def test_replace_node_on_a_seam_node_replaces_every_entry():
     assert len({id(e.centre) for e in ring.sequence}) == 3
 
 
-def test_replace_node_falls_back_in_every_entry_of_a_seam_position():
+def test_replace_node_falls_back_in_every_entry_of_a_seam_position(monkeypatch):
+    import composer as composer_module
     from composer import CellRecipe, CellEntry
+    # Geometric now has other bases (bead, spike); keep the registry of the original case, where the band has
+    # no substitute, so the repair has to fall back to the safe band.
+    real = composer_module.motifs_for_categories
+    monkeypatch.setattr(composer_module, "motifs_for_categories",
+                        lambda cats: [m for m in real(cats) if m["name"] not in ("bead", "spike")])
     c = Composer(1, GEOM, ComposerSettings(categories=["geometric"]))
     seq = [CellEntry(CellRecipe("band", "geometric"), None) for _ in range(2)]
     ring = RingPlan(1, 12, 1.0, seq, 1, contact_mode="side", touch_height="mid")

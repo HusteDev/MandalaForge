@@ -142,7 +142,8 @@ def test_regenerated_seam_ring_keeps_its_seams_meeting():
 
 def _fallback_scenario(monkeypatch, front_fails):
     """
-    Seed 1, forced layered, substitution disabled. Ring 1 (two sequence entries) reports its entry-0 cells
+    Seed 7 (seed 1 until the Phase 3 motifs, whose ring 1 now drops its back in pass one), forced layered,
+    substitution disabled. Ring 1 (two sequence entries) reports its entry-0 cells
     floating once, so pass two replaces that entry and places its cells again. With `front_fails` the entry-0
     front then fails to generate, so the replacement reaches the safe band through the generation path inside
     `replace_cells`; without it the floating path reaches it on its second round. The safe band drops the back.
@@ -182,7 +183,7 @@ def _fallback_scenario(monkeypatch, front_fails):
     monkeypatch.setattr(resolver, "floating_base_cells", floating)
     monkeypatch.setattr(layering, "compose_layered", compose)
     monkeypatch.setattr(assembler.Assembler, "replace_cells", replace_cells)
-    g = layered_design(seed=1)
+    g = layered_design(seed=7)
     g.generate()
     return g, half_dropped
 

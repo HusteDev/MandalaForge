@@ -346,7 +346,10 @@ def test_matrix_covers_each_accepted_embellishment_and_each_front_back_pair():
         for name in entry["embellishments"]:
             assert (entry["name"], ("emb", name)) in variants
     assert ("petal", ("back", "leaf")) in variants and ("leaf", ("back", "petal")) in variants
-    assert set(layered_pairs()) == {("petal", "petal"), ("petal", "leaf"), ("leaf", "petal"), ("leaf", "leaf")}
+    # Every non-seam base that touches at base height is a front; every back-role motif is a back.
+    fronts = {"petal", "leaf", "teardrop", "rounded_petal", "bead", "spike"}
+    backs = {"petal", "leaf", "teardrop", "rounded_petal", "spike"}
+    assert set(layered_pairs()) == {(front, back) for front in fronts for back in backs}
 
 
 def test_run_case_draws_a_forced_embellishment():

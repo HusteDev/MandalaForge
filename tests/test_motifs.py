@@ -27,8 +27,24 @@ def test_motif_is_deterministic(entry, cell_kwargs):
     b = generate(entry, make_ctx(cell_kwargs, 11), cell_kwargs)
     assert [v.points for v in a.vectors] == [v.points for v in b.vectors]
 
+def gated_cell(entry, cell_kwargs, budget):
+    """
+    The standard cell, or for a motif whose size gates scale with white space (the curl) a larger cell that
+    passes its gates at this angular budget, so the test exercises a cell the composer could give it.
+    """
+    from composer import size_gates
+    if "min_cell_width_clearances" not in entry and "min_ring_depth_clearances" not in entry:
+        return cell_kwargs
+    big = {**cell_kwargs, "inner_radius": 200.0, "outer_radius": 300.0, "wedge_angle": 60.0}
+    ctx = MotifContext(**big)
+    width, depth = size_gates(entry, ctx.clearance_px())
+    assert ctx.cell_width_px() * budget >= width and ctx.ring_depth >= depth
+    return big
+
+
 @pytest.mark.parametrize("entry", all_entries(), ids=lambda e: e["name"])
 def test_motif_respects_narrow_limits(entry, cell_kwargs):
+    cell_kwargs = gated_cell(entry, cell_kwargs, 0.5)
     ctx = make_ctx(cell_kwargs, 3, radial_limits=(0.0, 1.0), angular_limits=0.5)
     if entry["seams"]:
         # A seam motif needs the full angular budget (spec 4.1); it refuses a narrower one.
@@ -54,7 +70,7 @@ def test_declared_slot_is_present_at_default_size(entry, cell_kwargs):
 def test_registry_lookup():
     assert find_motif("petal")["category"] == "botanical"
     assert find_motif("nope") is None
-    assert {e["name"] for e in motifs_for_categories(["geometric"])} == {"diamond", "band"}
+    assert {e["name"] for e in motifs_for_categories(["geometric"])} == {"diamond", "band", "bead", "spike"}
     assert safe_motif("celtic")["name"] == "celtic_safe_band"
 
 def test_diamond_requires_slot(cell_kwargs):
@@ -287,9 +303,11 @@ def test_leaf_veins_are_dropped_outside_a_slot_when_the_halves_are_too_thin(cell
 # ----- revision 2: side touch and ring fill ---------------------------------
 
 def has_vertex(inst, radial, angular, tol=1e-9):
+    """Whether an outline vector carries the vertex: the closed outline, or either spiral of a curl."""
     return any(
         abs(p.radial - radial) <= tol and abs(p.angular - angular) <= tol
-        for p in inst.vectors[0].points
+        for v in inst.vectors if v.weight == "outline"
+        for p in v.points
     )
 
 
@@ -304,10 +322,16 @@ def test_registry_phase_one_touch_heights():
     assert declared == {
         "petal": ("base", "mid"), "leaf": ("base", "mid"), "scallop": (), "stem": (),
         "diamond": (), "band": (), "botanical_safe_band": ("mid",),
+        "teardrop": ("base", "mid"), "rounded_petal": ("base", "mid"), "heart": ("mid",), "curl": ("mid",),
+        "bead": ("base", "mid"), "spike": ("base",),
     }
     assert {e["name"] for e in all_entries() if e["seams"]} == {"band", "scallop"}
-    # Task 9 (spec 6.4): petal, leaf and band accept embellishments; every other entry accepts none.
-    accepted = {"petal": ("echo", "veins", "fan", "dot"), "leaf": ("echo", "veins"), "band": ("beads",)}
+    # Task 9 (spec 6.4) and Phase 3 (spec 7.3): the accepted embellishments; every other entry accepts none.
+    accepted = {
+        "petal": ("echo", "veins", "fan", "dot"), "leaf": ("echo", "veins"), "band": ("beads",),
+        "teardrop": ("echo", "dot"), "rounded_petal": ("echo", "veins", "fan", "dot"), "heart": ("echo",),
+        "bead": ("echo",), "spike": ("echo", "fan"),
+    }
     assert all(e["embellishments"] == accepted.get(e["name"], ()) for e in all_entries())
 
 
@@ -324,6 +348,7 @@ def test_side_touch_puts_vertices_at_the_side_touch_radial(name, cell_kwargs):
 
 @pytest.mark.parametrize("entry", [e for e in all_entries() if e["side_touch_heights"]], ids=lambda e: e["name"])
 def test_every_side_touch_entry_meets_the_budget_at_the_side_touch_radial(entry, cell_kwargs):
+    cell_kwargs = gated_cell(entry, cell_kwargs, 0.5)
     for seed in range(10):
         ctx = make_ctx(cell_kwargs, seed, complexity=1.0, angular_limits=0.5, side_touch_radial=0.5)
         inst = entry["generator"](ctx)
