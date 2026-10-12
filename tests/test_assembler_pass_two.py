@@ -860,3 +860,23 @@ def test_junction_path_is_exempt_only_near_the_junction(shape):
     coords = resolver._curve_clear_of_ink(asm, (0.0, 0.0), (0.0, 100.0), resolver.REACH_SHAPES[shape],
                                           end_paths=[(lens, (0.0, 0.0)), (target, (0.0, 100.0))])
     assert max(abs(x) for x, _ in coords) == 0.0
+
+
+def test_pull_back_search_treats_a_layered_probe_failure_as_crossing(monkeypatch):
+    # A probe on a layered composite can raise LayeredRingFailed (an AssemblyError); during the bisection that is
+    # a shape that crosses, not a failure of the design. Only the final regenerate-and-commit may raise it.
+    a = placed(manual_plan(), DEEP)
+    petal = next(n for n in a.nodes if n.recipe.motif == "petal")
+    real = a.regenerate
+    calls = []
+
+    def flaky(node, limits):
+        calls.append(limits)
+        if len(calls) <= 2:
+            raise assembler_module.LayeredRingFailed(node.ring_index, "probe")
+        return real(node, limits)
+
+    monkeypatch.setattr(a, "regenerate", flaky)
+    a.resolve_overflow(petal, "inward")
+    assert len(calls) > 3                       # the search went on past the failed probes
+    assert petal.pull_backs.get("inward") == 1

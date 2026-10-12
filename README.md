@@ -41,7 +41,7 @@ The authoring guide `docs/motifs.md` explains the motif contract in full; `docs/
 | Motif | Category | Kind | Roles | Positions | Touch heights | Embellishments | What it draws |
 |---|---|---|---|---|---|---|---|
 | `petal` | botanical | enclosing | base, slot, back | centre, divider | base, mid | echo, veins, fan, dot | lotus profile, length 0.95 to 1.3 of ring depth, dips into the ring below; declares a slot |
-| `leaf` | botanical | enclosing | base, slot, back | centre | base, mid | echo, veins | pointed leaf with an apex curved to one side; its midrib is the `veins` embellishment |
+| `leaf` | botanical | enclosing | base, slot, back | centre | base, mid | echo, veins | mirror-symmetric pointed almond leaf; its midrib is the `veins` embellishment |
 | `teardrop` | botanical | enclosing | base, slot, back | centre, divider | base, mid | echo, dot | round circular bulb below a drawn point; declares a slot |
 | `rounded_petal` | botanical | enclosing | base, slot, back | centre, divider | base, mid | echo, veins, fan, dot | lotus profile with a circular cap for a tip; declares a slot |
 | `heart` | botanical | enclosing | base, slot | centre | mid | echo | two circular lobes meeting at a cusp, running to a point; declares a slot |

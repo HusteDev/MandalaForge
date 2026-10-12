@@ -101,7 +101,9 @@ def test_style_weights_categories_instead_of_filtering_them():
                     bases.add(node.motif)
     assert "band" in bases
 
-def test_regenerating_one_ring_does_not_reshuffle_its_neighbours():
+def test_regenerating_one_ring_does_not_reshuffle_its_neighbours_at_fixed_geometry():
+    """With the ring geometry held fixed, only the regenerated ring's own plan changes. (Through DesignGenerator a
+    regeneration also re-picks the ring's width, so neighbours can be re-planned from the changed geometry.)"""
     settings = dict(categories=["botanical", "geometric"])
     base = Composer(123, GEOM, ComposerSettings(**settings)).plan()
     for rs in range(1000, 1050):

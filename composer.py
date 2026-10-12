@@ -699,8 +699,9 @@ class Composer:
         return tuple(sorted({node.motif for node in _base_nodes(plan.sequence)}))
 
     def _inward_base_names(self, ring_index: int) -> Tuple[str, ...]:
-        """Base names of the canonical (design-seed) ring just inside, so a ring's plan
-        depends only on the design seed and its own ring seed."""
+        """Base names of the canonical (design-seed) ring just inside. A ring's plan depends on the
+        design seed, its own ring seed and the ring geometry; regenerating a ring can re-plan its neighbours
+        because their widths absorb the change. Rebuilding from the seed plus ring_seeds is exact."""
         if ring_index == 0:
             return ()
         inner = ring_index - 1

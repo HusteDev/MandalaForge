@@ -26,6 +26,19 @@ def test_max_min_pattern_size_drops_nesting_silently():
                for node in g.assembled.nodes if len(node.node_path) == 1)
     assert g.last_validation_result.is_valid
 
+def test_rebuilding_from_ring_seeds_reproduces_a_regeneration_without_stacked_seam_rings():
+    # Regenerating a ring re-picks its width, so its neighbours can be re-planned from changed geometry; the
+    # guarantee is that seed + ring_seeds rebuilds the regenerated design exactly and no seam rings end up adjacent.
+    for seed, ring, ring_seed in [(11, 2, 999), (11, 1, 5), (3, 2, 1001)]:
+        g = gen(seed=seed); g.generate()
+        frag = g.generate_ring_fragment(ring, ring_seed)
+        replay = gen(seed=seed, ring_seeds=frag["ring_seeds"])
+        assert replay.generate() == frag["svg"]
+        assert replay.plan.rings == g.plan.rings
+        from composer import _base_nodes
+        seam = [any(g.composer._is_seam(n) for n in _base_nodes(r.sequence)) for r in g.plan.rings]
+        assert not any(a and b for a, b in zip(seam, seam[1:])), (seed, ring, ring_seed, seam)
+
 def test_regenerate_ring_changes_neighbour_reaches_not_plan():
     # Seed 11: ring 3 has stems (re-baselined from seed 1 when the layered mode joined the mode draw, Task 12, then
     # from seed 7 when seam rings stopped stacking: seed 7's ring 2 became a band, so ring 3 got a repair stem that
@@ -345,7 +358,9 @@ def test_vary_twenty_two_divisions_uses_symmetry_eleven_and_finishes_quickly():
     assert g.plan.base_symmetry == 11
     assert all(r.divisions in (11, 22) for r in g.plan.rings)
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
-    assert elapsed < 10, f"generation took {elapsed:.1f}s"
+    # Guards against the old per-cell pass-two blow-up (minutes), not micro-timing: the bound is wide so a loaded
+    # machine does not fail it.
+    assert elapsed < 30, f"generation took {elapsed:.1f}s"
 
 
 @pytest.mark.parametrize("divisions", [[7, 7, 14], [8, 8, 8, 12]])

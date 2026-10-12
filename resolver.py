@@ -422,7 +422,8 @@ def _pull_back(asm: Assembler, node: PlacedNode, side: str) -> bool:
             # The old ink is still indexed; it shares no vertex with the shape tried in its place.
             crosses = _still_conflicts(asm, [path for *_, paths in regenerated for path in paths], neighbour, side,
                                        {id(path) for path in old_paths})
-        except MotifError:
+        except (MotifError, assembler.LayeredRingFailed):
+            # A layered composite can fail its back while probing; only the final commit may raise it.
             crosses = True
         if crosses:
             cross = mid
