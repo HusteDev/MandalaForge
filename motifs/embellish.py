@@ -23,9 +23,10 @@ from motifs.geometry import (
     CellPoint, MotifContext, SmartVector, insert_vertex_on_outline, mirror_points, page_arc_points,
     page_circle_points, salted_seed,
 )
+from motifs.page_shapes import page_offsets
 from topology_validator import MIN_REGION_AREA_PX2, PEN_RADIUS_PX
 
-EMBELLISHMENT_ORDER = ("echo", "veins", "fan", "dot", "beads")
+EMBELLISHMENT_ORDER = ("echo", "veins", "fan", "dot", "drop", "beads")
 # At most one of these per host; a host with one offers no slot.
 INTERIOR_FILLS = ("veins", "fan")
 # At or above this complexity a host gets two echoes, below it one.
@@ -60,6 +61,14 @@ BEAD_DIAMETER_RANGE = (1.0, 2.0)
 # These draw from `context.ring_rng`, continuing the stream the host drew its seam ink from, so every cell of
 # the ring draws them alike; the rest draw from their own salted node stream.
 RING_STREAM_EMBELLISHMENTS = ("beads",)
+# Drop (roadmap Phase A): a teardrop hung from the host's tip vertex, in min_white_space units.
+DROP_LENGTH_RANGE = (2.0, 3.5)  # point to the far side of the bulb
+DROP_BULB_RANGE = (1.2, 2.0)  # the bulb's diameter
+DROP_BULB_FLOOR = 1.0  # the smallest bulb it is shrunk to before it is dropped
+DROP_POINT_ANGLE = 20.0  # degrees each side leaves the point at, from the axis
+DROP_SHRINK = 0.9
+DROP_SHORTEST = 1.3  # the shortest drop, as a multiple of its bulb
+DROP_SIDE_STEPS = 8
 # Cell-space length of the probe used to find where a vein or ray meets the ring: far past any cell.
 _FAR = 50.0
 # Page half-size of the polygon standing for a half-plane when measuring areas: far past any cell.
@@ -614,8 +623,76 @@ def _beads_keep_clear(context: MotifContext, vectors: Sequence[SmartVector],
 
 Handler = Callable[[MotifContext, _State, Anatomy, random.Random], int]
 
+def drop_outline(context: MotifContext, tip: CellPoint, length_px: float, bulb_px: float) -> List[CellPoint]:
+    """
+    A closed teardrop, round on the page, whose point is `tip` and whose bulb lies outward along the radius:
+    each side leaves the point at `DROP_POINT_ANGLE` from the axis, swells to the bulb's widest at
+    `length_px - bulb_px / 2`, and rounds over to the far end. The point is the first vertex.
+    """
+    radius = bulb_px / 2.0
+    widest = length_px - radius
+    angle = math.radians(DROP_POINT_ANGLE)
+    reach = widest * 0.6
+    side = _cubic_offsets((0.0, 0.0), (reach * math.cos(angle), reach * math.sin(angle)),
+                          (widest - radius * 1.3, radius), (widest, radius))
+    # A quarter circle, as a cubic, from the widest point to the far end of the bulb.
+    kappa = 0.5523 * radius
+    cap = _cubic_offsets((widest, radius), (widest + kappa, radius), (length_px, kappa), (length_px, 0.0))
+    right = side + cap[1:]
+    offsets = right + [(along, -across) for along, across in reversed(right[1:-1])]
+    points = page_offsets(context, tip, offsets)
+    points[0] = tip
+    return points
+
+
+def _cubic_offsets(p0, p1, p2, p3) -> List[Tuple[float, float]]:
+    out = []
+    for index in range(DROP_SIDE_STEPS + 1):
+        t = index / DROP_SIDE_STEPS
+        u = 1.0 - t
+        w = (u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t)
+        out.append((sum(wk * p[0] for wk, p in zip(w, (p0, p1, p2, p3))),
+                    sum(wk * p[1] for wk, p in zip(w, (p0, p1, p2, p3)))))
+    return out
+
+
+def _drop(context: MotifContext, state: _State, anatomy: Anatomy, rng: random.Random) -> int:
+    """
+    A closed outline-weight teardrop hung from the host's tip vertex, its bulb outward. Drawn at a length and
+    bulb from `DROP_LENGTH_RANGE` and `DROP_BULB_RANGE` (min_white_space units), both shrunk by the same factor
+    until it lies inside the radial ceiling and the angular budget and keeps a clearance from other ink away
+    from the tip, the bulb no smaller than `DROP_BULB_FLOOR`; dropped (returns 1) once it would be shorter
+    than `DROP_SHORTEST` bulbs.
+    """
+    white = context.min_white_space
+    length_px = rng.uniform(*DROP_LENGTH_RANGE) * white
+    bulb_px = rng.uniform(*DROP_BULB_RANGE) * white
+    tip = anatomy.tip
+    high = context.radial_limits[1]
+    keep = context.clearance_px()
+    disc = Point(context.to_cartesian(tip)).buffer(keep)
+    ink = unary_union([LineString(context.polyline(vector)) for vector in state.vectors]).difference(disc)
+    floor = DROP_BULB_FLOOR * white
+    bulb_px = max(bulb_px, floor)
+    while length_px >= bulb_px * DROP_SHORTEST:
+        points = drop_outline(context, tip, length_px, bulb_px)
+        inside = (max(p.radial for p in points) <= high
+                  and max(abs(p.angular) for p in points) <= context.angular_limits)
+        if inside and holds_pen(context, points):
+            line = LineString(context.polyline(SmartVector(points, closed=True))).difference(disc)
+            if ink.is_empty or line.distance(ink) >= keep:
+                state.vectors.append(SmartVector(points, closed=True))
+                return 0
+        # Both shrink together; a bulb at its floor stays there while the neck shortens.
+        length_px *= DROP_SHRINK
+        bulb_px = max(bulb_px * DROP_SHRINK, floor)
+    return 1
+
+
 # Implemented embellishments; a name in EMBELLISHMENT_ORDER missing here is dropped until it arrives.
-_HANDLERS: Dict[str, Handler] = {"echo": _echo, "veins": _veins, "fan": _fan, "dot": _dot, "beads": _beads}
+_HANDLERS: Dict[str, Handler] = {
+    "echo": _echo, "veins": _veins, "fan": _fan, "dot": _dot, "drop": _drop, "beads": _beads,
+}
 
 
 def apply_embellishments(

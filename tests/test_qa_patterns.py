@@ -368,7 +368,7 @@ def test_embellished_check_fails_a_generator_whose_embellished_output_is_not_det
 
 def test_embellishment_sets_keep_at_most_one_interior_fill():
     from qa_patterns import embellishment_sets
-    assert embellishment_sets(find_motif("petal")) == [("echo", "veins", "dot"), ("echo", "fan", "dot")]
+    assert embellishment_sets(find_motif("petal")) == [("echo", "veins", "dot", "drop"), ("echo", "fan", "dot", "drop")]
     assert embellishment_sets(find_motif("band")) == [("beads",)]
     assert embellishment_sets(find_motif("scallop")) == []
 

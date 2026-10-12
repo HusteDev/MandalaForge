@@ -120,7 +120,7 @@ def test_embellishment_streams_are_salted_per_name(cell_kwargs):
 
 
 def test_order_and_fills():
-    assert EMBELLISHMENT_ORDER == ("echo", "veins", "fan", "dot", "beads")
+    assert EMBELLISHMENT_ORDER == ("echo", "veins", "fan", "dot", "drop", "beads")
     assert INTERIOR_FILLS == ("veins", "fan")
     assert Anatomy.__dataclass_params__.frozen
 
@@ -128,11 +128,12 @@ def test_order_and_fills():
 def test_oversized_white_space_drops_detail_silently():
     # Review focus 3: at 50px white space the embellishments do not fit; each is dropped and counted, never
     # raised, and the design validates. Hosts that asked only for implemented names must show real drops.
-    g = DesignGenerator(seed=42, num_rings=4, ring_divisions=[8, 8, 8, 12], complexity=1.0,
+    # Seed 1: since the Phase A motifs joined the registry, seed 42's picks draw no vein host.
+    g = DesignGenerator(seed=1, num_rings=4, ring_divisions=[8, 8, 8, 12], complexity=1.0,
                         min_pattern_size=50, categories=["botanical", "geometric"])
     g.generate()
     assert g.last_validation_result.is_valid and g.assembled.dropped_embellishments > 0
-    implemented = {"echo", "veins", "fan", "dot"}
+    implemented = {"echo", "veins", "fan", "dot", "drop"}
     real = [n for n in g.assembled.nodes
             if n.instance is not None and n.recipe.embellishments
             and set(n.recipe.embellishments) <= implemented and n.instance.dropped_embellishments]

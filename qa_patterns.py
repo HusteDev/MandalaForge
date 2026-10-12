@@ -267,9 +267,14 @@ def _final_slot_refusals(entry, generator):
 # ------------------------------------------------------- pairing jobs (spec 11)
 
 def layered_fronts():
-    """The motifs a layered ring may draw in front: non-seam bases that touch at base height."""
+    """
+    The motifs a layered ring may draw in front, as the composer picks them (`_layered_front_candidates`):
+    non-seam bases that take the centre position and touch at base height. A divider-only base (a V-gap
+    filler such as the stamen, whose stem and balls are open linework) is never a front.
+    """
     return [entry for entry in MOTIFS
-            if 'base' in entry['roles'] and not entry.get('seams', False) and 'base' in touch_heights_of(entry)]
+            if 'base' in entry['roles'] and 'centre' in entry['positions'] and not entry.get('seams', False)
+            and 'base' in touch_heights_of(entry)]
 
 
 def layered_pairs():
@@ -765,9 +770,12 @@ def _embellished(entry):
         if not (_deterministic(entry, embellishments=names, **base)
                 and _monotone(entry, embellishments=names, **base)):
             return False
+    # The draw probe uses the radial limits the assembler gives a base, outward overflow included: a tip
+    # ornament (the drop) hangs past a tip that reaches the ring's outer edge, so it needs that room.
+    reach = (0.0, 1.0 + entry.get('max_overflow_outward', 0.0))
     for name in entry['embellishments']:
         drawn_at = [white for white in EMB_WHITE_SPACES
-                    if _generate(entry, 11, embellishments=(name,), min_white_space=white,
+                    if _generate(entry, 11, embellishments=(name,), min_white_space=white, radial_limits=reach,
                                  **base).dropped_embellishments == 0]
         if not drawn_at:
             return False

@@ -656,7 +656,7 @@ def test_embellishment_picks_are_ordered_unique_and_accepted():
 
 
 def test_registry_embellishments():
-    assert find_motif("petal")["embellishments"] == ("echo", "veins", "fan", "dot")
+    assert find_motif("petal")["embellishments"] == ("echo", "veins", "fan", "dot", "drop")
     assert find_motif("leaf")["embellishments"] == ("echo", "veins")
     assert find_motif("band")["embellishments"] == ("beads",)
 

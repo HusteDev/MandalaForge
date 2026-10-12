@@ -446,7 +446,7 @@ def test_curl_size_gates_scale_with_the_white_space():
     # Every other motif keeps its fixed gates, whatever the white space.
     from motifs import MOTIFS
     for entry in MOTIFS:
-        if entry["name"] != "curl":
+        if "min_cell_width_clearances" not in entry and "min_ring_depth_clearances" not in entry:
             assert size_gates(entry, 26.75) == (entry["min_cell_width_px"], entry["min_ring_depth_px"])
 
 

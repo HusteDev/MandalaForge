@@ -39,7 +39,7 @@ def test_corpus_quotas_are_checked():
 
 def test_corpus_quotas_pass_when_both_are_met():
     from qa_report import corpus_quota_failures
-    counts = {name: 10 for name in ("echo", "veins", "fan", "dot", "beads")}
+    counts = {name: 10 for name in ("echo", "veins", "fan", "dot", "drop", "beads")}
     rows = [
         {"categories": ["botanical"], "layered_rings": 1, "rings": 4, "embellishments": counts},
         {"categories": ["celtic"], "layered_rings": 0, "rings": 4, "embellishments": {}},

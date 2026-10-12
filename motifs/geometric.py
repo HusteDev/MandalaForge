@@ -627,7 +627,7 @@ GEOMETRIC_MOTIFS: List[Dict] = [
         "touch": True,
         "side_touch_heights": ("base",),
         "seams": False,
-        "embellishments": ("echo", "fan"),
+        "embellishments": ("echo", "fan", "drop"),
         "spans_cell": False,
         "min_cell_width_px": 14.0,
         "min_ring_depth_px": 18.0,
