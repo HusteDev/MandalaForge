@@ -51,6 +51,18 @@ CORPUS_DIVISIONS = 12
 # the natural rate of layered rings is far below the quota (spec 11). Forcing only makes a ring layered where
 # a back motif fits; categories with no back motifs keep their natural modes.
 CORPUS_LAYERED_SEEDS = CORPUS_SEEDS[:5]
+# Jobs among the layered seeds that keep their natural position modes, keyed by (category, complexity, seed,
+# vary). Beads draw only on a band past the innermost ring (the innermost ring is too narrow for a bead row),
+# and forcing layered turns every eligible geometric ring past the innermost into a layered ring, so no band
+# is left to carry beads. These are the fewest jobs whose natural plans draw enough beaded bands to meet the
+# beads quota (spec 11); the layered quota keeps a wide margin without them.
+CORPUS_UNLAYERED_JOBS = {
+    ('geometric', 0.5, 777, False),
+    ('geometric', 0.5, 777, True),
+    ('geometric', 0.5, 254302, False),
+    ('geometric', 0.85, 777, False),
+    ('geometric', 0.85, 254302, True),
+}
 
 # The corpus forces embellishments on these jobs, keyed by (category, complexity, seed, vary), because unforced
 # picks draw too few fans and dots (spec 11): a fan is accepted by petals only and seldom picked, and at
@@ -71,16 +83,18 @@ EMBELLISHMENT_MIN = 10
 
 
 def corpus_jobs(out_dir, overlay_mode, num_rings=CORPUS_RINGS, num_divisions=CORPUS_DIVISIONS,
-                layered_seeds=CORPUS_LAYERED_SEEDS, embellishment_jobs=None):
+                layered_seeds=CORPUS_LAYERED_SEEDS, embellishment_jobs=None, unlayered_jobs=None):
     """
     The pinned corpus as run_one jobs: 5 categories x 3 complexities x 6 seeds x 2 division modes, each with
-    its forced position mode (`layered` for the seeds in `layered_seeds`, else None) and its forced
-    embellishments (from `embellishment_jobs`, keyed by `(category, complexity, seed, vary)`, else None).
+    its forced position mode (`layered` for the seeds in `layered_seeds`, except the jobs in `unlayered_jobs`,
+    else None) and its forced embellishments (from `embellishment_jobs`, else None); both tables are keyed by
+    `(category, complexity, seed, vary)`.
     """
     embellishment_jobs = CORPUS_EMBELLISHMENT_JOBS if embellishment_jobs is None else embellishment_jobs
+    unlayered_jobs = CORPUS_UNLAYERED_JOBS if unlayered_jobs is None else unlayered_jobs
     return [
         (seed, num_rings, num_divisions, complexity, [category], vary, out_dir, overlay_mode,
-         'layered' if seed in layered_seeds else None,
+         'layered' if seed in layered_seeds and (category, complexity, seed, vary) not in unlayered_jobs else None,
          embellishment_jobs.get((category, complexity, seed, vary)))
         for category in CORPUS_CATEGORIES
         for complexity in CORPUS_COMPLEXITIES

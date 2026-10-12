@@ -47,12 +47,19 @@ def test_corpus_quotas_pass_when_both_are_met():
     assert corpus_quota_failures(rows) == ["embellishment dot appears 9 times (< 10)"]
 
 
-def test_corpus_forces_layered_on_the_first_three_seeds():
+def test_corpus_forces_layered_on_the_layered_seeds():
     from qa_report import CORPUS_SEEDS, corpus_jobs
     jobs = corpus_jobs(out_dir="test_output", overlay_mode="never")
     forced = {job[0] for job in jobs if job[8] == "layered"}
     assert forced and forced <= set(CORPUS_SEEDS)
     assert set(CORPUS_SEEDS[:3]) <= forced
+
+
+def test_corpus_keeps_natural_modes_only_on_its_unlayered_jobs():
+    from qa_report import CORPUS_LAYERED_SEEDS, CORPUS_UNLAYERED_JOBS, corpus_jobs
+    jobs = corpus_jobs(out_dir="test_output", overlay_mode="never")
+    natural = {(job[4][0], job[3], job[0], job[5]) for job in jobs if job[0] in CORPUS_LAYERED_SEEDS and job[8] is None}
+    assert natural == set(CORPUS_UNLAYERED_JOBS)
 
 
 def test_run_one_counts_rings_and_drawn_embellishments(tmp_path):
