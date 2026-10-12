@@ -42,6 +42,11 @@ MAX_VEIN_PAIRS = 4
 VEIN_FIRST_RANGE = (0.15, 0.3)
 VEIN_LAST_SHARE = 0.7
 VEIN_LAST_SHARE_FALLBACKS = (0.65, 0.6, 0.55, 0.5)
+# Bisection steps for placing vein starts that split each half of the host into faces of equal area.
+VEIN_AREA_STEPS = 8
+# The span of midrib shares searched for those starts: within the same bounds as evenly spaced starts, clear of
+# the narrow base and tip of the host.
+VEIN_AREA_SEARCH = (VEIN_FIRST_RANGE[0], VEIN_LAST_SHARE)
 # Fan: at least this many rays, or the fan is dropped; each piece of the hub arc between marks has this many steps.
 MIN_FAN_RAYS = 3
 FAN_ARC_STEPS = 6
@@ -57,6 +62,8 @@ BEAD_DIAMETER_RANGE = (1.0, 2.0)
 RING_STREAM_EMBELLISHMENTS = ("beads",)
 # Cell-space length of the probe used to find where a vein or ray meets the ring: far past any cell.
 _FAR = 50.0
+# Page half-size of the polygon standing for a half-plane when measuring areas: far past any cell.
+_HALF_PLANE_PX = 5000.0
 
 
 @dataclass
@@ -206,18 +213,110 @@ def _veins(context: MotifContext, state: _State, anatomy: Anatomy, rng: random.R
     spans = [(first, last) for last in lasts]
     if first > VEIN_FIRST_RANGE[0]:
         spans += [(VEIN_FIRST_RANGE[0], last) for last in lasts]
+    area_below = _vein_area_below(context, ring, polygon, base, tip, angle)
+    half_area = Polygon(context.polyline(SmartVector(list(ring.points), closed=True))).area / 2.0
     for pairs in range(MAX_VEIN_PAIRS, 0, -1):
+        # Starts that split each half into equal areas first, then equal areas below a top vein that steps down,
+        # then starts evenly along the midrib.
+        candidates = [_even_area_shares(area_below, half_area, pairs)]
+        candidates += [_even_area_shares(area_below, half_area, pairs, last) for last in lasts
+                       if pairs > 1 and (last - VEIN_AREA_SEARCH[0]) * length_px / (pairs - 1) >= spacing]
         for low, high in spans:
             if high <= low or pairs > 1 and (high - low) * length_px / (pairs - 1) < spacing:
                 continue
-            shares = ([(low + high) / 2.0] if pairs == 1 else
-                      [low + (high - low) * k / (pairs - 1) for k in range(pairs)])
+            candidates.append([(low + high) / 2.0] if pairs == 1 else
+                              [low + (high - low) * k / (pairs - 1) for k in range(pairs)])
+        for shares in candidates:
+            if shares is None or any(b - a < spacing / length_px for a, b in zip(shares, shares[1:])):
+                continue
             drawn = _vein_set(context, ring, polygon, base, tip, shares, angle)
             if drawn is not None:
                 state.vectors[state.innermost] = drawn[0]
                 state.vectors.extend(drawn[1])
                 return 0
     return 1
+
+
+def _vein_end(polygon: Polygon, start: CellPoint, rise: float, across: float) -> Optional[CellPoint]:
+    """Where a side vein from `start`, heading `rise` outward and `across` sideways in cell units, meets the ring."""
+    end = _first_hit(polygon, start, _toward(start, CellPoint(start.radial + rise, across)))
+    return None if end is None or end.radial <= start.radial else end
+
+
+def _half_plane(a: Tuple[float, float], b: Tuple[float, float], inside: Point) -> Polygon:
+    """A large page polygon covering the side of the line through `a` and `b` that holds `inside`."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    norm = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / norm * _HALF_PLANE_PX, dy / norm * _HALF_PLANE_PX
+    side = 1.0 if (dx * (inside.y - a[1]) - dy * (inside.x - a[0])) > 0 else -1.0
+    nx, ny = -uy * side, ux * side
+    return Polygon([(a[0] - ux, a[1] - uy), (a[0] + ux, a[1] + uy),
+                    (a[0] + ux + nx, a[1] + uy + ny), (a[0] - ux + nx, a[1] - uy + ny)])
+
+
+def _vein_area_below(context: MotifContext, ring: SmartVector, polygon: Polygon, base: CellPoint,
+                     tip: CellPoint, angle: float) -> Callable[[float], Optional[float]]:
+    """
+    For a share of the midrib, the page area of one half of the host between its base and a side vein starting
+    there; None where no vein fits. The host is symmetric about its axis, so one half stands for both.
+    """
+    outline = Polygon(context.polyline(SmartVector(list(ring.points), closed=True))).buffer(0)
+    base_px = Point(context.to_cartesian(base))
+    side_px = Point(context.to_cartesian(CellPoint((base.radial + tip.radial) / 2.0, 0.5)))
+    half = outline.intersection(_half_plane(context.to_cartesian(base), context.to_cartesian(tip), side_px))
+    rise = context.px_to_radial(math.cos(angle))
+    known: Dict[float, Optional[float]] = {}
+
+    def area(share: float) -> Optional[float]:
+        if share not in known:
+            start = CellPoint(base.radial + (tip.radial - base.radial) * share, 0.0)
+            end = _vein_end(polygon, start, rise, context.px_to_angular(math.sin(angle), start.radial))
+            known[share] = None if end is None else half.intersection(
+                _half_plane(context.to_cartesian(start), context.to_cartesian(end), base_px)).area
+        return known[share]
+
+    return area
+
+
+def _even_area_shares(area_below: Callable[[float], Optional[float]], half_area: float, pairs: int,
+                      highest: Optional[float] = None) -> Optional[List[float]]:
+    """
+    Vein starts along the midrib that split each half of the host into faces of equal area, rather than starts
+    evenly along the midrib: a host that bulges near its base would otherwise get one large face there and small
+    ones toward the tip. With no `highest`, the `pairs + 1` faces from base to tip are equal; with it, the highest
+    vein starts there and the `pairs` faces below it are equal, leaving the tip face as it falls. None when the
+    areas cannot be read, or when two starts would coincide.
+    """
+    lowest, top = VEIN_AREA_SEARCH
+    if highest is not None:
+        half_area, parts, top = area_below(highest), pairs, highest
+        if half_area is None:
+            return None
+    else:
+        parts = pairs + 1
+    a_low, a_top = area_below(lowest), area_below(top)
+    if a_low is None or a_top is None:
+        return None
+    shares = []
+    for k in range(1, pairs + 1):
+        target = half_area * k / parts
+        if highest is not None and k == pairs:
+            shares.append(highest)
+            break
+        # A target past either end of the search takes that end: a host that bulges at its base puts its lowest
+        # vein at the bottom of the search, and the rest split what lies above it.
+        if target <= a_low or target >= a_top:
+            shares.append(lowest if target <= a_low else top)
+            continue
+        lo, hi = (shares[-1] if shares else lowest), top
+        for _ in range(VEIN_AREA_STEPS):
+            mid = (lo + hi) / 2.0
+            a_mid = area_below(mid)
+            if a_mid is None:
+                return None
+            lo, hi = (mid, hi) if a_mid < target else (lo, mid)
+        shares.append((lo + hi) / 2.0)
+    return shares if all(b > a for a, b in zip(shares, shares[1:])) else None
 
 
 def _vein_set(context: MotifContext, ring: SmartVector, polygon: Polygon, base: CellPoint, tip: CellPoint,
