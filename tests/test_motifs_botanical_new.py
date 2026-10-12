@@ -275,41 +275,121 @@ def _at(angles, page, target):
     return None
 
 
-@pytest.mark.parametrize("touch", [None, 0.35, 0.45, 0.6])
-def test_curl_turns_keep_white_space(touch, cell_kwargs):
-    from motifs.botanical import CURL_STALK_STEPS, curl_layout
-    turned = 0
-    for seed in range(15):
-        for wide in (False, True):
-            kwargs = dict(cell_kwargs, inner_radius=200.0, outer_radius=300.0) if wide else cell_kwargs
-            ctx = make_ctx(kwargs, seed, side_touch_radial=touch)
-            inst = find_motif("curl")["generator"](ctx)
-            layout = curl_layout(make_ctx(kwargs, seed, side_touch_radial=touch))
-            for vector, centre in zip(inst.vectors, layout.centres):
-                # The spiral alone, from the stalk's end to the inner end, without the connector.
-                page = ctx.polyline(SmartVector(vector.points[CURL_STALK_STEPS:-1]))
-                centre_px = ctx.to_cartesian(centre)
-                angles = _unwrapped(centre_px, page)
-                assert angles[-1] <= 3 * math.pi + 1e-6  # at most 1.5 turns
-                for k in range(0, 721):
-                    t = math.radians(k * 0.5)
-                    a, b = _at(angles, page, t), _at(angles, page, t + 2 * math.pi)
-                    if a is None or b is None:
+# Cells at or above the curl's size gates, where it must always draw: a wide cell, a ring of moderate depth,
+# and two at 5px of white space.
+CURL_GATED_CELLS = [
+    dict(inner_radius=200.0, outer_radius=300.0),
+    dict(inner_radius=150.0, outer_radius=235.0, wedge_angle=36.0),
+    dict(inner_radius=120.0, outer_radius=170.0, wedge_angle=24.0, min_white_space=5.0),
+    dict(inner_radius=180.0, outer_radius=260.0, wedge_angle=24.0, min_white_space=5.0),
+]
+# Cells below the gates, where a curl may refuse but must keep every rule when it draws: the standard cell,
+# the reviewer's probe (a narrow 15-degree wedge far out, which once drew turns 10.55px apart), a deep narrow one.
+CURL_UNGATED_CELLS = [
+    {},
+    dict(inner_radius=250.0, outer_radius=300.0, wedge_angle=15.0),
+    dict(inner_radius=150.0, outer_radius=260.0, wedge_angle=20.0),
+]
+
+
+def _curl_cases(cell_kwargs, seeds=range(12), touches=(None, 0.35, 0.45, 0.6)):
+    """(context, instance, layout) for every curl case that draws; every case in a gated cell must draw."""
+    from motifs.botanical import curl_layout
+    cases = []
+    for gated, cells in ((True, CURL_GATED_CELLS), (False, CURL_UNGATED_CELLS)):
+        for over in cells:
+            kwargs = dict(cell_kwargs, **over)
+            for seed in seeds:
+                for touch in touches:
+                    ctx = make_ctx(kwargs, seed, side_touch_radial=touch)
+                    try:
+                        inst = find_motif("curl")["generator"](ctx)
+                    except MotifError:
+                        assert not gated, (over, seed, touch)
                         continue
-                    turned += 1
-                    assert math.dist(a, b) >= ctx.clearance_px() - 1e-6, (seed, wide, k)
-    assert turned > 0
+                    cases.append((ctx, inst, curl_layout(make_ctx(kwargs, seed, side_touch_radial=touch))))
+    return cases
+
+
+def _spiral_page(ctx, vector):
+    """The spiral alone in page space, from the stalk's end to the inner end, without the connector."""
+    from motifs.botanical import CURL_STALK_STEPS
+    return ctx.polyline(SmartVector(vector.points[CURL_STALK_STEPS:-1]))
+
+
+def test_curl_turns_keep_white_space(cell_kwargs):
+    # The true nearest page distance between the spiral over [t, t + 180] degrees and the turn one revolution
+    # on, [t + 360, t + 540], is at least the clearance, wherever both exist.
+    measured = 0
+    for ctx, inst, layout in _curl_cases(cell_kwargs):
+        for vector, centre in zip(inst.vectors, layout.centres):
+            page = _spiral_page(ctx, vector)
+            angles = _unwrapped(ctx.to_cartesian(centre), page)
+            assert angles[-1] <= 3 * math.pi + 1e-6  # at most 1.5 turns
+            for k in range(0, 181):
+                t = math.radians(k * 2.0)
+                near = [q for q, a in zip(page, angles) if t <= a <= t + math.pi]
+                far = [q for q, a in zip(page, angles) if t + 2 * math.pi <= a <= t + 3 * math.pi]
+                if len(near) < 2 or len(far) < 2:
+                    continue
+                measured += 1
+                gap = LineString(near).distance(LineString(far))
+                assert gap >= ctx.clearance_px() - 1e-6, (gap, ctx.clearance_px(), k)
+    assert measured > 0
+
+
+def test_curl_inner_end_lands_on_its_own_earlier_turn_never_its_stalk(cell_kwargs):
+    from motifs.botanical import CURL_STALK_STEPS
+    for ctx, inst, layout in _curl_cases(cell_kwargs, seeds=range(30)):
+        for vector, centre in zip(inst.vectors, layout.centres):
+            pts = vector.points
+            end, landing = pts[-2], pts[-1]
+            spiral = pts[CURL_STALK_STEPS:-1]
+            # The landing point is a vertex of the spiral itself, not of the stalk ...
+            assert landing in spiral and landing not in pts[:CURL_STALK_STEPS]
+            # ... one full revolution before the inner end, on the same ray from the spiral's centre.
+            page = ctx.polyline(SmartVector(spiral))
+            angles = _unwrapped(ctx.to_cartesian(centre), page)
+            landed = page.index(ctx.to_cartesian(landing))
+            assert angles[-1] - angles[landed] == pytest.approx(2 * math.pi, abs=0.02)
+            # ... strictly past the spiral's start, where the stalk joins it.
+            assert spiral.index(landing) > 0 and end != landing
+
+
+def test_every_curl_face_has_min_white_space_across(cell_kwargs):
+    # Each face the curl closes (each spiral's eye) has a white disc at least min_white_space across:
+    # eroded by half a stroke and half the white space, something is left.
+    from shapely.ops import polygonize, unary_union
+    faces = 0
+    for ctx, inst, _ in _curl_cases(cell_kwargs):
+        ink = unary_union([LineString(ctx.polyline(v)) for v in inst.vectors])
+        for face in polygonize(ink):
+            faces += 1
+            erosion = (ctx.stroke_width + ctx.min_white_space) / 2.0
+            assert not face.buffer(-erosion + 1e-6).is_empty, face.area
+    assert faces > 0
+
+
+def test_curl_raises_rather_than_drawing_less_than_its_minimum_turns(cell_kwargs):
+    from motifs.botanical import CURL_MIN_TURNS
+    narrow = dict(cell_kwargs, wedge_angle=12.0)  # a half-cell of about 13px against 11.5px of clearance
+    for seed in range(10):
+        with pytest.raises(MotifError):
+            find_motif("curl")["generator"](make_ctx(narrow, seed, side_touch_radial=0.45))
+    for ctx, inst, layout in _curl_cases(cell_kwargs, seeds=range(5)):
+        assert layout.sweep >= 2 * math.pi * CURL_MIN_TURNS - 1e-9
 
 
 @pytest.mark.parametrize("radial", [0.35, 0.45, 0.6])
 def test_curl_outermost_vertices_are_the_touch_vertices(radial, cell_kwargs):
     for seed in range(12):
-        ctx = make_ctx(cell_kwargs, seed, side_touch_radial=radial)
+        ctx = make_ctx(dict(cell_kwargs, **CURL_GATED_CELLS[0]), seed, side_touch_radial=radial)
         inst = find_motif("curl")["generator"](ctx)
         assert len(inst.vectors) == 2 and not any(v.closed for v in inst.vectors)
         for vector, side in zip(inst.vectors, (1.0, -1.0)):
             pts = vector.points
             hits = [k for k, p in enumerate(pts) if p.radial == radial and p.angular == side]
+            assert pts[-1] != pts[hits[0]] if hits else True
             assert len(hits) == 1
             assert tangent_error_deg(ctx, pts, hits[0]) <= 10.0
             assert max(abs(p.angular) for p in pts) == 1.0
@@ -329,10 +409,12 @@ def test_curl_spirals_are_mirrored_and_joined_at_the_base(cell_kwargs):
 def test_curl_stays_in_its_ring(cell_kwargs):
     for seed in range(20):
         for touch in (None, 0.45):
-            pts = [p for v in find_motif("curl")["generator"](
-                make_ctx(cell_kwargs, seed, side_touch_radial=touch, radial_limits=(-0.5, 1.5))).vectors
-                for p in v.points]
-            assert min(p.radial for p in pts) >= -1e-12 and max(p.radial for p in pts) <= 1.2 + 1e-12
+            for high in (1.2, 1.05):
+                pts = [p for v in find_motif("curl")["generator"](
+                    make_ctx(dict(cell_kwargs, **CURL_GATED_CELLS[0]), seed, side_touch_radial=touch,
+                             radial_limits=(-0.5, high))).vectors
+                    for p in v.points]
+                assert min(p.radial for p in pts) >= -1e-12 and max(p.radial for p in pts) <= high + 1e-12
 
 
 def test_curl_in_a_slot_stays_inside_it(cell_kwargs):
@@ -353,3 +435,89 @@ def test_curl_in_a_slot_stays_inside_it(cell_kwargs):
         polygon = Polygon([(p.angular, p.radial) for p in slot]).buffer(1e-9)
         assert all(polygon.contains(LineString([(p.angular, p.radial) for p in v.points])) for v in inst.vectors)
     assert placed > 0
+
+
+def test_curl_size_gates_scale_with_the_white_space():
+    from composer import size_gates
+    curl = find_motif("curl")
+    assert size_gates(curl, 2.0) == (28.0, 24.0)  # the fixed gates still hold at little white space
+    assert size_gates(curl, 11.5) == pytest.approx((8.5 * 11.5, 7 * 11.5))
+    assert size_gates(curl, 26.75) == pytest.approx((8.5 * 26.75, 7 * 26.75))
+    # Every other motif keeps its fixed gates, whatever the white space.
+    from motifs import MOTIFS
+    for entry in MOTIFS:
+        if entry["name"] != "curl":
+            assert size_gates(entry, 26.75) == (entry["min_cell_width_px"], entry["min_ring_depth_px"])
+
+
+def test_composer_refuses_a_curl_below_its_white_space_gate():
+    from composer import Composer, ComposerSettings
+    curl = find_motif("curl")
+    for white, complexity in ((5.0, 0.5), (10.0, 0.5), (25.0, 0.15)):
+        composer = Composer(1, [], ComposerSettings(min_pattern_size=white, complexity=complexity,
+                                                    categories=["botanical"]))
+        clearance = composer._clearance_px()
+        assert composer._passes(curl, 8.5 * clearance, 7 * clearance)
+        assert not composer._passes(curl, 8.5 * clearance - 0.5, 7 * clearance)
+        assert not composer._passes(curl, 8.5 * clearance, 7 * clearance - 0.5)
+        # The petal's fixed gates are untouched.
+        assert composer._passes(find_motif("petal"), 14.0, 18.0)
+
+
+def test_curl_always_draws_at_or_above_its_gates():
+    # Random cells at or above the gates, at every white space the full tier uses, inside the page (outer radius
+    # at most 300px; a ring past the innermost starts at least 80px out): the curl never refuses.
+    from composer import size_gates
+    curl = find_motif("curl")
+    rng = random.Random(2026)
+    drawn = 0
+    for _ in range(400):
+        white = rng.choice((5.0, 10.0, 25.0))
+        complexity = rng.choice((0.15, 0.5, 0.9))
+        stroke = 1.0 + 1.5 * (1.0 - complexity * 0.5)
+        gate_width, gate_depth = size_gates(curl, white + stroke)
+        inner = rng.uniform(80.0, 250.0)
+        depth = gate_depth * rng.uniform(1.0, 2.0)
+        width = gate_width * rng.uniform(1.0, 2.5)
+        wedge = math.degrees(width / (inner + depth / 2.0))
+        if wedge > 90.0 or inner + depth > 300.0:
+            continue
+        drawn += 1
+        ctx = MotifContext(inner_radius=inner, outer_radius=inner + depth, wedge_angle=wedge, center=(306.0, 306.0),
+                           stroke_width=stroke, complexity=complexity, min_white_space=white,
+                           rng=random.Random(rng.randrange(10 ** 6)),
+                           side_touch_radial=rng.choice((None, 0.35, 0.45, 0.6)), radial_limits=(0.0, 1.2))
+        find_motif("curl")["generator"](ctx)
+    assert drawn > 100
+
+
+# ----- fix round 1: a back vein beside a rounded petal front ----------------------------------------------
+
+def test_layered_rounded_petal_over_veined_leaf_backs_validates():
+    # Smoke div8-8-8-12 c0.5 mws10, rounded_petal in front of leaf backs: a back leaf's side vein crossed into
+    # the front at a grazing angle, and the piece left after the cut lay entirely inside its cut end's touch
+    # disc while its other end, on the back's outline, sat 2.3px from the front outline: a 21px2 sliver no pen
+    # fits. Every end that is not a cut is now held clear of the front, so that back is dropped instead.
+    from qa_patterns import DEFAULT_SEED, run_case
+    result = run_case(("rounded_petal", "botanical", (8, 8, 8, 12), 0.5, 10, "layered", "base", DEFAULT_SEED,
+                       False, ("back", "leaf")))
+    assert result["status"] == "PASS", result["detail"]
+
+
+def test_a_back_piece_end_on_back_ink_beside_the_front_is_refused(cell_kwargs):
+    # The rule itself: a piece cut at one end, its other end (on other back ink, not a cut) within the
+    # clearance of the front outline, raises even though the whole piece lies inside the cut's touch disc.
+    from motifs.geometry import SmartVector
+    from motifs.layering import LayeringError, _check_clearance
+    ctx = make_ctx(cell_kwargs)
+    square = [CellPoint(0.3, -0.3), CellPoint(0.3, 0.3), CellPoint(0.7, 0.3), CellPoint(0.7, -0.3)]
+    front = [SmartVector(square, closed=True)]
+    near = CellPoint(0.5, 0.3 + ctx.px_to_angular(2.0, 0.5))  # 2px outside the front's right edge
+    piece = [CellPoint(0.62, 0.3), near]  # cut on the front's edge at its first end
+    with pytest.raises(LayeringError):
+        _check_clearance(ctx, front, [0], [(piece, "detail", (True, False))],
+                         [SmartVector(piece, weight="detail", layer="back")])
+    far = CellPoint(0.5, 0.3 + ctx.px_to_angular(ctx.clearance_px("detail", "outline") + 1.0, 0.5))
+    piece = [CellPoint(0.62, 0.3), far]
+    _check_clearance(ctx, front, [0], [(piece, "detail", (True, False))],
+                     [SmartVector(piece, weight="detail", layer="back")])

@@ -302,8 +302,10 @@ def _check_clearance(context: MotifContext, front_vectors: List[SmartVector], fi
                      pieces: Sequence[Piece], placed: Sequence[SmartVector]) -> None:
     """
     Spec 5.2 step 6, in page space: every visible back piece keeps `min_white_space` plus half of each
-    stroke from the front outline, except within the touch disc of its own cut ends. A seam end is checked
-    on its own, so a short piece cannot hide one beside the front inside a cut end's disc.
+    stroke from the front outline, except within the touch disc of its own cut ends. Every end that is not a
+    cut (a seam end, or an end on other back ink, such as a vein ending on the back's outline) is checked on
+    its own, so a short piece cannot hide one beside the front inside a cut end's disc: there it would close
+    a sliver against the front that no pen fits.
     """
     disc = touch_disc_px(context)
     outlines = [(LineString(context.polyline(front_vectors[i])), front_vectors[i].weight) for i in fills]
@@ -312,8 +314,9 @@ def _check_clearance(context: MotifContext, front_vectors: List[SmartVector], fi
         ends = [context.to_cartesian(p) for p, is_cut in ((vector.points[0], cuts[0]), (vector.points[-1], cuts[1]))
                 if is_cut]
         rest = line.difference(shapely.MultiPoint(ends).buffer(disc)) if ends else line
-        # A seam end is no cut: it keeps clear of the front even when the whole piece lies in a touch disc.
-        seams = [Point(context.to_cartesian(p)) for p in (vector.points[0], vector.points[-1]) if abs(p.angular) == 1.0]
+        # An end that is no cut keeps clear of the front even when the whole piece lies in a touch disc.
+        seams = [Point(context.to_cartesian(p)) for p, is_cut in ((vector.points[0], cuts[0]),
+                                                                  (vector.points[-1], cuts[1])) if not is_cut]
         for outline, outline_weight in outlines:
             needed = context.clearance_px(weight, outline_weight)
             gaps = [rest.distance(outline)] if not rest.is_empty else []

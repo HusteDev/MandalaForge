@@ -605,9 +605,6 @@ def _heart_outline(
     return _closed_from_right(right + arc[1:])
 
 
-HEART_MAX_OVERFLOW = 0.2
-
-
 def generate_heart(context: MotifContext) -> MotifInstance:
     rng = context.rng
     # Every parameter is drawn before any limit is applied (the MONO property).
@@ -635,7 +632,7 @@ def generate_heart(context: MotifContext) -> MotifInstance:
             centre + (base - centre) * scale, centre + (top - centre) * scale, width * scale))
         _require_pen_room(context, "heart", points)
     else:
-        base, top = max(low, 0.0, bottom), min(high, 1.0 + HEART_MAX_OVERFLOW)
+        base, top = max(low, 0.0, bottom), high
         # Side touch (spec 7.3): the lobes' widest vertices are the shared side vertices, at the full budget.
         touch = side_touch_radial_within(context, base, top)
         if touch is not None:
@@ -654,33 +651,35 @@ def generate_heart(context: MotifContext) -> MotifInstance:
 # turns sit a pitch of at least `clearance_px()` apart on the page; it may be stretched (by at least 1) along
 # the radial to suit a tall cell and across it to fill a wide one, up to `CURL_MAX_STRETCH`, past which it keeps
 # to the cell edge and a longer stalk reaches the axis. Its outermost vertex, where the tangent runs along the
-# radial, is the side-touch vertex. It winds a drawn 1.15 to 1.5 turns, fewer when the cell is small; when not
-# even `CURL_MIN_TURNS` fits there is no earlier turn to land on, and it draws a loop of `CURL_LOOP_SWEEP` whose
-# inner end drops onto its own stalk instead.
+# radial, is the side-touch vertex. It winds a drawn 1.15 to 1.5 turns, fewer when the cell is small, and raises
+# `MotifError` when not even `CURL_MIN_TURNS` fits, since its end would have no earlier turn to land on. Near
+# the eye the turns run slantwise, so their true distance apart is the pitch times the cosine of the slant
+# angle `atan(tighten / radius)`; the eye is kept wide enough that this stays at least the clearance.
 CURL_STALK_STEPS = 8
 # The stalk's controls sit this share of the centre's distance from the axis along its end tangents.
 CURL_STALK_HANDLE = 0.4
 CURL_STEPS_PER_TURN = 64
 CURL_TURNS_RANGE = (1.15, 1.5)
-CURL_MIN_TURNS = 1.1
+CURL_MIN_TURNS = 1.05
 CURL_EYE_RANGE = (0.3, 0.7)  # the inner end's distance from the centre, as a share of the pitch
-CURL_PITCH_RANGE = (1.0, 1.25)  # the pitch as a multiple of the clearance
+CURL_PITCH_RANGE = (1.2, 1.35)  # the pitch as a multiple of the clearance, room to slant near the eye
 CURL_TALL_RANGE = (1.0, 1.2)  # radial stretch of the spiral
 CURL_WIDTH_RANGE = (0.75, 0.95)  # without side touch, the share of the half-cell the curl spans
 CURL_CENTRE_RANGE = (0.4, 0.6)  # without side touch, the radial of the spiral's centre
-CURL_DIP_RANGE = (0.0, 0.25)  # how far the base sits below the spiral's bottom, as a share of the pitch
+CURL_DIP_RANGE = (0.0, 0.15)  # how far the base sits below the spiral's bottom, as a share of the pitch
 CURL_MIN_EYE_PX = 1.5
-CURL_LOOP_SWEEP = 1.75 * math.pi
-CURL_MIN_LOOP_PITCH_PX = 2.0
-CURL_LOOP_SLACK = 0.85
+CURL_EYE_SLACK = 1.0
 CURL_MAX_STRETCH = 1.6
 CURL_PASSES = 10
 CURL_DROP_MARGIN = 1.1
-CURL_MAX_OVERFLOW = 0.2
 # The size is fitted in a flat approximation of the cell and then pinned exactly on the page; the fit leaves
 # this share of the room, so the exact across-stretch never has to fall below 1.
 CURL_FIT_SHARE = 0.97
 CURL_PIN_PASSES = 4
+CURL_TOP_PASSES = 8
+# Each refit holds back this many times the overshoot, plus this many px: the top moves less than the room
+# held back, since pinning the touch vertex moves the centre after the fit.
+CURL_TOP_STEP, CURL_TOP_STEP_PX = 2.0, 1.0
 CURL_FLOOR_MARGIN_PX = 0.5
 CURL_OUTERMOST_BRACKET = 0.5
 
@@ -719,17 +718,36 @@ def curl_layout(context: MotifContext, draws: Optional[Tuple[float, ...]] = None
                 box: Optional[Tuple[float, float, float]] = None) -> CurlLayout:
     """
     Lay out the right spiral. As a base, the curl spans its half-cell from the axis to the side-touch vertex
-    (or a drawn share of the half-cell) between radial 0 and the overflow limit, centred on the side-touch
+    (or a drawn share of the half-cell) between radial 0 and its upper radial limit, centred on the side-touch
     radial (or a drawn radial); a slot child passes `box`, its `(floor, ceiling, half_width_px)`, and is
-    centred in it. Raises `MotifError` when not even a loop fits.
+    centred in it. Raises `MotifError` when not even `CURL_MIN_TURNS` fit.
+
+    The room above the centre is fitted flat, and pinning the touch vertex moves the centre afterwards, so the
+    drawn spiral can pass its ceiling by a hair. Then more room is held back and it is fitted again, at most
+    `CURL_TOP_PASSES` times.
     """
-    turns, eye, pitch_share, tall, width_share, centre_share, dip_share = draws or _curl_draws(context.rng)
+    draws = draws or _curl_draws(context.rng)
+    ceiling = box[1] if box is not None else context.radial_limits[1]
+    reserve = 0.0
+    for _ in range(CURL_TOP_PASSES):
+        layout = _curl_layout_once(context, draws, box, reserve)
+        top = max(point.radial for point in _curl_vector(context, layout))
+        if top <= ceiling + 1e-12:
+            return layout
+        reserve += CURL_TOP_STEP * context.radial_to_px(top - ceiling) + CURL_TOP_STEP_PX
+    raise MotifError("curl does not fit below its ceiling")
+
+
+def _curl_layout_once(context: MotifContext, draws: Tuple[float, ...],
+                      box: Optional[Tuple[float, float, float]], reserve: float) -> CurlLayout:
+    """`curl_layout` with `reserve` px held back from the room above the centre."""
+    turns, eye, pitch_share, tall, width_share, centre_share, dip_share = draws
     low, high = context.radial_limits
     if box is not None:
         floor, ceiling, width_px = box
         touch, centre = None, (floor + ceiling) / 2.0
     else:
-        floor, ceiling, width_px = max(low, 0.0), min(high, 1.0 + CURL_MAX_OVERFLOW), None
+        floor, ceiling, width_px = max(low, 0.0), high, None
         touch = side_touch_radial_within(context, floor, ceiling)
         # An absolute drawn radial, so a narrower ceiling only ever shrinks the curl (the MONO property).
         centre = touch if touch is not None else max(floor, min(ceiling, centre_share))
@@ -746,9 +764,16 @@ def curl_layout(context: MotifContext, draws: Optional[Tuple[float, ...]] = None
             half_width = context.angular_to_px(context.angular_limits, centre)
         else:
             half_width = width_share * context.angular_to_px(context.angular_limits, centre)
-        fit = _curl_fit(turns, eye, pitch, tall, CURL_FIT_SHARE * half_width - lean * gap,
-                        context.radial_to_px(centre - floor) - sink - CURL_FLOOR_MARGIN_PX,
-                        context.radial_to_px(ceiling - centre), lean)
+        below = context.radial_to_px(centre - floor) - sink - CURL_FLOOR_MARGIN_PX
+        above = context.radial_to_px(ceiling - centre) - reserve
+        fit = _curl_fit(turns, eye, pitch, clearance, tall, CURL_FIT_SHARE * half_width - lean * gap,
+                        below, above, lean)
+        if fit is None and width_px is None and touch is None:
+            # Without side touch the drawn width share is only a preference: a curl that needs the whole
+            # half-cell takes it rather than failing.
+            full = context.angular_to_px(context.angular_limits, centre)
+            fit = _curl_fit(turns, eye, pitch, clearance, tall, CURL_FIT_SHARE * full - lean * gap,
+                            below, above, lean)
         if fit is None:
             raise MotifError("curl does not fit its cell")
         start, tighten, sweep, stretch_r, stretch_a, offset, outermost = fit
@@ -923,45 +948,47 @@ def _curl_extent(start: float, tighten: float, sweep: float) -> Tuple[float, flo
     return (start - tighten * angle) * math.sin(angle), inner, angle
 
 
-def _curl_fit(turns, eye, pitch, tall, room, below, above, lean=1.0):
+def _curl_fit(turns, eye, pitch, clearance, tall, room, below, above, lean=1.0):
     """
     `(start, tighten, sweep, stretch_radial, stretch_angular, offset, outermost)` for a spiral filling `room`
     px beside the gap to the axis (`offset` is its centre's distance past the gap; the side facing the axis
-    counts `lean` times over, see `curl_layout`), with `below` px under its
-    centre (the base's dip already taken off) and `above` px over it, in a flat approximation of the cell;
-    None when not even a loop fits. The spiral winds the drawn `turns` when there is room, fewer when there is
-    not; below `CURL_MIN_TURNS` it is a loop.
+    counts `lean` times over, see `curl_layout`), with `below` px under its centre (the base's dip already
+    taken off) and `above` px over it, in a flat approximation of the cell;
+    None when not even `CURL_MIN_TURNS` fit. The spiral winds the drawn `turns` when there is room, fewer
+    when there is not. Its inner end stays at least `_curl_min_eye(pitch, clearance)` from the centre.
     """
     if room <= 0 or below <= 0 or above <= 0:
         return None
-    attempts = []
-    start = min(eye * pitch + turns * pitch, (room + pitch) / 2.0, below, above + pitch / 2.0)
-    spiral_turns = min(turns, (start - CURL_MIN_EYE_PX) / pitch)
-    if spiral_turns >= CURL_MIN_TURNS:
-        attempts.append((start, pitch, 2.0 * math.pi * spiral_turns))
-    # A loop of 0.875 turns is about 2 * eye + 0.75 * pitch wide and starts 0.875 pitch out from its eye; its
-    # pitch keeps some slack below that, since its true width is a little more.
-    loop_pitch = min(pitch, CURL_LOOP_SLACK * (room - 2.0 * CURL_MIN_EYE_PX) / 0.75,
-                     CURL_LOOP_SLACK * (below - CURL_MIN_EYE_PX) / 0.875)
-    if loop_pitch >= CURL_MIN_LOOP_PITCH_PX:
-        attempts.append((min((room + loop_pitch) / 2.0, below, above + loop_pitch / 2.0), loop_pitch,
-                         CURL_LOOP_SWEEP))
-    for start, step, sweep in attempts:
-        tighten = step / (2.0 * math.pi)
-        # The width is only about 2 * start - step: shrink the start until the true width fits the room.
-        for _ in range(20):
-            outer, inner, outermost = _curl_extent(start, tighten, sweep)
-            if outer + lean * inner <= room:
-                break
-            start -= (outer + lean * inner - room) / 2.0 + 1e-9
-        if outer + lean * inner > room or start - tighten * sweep < CURL_MIN_EYE_PX:
-            continue
-        stretch_r = max(1.0, min(tall, below / start, above / (start - tighten * math.pi)))
-        # Stretched across to fill the room, up to `CURL_MAX_STRETCH`; past that the spiral keeps to the
-        # cell edge (its outermost vertex on the side-touch vertex) and a longer stalk reaches the axis.
-        stretch_a = min(room / (outer + lean * inner), CURL_MAX_STRETCH)
-        return start, tighten, sweep, stretch_r, stretch_a, (room - stretch_a * outer) / lean, outermost
-    return None
+    tighten = pitch / (2.0 * math.pi)
+    eye_min = _curl_min_eye(pitch, clearance)
+    start = min(max(eye * pitch, eye_min) + turns * pitch, (room + pitch) / 2.0, below, above + pitch / 2.0)
+    for _ in range(20):
+        sweep = 2.0 * math.pi * min(turns, (start - eye_min) / pitch)
+        if sweep < 2.0 * math.pi * CURL_MIN_TURNS:
+            return None
+        # The width is only about 2 * start - pitch: shrink the start until the true width fits the room.
+        outer, inner, outermost = _curl_extent(start, tighten, sweep)
+        if outer + lean * inner <= room:
+            break
+        start -= (outer + lean * inner - room) / 2.0 + 1e-9
+    else:
+        return None
+    stretch_r = max(1.0, min(tall, below / start, above / (start - tighten * math.pi)))
+    # Stretched across to fill the room, up to `CURL_MAX_STRETCH`; past that the spiral keeps to the cell
+    # edge (its outermost vertex on the side-touch vertex) and a longer stalk reaches the axis.
+    stretch_a = min(room / (outer + lean * inner), CURL_MAX_STRETCH)
+    return start, tighten, sweep, stretch_r, stretch_a, (room - stretch_a * outer) / lean, outermost
+
+
+def _curl_min_eye(pitch: float, clearance: float) -> float:
+    """
+    The least distance from the centre the inner end may have. Consecutive turns cross a ray from the centre a
+    pitch apart, but slant to it at `atan(tighten / r)`, so their true distance apart is about `pitch * cos` of
+    that angle, smallest at the eye: `r >= tighten / sqrt((pitch / clearance)^2 - 1)` keeps it at least the
+    clearance, with `CURL_EYE_SLACK` for the curvature there.
+    """
+    tighten = pitch / (2.0 * math.pi)
+    return max(CURL_MIN_EYE_PX, CURL_EYE_SLACK * tighten / math.sqrt((pitch / clearance) ** 2 - 1.0))
 
 
 def _curl_offsets(layout: CurlLayout, t: float) -> Tuple[float, float]:
@@ -977,31 +1004,16 @@ def _curl_vector(context: MotifContext, layout: CurlLayout) -> List[CellPoint]:
         return context.to_cell(_curl_page(context, layout, x, y))
 
     count = max(8, int(math.ceil(layout.sweep / (2.0 * math.pi) * CURL_STEPS_PER_TURN)))
-    landing_angle = layout.sweep - 2.0 * math.pi
-    angles = sorted({layout.sweep * k / count for k in range(count + 1)} | {layout.outermost}
-                    | ({landing_angle} if landing_angle > 0 else set()))
+    landing_angle = layout.sweep - 2.0 * math.pi  # the earlier turn the inner end lands on
+    angles = sorted({layout.sweep * k / count for k in range(count + 1)} | {layout.outermost, landing_angle})
     spiral = [point(*_curl_offsets(layout, t)) for t in angles]
     if layout.touch is not None:
         spiral[angles.index(layout.outermost)] = CellPoint(layout.touch, context.angular_limits)
 
     stalk_at = _curl_stalk(layout)
-    params = [k / CURL_STALK_STEPS for k in range(CURL_STALK_STEPS)]
-    landing_param = None
-    if landing_angle <= 0:
-        # A loop: its inner end drops straight down onto the stalk, at the stalk point level with it.
-        end_y = _curl_offsets(layout, layout.sweep)[1]
-        lo, hi = 0.0, 1.0
-        for _ in range(80):
-            mid = (lo + hi) / 2.0
-            lo, hi = (mid, hi) if stalk_at(mid)[1] < end_y else (lo, mid)
-        landing_param = hi
-        params = sorted(set(params) | {landing_param})
-    stalk = [point(*stalk_at(u)) for u in params]
+    stalk = [point(*stalk_at(k / CURL_STALK_STEPS)) for k in range(CURL_STALK_STEPS)]
     stalk[0] = CellPoint(stalk[0].radial, 0.0)
-    if landing_param is None:
-        landing = spiral[angles.index(landing_angle)]
-    else:
-        landing = stalk[params.index(landing_param)]
+    landing = spiral[angles.index(landing_angle)]
     # The stalk stops a sample short of the spiral's start, which the spiral already carries.
     return stalk + spiral + [landing]
 
@@ -1021,7 +1033,7 @@ def _curl_base(context: MotifContext) -> List[CellPoint]:
     right = _curl_vector(context, curl_layout(context))
     low, high = context.radial_limits
     if (min(p.radial for p in right) < max(low, 0.0) - 1e-9
-            or max(p.radial for p in right) > min(high, 1.0 + CURL_MAX_OVERFLOW) + 1e-9
+            or max(p.radial for p in right) > high + 1e-9
             or max(p.angular for p in right) > context.angular_limits + 1e-12):
         raise MotifError("curl does not fit its cell")
     return right
@@ -1220,6 +1232,11 @@ BOTANICAL_MOTIFS: List[Dict] = [
         "spans_cell": False,
         "min_cell_width_px": 28.0,
         "min_ring_depth_px": 24.0,
+        # Its turns sit a clearance apart, so it needs room in proportion to the white space: measured over
+        # 7,875 cells of rings inside the page (inner radius 80px and up, outer 300px at most), every curl draws
+        # once the mid-ring cell is 8.5 clearances wide and the ring 7 deep.
+        "min_cell_width_clearances": 8.5,
+        "min_ring_depth_clearances": 7.0,
         "max_overflow_inward": 0.0,
         "max_overflow_outward": 0.2,
         "slot_estimate": None,

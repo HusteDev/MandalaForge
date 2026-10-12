@@ -261,6 +261,17 @@ def touch_heights_of(entry: Dict) -> Tuple[str, ...]:
     return tuple(entry["side_touch_heights"])
 
 
+def size_gates(entry: Dict, clearance_px: float) -> Tuple[float, float]:
+    """
+    The least mid-ring cell width and ring depth, in px, a motif needs: its `min_cell_width_px` and
+    `min_ring_depth_px`, raised for a motif whose drawing scales with the white space (the curl, whose turns
+    sit a clearance apart) to `min_cell_width_clearances` and `min_ring_depth_clearances` times the
+    clearance between two outline strokes. A motif without those keys keeps its fixed gates.
+    """
+    return (max(entry["min_cell_width_px"], entry.get("min_cell_width_clearances", 0.0) * clearance_px),
+            max(entry["min_ring_depth_px"], entry.get("min_ring_depth_clearances", 0.0) * clearance_px))
+
+
 def common_touch_heights(entries: Sequence[Dict]) -> Tuple[str, ...]:
     """The heights every entry supports, in `TOUCH_HEIGHTS` order; empty when the ring cannot side-touch."""
     supported = [touch_heights_of(entry) for entry in entries]
@@ -739,9 +750,15 @@ class Composer:
 
     # ------------------------------------------------------------ node building
 
-    @staticmethod
-    def _passes(motif: Dict, cell_width: float, ring_depth: float) -> bool:
-        return motif["min_cell_width_px"] <= cell_width and motif["min_ring_depth_px"] <= ring_depth
+    def _passes(self, motif: Dict, cell_width: float, ring_depth: float) -> bool:
+        width, depth = size_gates(motif, self._clearance_px())
+        return width <= cell_width and depth <= ring_depth
+
+    def _clearance_px(self) -> float:
+        """The gap between two outline strokes' centrelines that leaves the white space between them."""
+        # Imported here: the assembler imports this module, and owns the stroke width.
+        from assembler import stroke_width_for
+        return self.settings.min_pattern_size + stroke_width_for(self.settings.complexity)
 
     def _base_candidates(self, ring_index: int, position: str, cell_width: float,
                          ring_depth: float, allow_seams: bool = True) -> List[Dict]:

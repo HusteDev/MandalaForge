@@ -40,6 +40,7 @@ from typing import List, Set
 from assembler import stroke_width_for
 from coloring_generator import DesignGenerator
 from composer import (CellRecipe, Composer, ComposerSettings, node_rng, pick_embellishments, ring_stream_seed,
+                      size_gates,
                       touch_heights_of)
 from motifs import MOTIFS, find_motif, safe_motif
 from motifs.contract import MotifError
@@ -133,10 +134,11 @@ def _gate_skip(entry, generator, position, role='base'):
     if not cells:
         return "no ring past the centre to force"
     cell, depth = min(cells), min(depths)
-    if entry['min_cell_width_px'] > cell:
-        return f"cell {cell:.0f}px < gate {entry['min_cell_width_px']:.0f}px"
-    if entry['min_ring_depth_px'] > depth:
-        return f"ring depth {depth:.0f}px < gate {entry['min_ring_depth_px']:.0f}px"
+    gate_width, gate_depth = size_gates(entry, _clearance_px(generator))
+    if gate_width > cell:
+        return f"cell {cell:.0f}px < gate {gate_width:.0f}px"
+    if gate_depth > depth:
+        return f"ring depth {depth:.0f}px < gate {gate_depth:.0f}px"
     return None
 
 
@@ -187,13 +189,19 @@ def _frame_slot_px(generator, ring_plan, position):
     return width, depth, context.stroke_width
 
 
-def _slot_refusal(entry, measured):
+def _clearance_px(generator):
+    """The design's clearance between two outline strokes, which white-space-scaled size gates use."""
+    return generator.min_pattern_size + stroke_width_for(generator.complexity)
+
+
+def _slot_refusal(entry, measured, clearance):
     """Why one ring's measured frame slot cannot take the child, or None when it can."""
     if measured is None:
         return f"{SLOT_FRAME} frame declares no slot"
     width, depth, stroke = measured
-    need_width = entry['min_cell_width_px'] + 2.0 * stroke
-    need_depth = entry['min_ring_depth_px'] + 2.0 * stroke
+    gate_width, gate_depth = size_gates(entry, clearance)
+    need_width = gate_width + 2.0 * stroke
+    need_depth = gate_depth + 2.0 * stroke
     if width < need_width:
         return f"slot {width:.2f}px < {need_width:.2f}px (gate + 2 strokes)"
     if depth < need_depth:
@@ -213,7 +221,7 @@ def _slot_gate_skip(entry, generator, plan, position):
     refusals = []
     for ring_plan in plan.rings[1:]:
         measured = _frame_slot_px(generator, ring_plan, position)
-        refusal = _slot_refusal(entry, measured)
+        refusal = _slot_refusal(entry, measured, _clearance_px(generator))
         if refusal is None:
             return None
         refusals.append(f"ring {ring_plan.ring_index}: {refusal}")
@@ -249,7 +257,7 @@ def _final_slot_refusals(entry, generator):
         mid = (min(radials) + max(radials)) / 2.0
         measured = (context.angular_to_px(max(angulars) - min(angulars), mid),
                     context.radial_to_px(max(radials) - min(radials)), context.stroke_width)
-        refusal = _slot_refusal(entry, measured)
+        refusal = _slot_refusal(entry, measured, _clearance_px(generator))
         if refusal is None:
             return []
         reasons.append(f"ring {node.ring_index} cell {node.cell_index}: {refusal}")
@@ -491,8 +499,28 @@ PROPERTY_CELL = dict(inner_radius=100.0, outer_radius=160.0, wedge_angle=30.0,
                      min_white_space=10.0)
 
 
+def _property_cell(entry, budget=1.0, min_white_space=None):
+    """
+    `PROPERTY_CELL`, or for a motif whose size gates (`size_gates`, at this white space) it fails at this
+    angular budget, the same wedge scaled out from the centre until it passes them: a motif is never placed
+    in a cell its gates refuse, so its properties are checked in one it accepts. Every motif whose gates the
+    standard cell meets gets the standard cell.
+    """
+    white = PROPERTY_CELL['min_white_space'] if min_white_space is None else min_white_space
+    depth = PROPERTY_CELL['outer_radius'] - PROPERTY_CELL['inner_radius']
+    mid = (PROPERTY_CELL['inner_radius'] + PROPERTY_CELL['outer_radius']) / 2.0
+    width = mid * math.radians(PROPERTY_CELL['wedge_angle']) * budget
+    gate_width, gate_depth = size_gates(entry, white + PROPERTY_CELL['stroke_width'])
+    scale = max(1.0, gate_width / width, gate_depth / depth)
+    if scale == 1.0:
+        return PROPERTY_CELL
+    return dict(PROPERTY_CELL, inner_radius=PROPERTY_CELL['inner_radius'] * scale,
+                outer_radius=PROPERTY_CELL['outer_radius'] * scale)
+
+
 def _generate(entry, seed, **over):
-    context = MotifContext(**dict(PROPERTY_CELL, rng=random.Random(seed), **over))
+    cell = _property_cell(entry, over.get('angular_limits', 1.0), over.get('min_white_space'))
+    context = MotifContext(**dict(cell, rng=random.Random(seed), **over))
     if 'base' not in entry['roles']:
         # A motif that cannot stand alone needs a slot to sit in.
         context.slot = [CellPoint(0.2, -0.4), CellPoint(0.2, 0.4),
@@ -643,7 +671,7 @@ def _tangent(entry):
     for height in entry.get('side_touch_heights', ()):
         radial = TOUCH_RADIALS[height]
         for seed in range(6):
-            context = MotifContext(**PROPERTY_CELL, rng=random.Random(seed), side_touch_radial=radial)
+            context = MotifContext(**_property_cell(entry), rng=random.Random(seed), side_touch_radial=radial)
             instance = entry['generator'](context)
             # A closed outline's vertex, or an interior vertex of an open vector (each spiral of a curl).
             found = [(vector.points, k) for vector in instance.vectors
