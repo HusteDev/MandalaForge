@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional
+import random
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+from shapely.geometry import LineString, Polygon
 
 from motifs.contract import Anatomy, MotifError, MotifInstance, ReachEnd, build_instance, require_full_budget
 from motifs.embellish import apply_embellishments, holds_pen
@@ -16,7 +20,7 @@ from motifs.geometry import (
     page_arc_points,
     side_touch_radial_within,
 )
-from motifs.slot_fit import fit_inside_slot, fit_slot_box
+from motifs.slot_fit import MIN_FIT_SCALE, SHRINK_FACTOR, fit_inside_slot, fit_slot_box
 
 CURVE_STEPS = 12
 # Each control beside the belly sits this share of its segment's radial length from the belly, at the
@@ -509,6 +513,540 @@ def generate_rounded_petal(context: MotifContext) -> MotifInstance:
     return _embellished_instance(context, points, anatomy)
 
 
+# Heart: two lobes, each a page-space circular arc, meeting at a cusp on the axis at the top and running by
+# cubics down to a point on the axis at the bottom. The lobe's widest vertex `(waist, half_width)` sits at a
+# drawn share of the height (the side-touch radial when there is one), the point at a drawn bottom radial, and
+# the cusp's notch is drawn as the angle `notch` its arcs leave the axis at. A lobe whose round arc would rise
+# past the top limit is lowered into a shoulder: a smaller circle whose arc ends partway down, joined to the
+# widest vertex by a cubic tangent to both.
+HEART_ARC_STEPS = 16
+HEART_BOTTOM_RANGE = (0.0, 0.1)
+HEART_WAIST_RANGE = (0.45, 0.6)
+HEART_WIDTH_RANGE = (0.65, 0.95)
+HEART_NOTCH_RANGE = (25.0, 45.0)
+HEART_SPREAD_RANGE = (0.15, 0.4)
+HEART_POINT_REACH = 0.35
+# A shouldered lobe's circle is this share of the room above the widest vertex, and its arc ends no lower than
+# where its tangent meets the widest vertex's radial tangent this share of the way up the shoulder.
+HEART_SHOULDER_SHARE = 0.85
+HEART_SHOULDER_CORNER = 0.25
+HEART_SHOULDER_STEP, HEART_SHOULDER_MIN = 2.5, 10.0
+
+
+def _heart_lobe(context: MotifContext, waist: CellPoint, top_limit: float, notch: float):
+    """
+    The right lobe's circle (centre in cell space, radius in px) and the angle its arc ends at, in the page
+    frame of `page_arc_points`: 90 when the arc runs down to the widest vertex `waist` itself, less when a
+    shoulder cubic joins it. The arc runs from that angle over the top to the cusp at `-(90 - notch)`.
+    """
+    lean = math.cos(math.radians(notch))  # the cusp sits this share of the radius left of the lobe's centre
+    radius = context.angular_to_px(waist.angular, waist.radial) / (1.0 + lean)
+    if waist.radial + context.px_to_radial(radius) <= top_limit:
+        centre = CellPoint(waist.radial, context.px_to_angular(radius * lean, waist.radial))
+        return centre, radius, 90.0
+    room = context.radial_to_px(top_limit - waist.radial)
+    radius = HEART_SHOULDER_SHARE * room
+    centre_radial = top_limit - context.px_to_radial(radius)
+    centre = CellPoint(centre_radial, context.px_to_angular(radius * lean, centre_radial))
+    end_deg = 90.0 - HEART_SHOULDER_STEP
+    while end_deg >= HEART_SHOULDER_MIN:
+        theta = math.radians(end_deg)
+        end = CellPoint(centre.radial + context.px_to_radial(radius * math.cos(theta)),
+                        centre.angular + context.px_to_angular(radius * math.sin(theta), centre.radial))
+        heading = _arc_heading(context, centre.radial, radius, end_deg)
+        if end.angular < waist.angular and heading.angular < 0:
+            back = (end.angular - waist.angular) / heading.angular
+            corner = end.radial - back * heading.radial
+            if corner >= waist.radial + HEART_SHOULDER_CORNER * (end.radial - waist.radial):
+                return centre, radius, end_deg
+        end_deg -= HEART_SHOULDER_STEP
+    raise MotifError("heart: no lobe fits below the top limit")
+
+
+def _heart_outline(
+    context: MotifContext,
+    bottom: float,
+    waist: CellPoint,
+    top_limit: float,
+    notch: float,
+    spread: float,
+) -> List[CellPoint]:
+    """
+    A closed heart: the point `(bottom, 0)`, a cubic up to the widest vertex `waist` arriving along the
+    radial, an optional shoulder cubic, and the lobe arc over the top to the cusp on the axis; mirrored.
+    """
+    centre, radius, end_deg = _heart_lobe(context, waist, top_limit, notch)
+    rise = waist.radial - bottom
+    handle = min(rise, max(rise * BELLY_HANDLE, BELLY_MIN_HANDLE))
+    right = cubic_points(
+        CellPoint(bottom, 0.0),
+        CellPoint(bottom + rise * HEART_POINT_REACH, waist.angular * spread),
+        CellPoint(waist.radial - handle, waist.angular),
+        waist,
+        CURVE_STEPS,
+    )
+    arc = page_arc_points(context, centre, radius, end_deg, -(90.0 - notch), HEART_ARC_STEPS)
+    if end_deg < 90.0:
+        end = arc[0]
+        heading = _arc_heading(context, centre.radial, radius, end_deg)
+        back = (end.angular - waist.angular) / heading.angular
+        corner = end.radial - back * heading.radial
+        right += cubic_points(
+            waist,
+            CellPoint(waist.radial + CONIC_HANDLE * (corner - waist.radial), waist.angular),
+            CellPoint(end.radial - CONIC_HANDLE * back * heading.radial,
+                      end.angular - CONIC_HANDLE * back * heading.angular),
+            end,
+            CURVE_STEPS,
+        )[1:]
+    else:
+        arc[0] = waist
+    arc[-1] = CellPoint(arc[-1].radial, 0.0)
+    return _closed_from_right(right + arc[1:])
+
+
+HEART_MAX_OVERFLOW = 0.2
+
+
+def generate_heart(context: MotifContext) -> MotifInstance:
+    rng = context.rng
+    # Every parameter is drawn before any limit is applied (the MONO property).
+    bottom = rng.uniform(*HEART_BOTTOM_RANGE)
+    waist_share = rng.uniform(*HEART_WAIST_RANGE)
+    width_share = rng.uniform(*HEART_WIDTH_RANGE)
+    notch = rng.uniform(*HEART_NOTCH_RANGE)
+    spread = rng.uniform(*HEART_SPREAD_RANGE)
+
+    def outline(low: float, high: float, half_width: float, waist_radial: Optional[float] = None) -> List[CellPoint]:
+        if waist_radial is None:
+            waist_radial = low + (high - low) * waist_share
+        return _heart_outline(context, low, CellPoint(waist_radial, half_width), high, notch, spread)
+
+    low, high = context.radial_limits
+    half_width = context.angular_limits * width_share
+    if context.slot:
+        box = fit_slot_box(context, "heart")
+        base, top = max(low, box.radial_min), min(high, box.radial_max)
+        if top <= base:
+            raise MotifError("heart does not fit slot")
+        width = min(half_width, box.half_width)
+        centre = (base + top) / 2.0
+        points = fit_inside_slot(context, "heart", lambda scale: outline(
+            centre + (base - centre) * scale, centre + (top - centre) * scale, width * scale))
+        _require_pen_room(context, "heart", points)
+    else:
+        base, top = max(low, 0.0, bottom), min(high, 1.0 + HEART_MAX_OVERFLOW)
+        # Side touch (spec 7.3): the lobes' widest vertices are the shared side vertices, at the full budget.
+        touch = side_touch_radial_within(context, base, top)
+        if touch is not None:
+            half_width = context.angular_limits
+        points = outline(base, top, half_width, touch)
+    cusp = next(k for k, point in enumerate(points) if k and point.angular == 0.0)
+    anatomy = Anatomy(base=points[0], tip=points[cusp], outline=0)
+    return _embellished_instance(context, points, anatomy)
+
+
+# Curl: two mirrored spirals joined at the base. Each is one open vector: a stalk from the base on the axis out
+# to the bottom of its spiral, the spiral winding up the outer side, over the top and down the side facing the
+# axis, tightening by one pitch per turn, and a straight connector from the inner end out to the turn before
+# it, so the end lands on the vector's own earlier ink. The spiral is built in true page coordinates about its
+# centre (offsets along and across the centre's radius) and mapped into the cell with `to_cell`, so consecutive
+# turns sit a pitch of at least `clearance_px()` apart on the page; it may be stretched (by at least 1) along
+# the radial to suit a tall cell and across it to fill a wide one, up to `CURL_MAX_STRETCH`, past which it keeps
+# to the cell edge and a longer stalk reaches the axis. Its outermost vertex, where the tangent runs along the
+# radial, is the side-touch vertex. It winds a drawn 1.15 to 1.5 turns, fewer when the cell is small; when not
+# even `CURL_MIN_TURNS` fits there is no earlier turn to land on, and it draws a loop of `CURL_LOOP_SWEEP` whose
+# inner end drops onto its own stalk instead.
+CURL_STALK_STEPS = 8
+# The stalk's controls sit this share of the centre's distance from the axis along its end tangents.
+CURL_STALK_HANDLE = 0.4
+CURL_STEPS_PER_TURN = 64
+CURL_TURNS_RANGE = (1.15, 1.5)
+CURL_MIN_TURNS = 1.1
+CURL_EYE_RANGE = (0.3, 0.7)  # the inner end's distance from the centre, as a share of the pitch
+CURL_PITCH_RANGE = (1.0, 1.25)  # the pitch as a multiple of the clearance
+CURL_TALL_RANGE = (1.0, 1.2)  # radial stretch of the spiral
+CURL_WIDTH_RANGE = (0.75, 0.95)  # without side touch, the share of the half-cell the curl spans
+CURL_CENTRE_RANGE = (0.4, 0.6)  # without side touch, the radial of the spiral's centre
+CURL_DIP_RANGE = (0.0, 0.25)  # how far the base sits below the spiral's bottom, as a share of the pitch
+CURL_MIN_EYE_PX = 1.5
+CURL_LOOP_SWEEP = 1.75 * math.pi
+CURL_MIN_LOOP_PITCH_PX = 2.0
+CURL_LOOP_SLACK = 0.85
+CURL_MAX_STRETCH = 1.6
+CURL_PASSES = 10
+CURL_DROP_MARGIN = 1.1
+CURL_MAX_OVERFLOW = 0.2
+# The size is fitted in a flat approximation of the cell and then pinned exactly on the page; the fit leaves
+# this share of the room, so the exact across-stretch never has to fall below 1.
+CURL_FIT_SHARE = 0.97
+CURL_PIN_PASSES = 4
+CURL_FLOOR_MARGIN_PX = 0.5
+CURL_OUTERMOST_BRACKET = 0.5
+
+
+@dataclass
+class CurlLayout:
+    """The right spiral of a curl: its centre on the page and its shape in px about that centre."""
+
+    centre: CellPoint
+    centre_radius: float  # px from the ring centre to the spiral's centre
+    centre_angle: float  # the spiral centre's angle in the unturned cell, in radians
+    centre_y: float  # px across from the axis to the spiral's centre
+    start_radius: float  # px from the centre to the spiral's start, at its bottom
+    tighten: float  # px per radian the radius shrinks
+    sweep: float  # radians the spiral turns through
+    stretch_radial: float
+    stretch_angular: float
+    dip: float  # px the base sits below the spiral's bottom
+    outermost: float  # the sweep angle of the outermost vertex
+    touch: Optional[float]
+
+    @property
+    def centres(self) -> List[CellPoint]:
+        """Both spirals' centres, right then left."""
+        return [self.centre, CellPoint(self.centre.radial, -self.centre.angular)]
+
+
+def _curl_draws(rng: random.Random) -> Tuple[float, ...]:
+    """Every curl parameter, drawn before any limit is applied (the MONO property)."""
+    return (rng.uniform(*CURL_TURNS_RANGE), rng.uniform(*CURL_EYE_RANGE), rng.uniform(*CURL_PITCH_RANGE),
+            rng.uniform(*CURL_TALL_RANGE), rng.uniform(*CURL_WIDTH_RANGE), rng.uniform(*CURL_CENTRE_RANGE),
+            rng.uniform(*CURL_DIP_RANGE))
+
+
+def curl_layout(context: MotifContext, draws: Optional[Tuple[float, ...]] = None,
+                box: Optional[Tuple[float, float, float]] = None) -> CurlLayout:
+    """
+    Lay out the right spiral. As a base, the curl spans its half-cell from the axis to the side-touch vertex
+    (or a drawn share of the half-cell) between radial 0 and the overflow limit, centred on the side-touch
+    radial (or a drawn radial); a slot child passes `box`, its `(floor, ceiling, half_width_px)`, and is
+    centred in it. Raises `MotifError` when not even a loop fits.
+    """
+    turns, eye, pitch_share, tall, width_share, centre_share, dip_share = draws or _curl_draws(context.rng)
+    low, high = context.radial_limits
+    if box is not None:
+        floor, ceiling, width_px = box
+        touch, centre = None, (floor + ceiling) / 2.0
+    else:
+        floor, ceiling, width_px = max(low, 0.0), min(high, 1.0 + CURL_MAX_OVERFLOW), None
+        touch = side_touch_radial_within(context, floor, ceiling)
+        # An absolute drawn radial, so a narrower ceiling only ever shrinks the curl (the MONO property).
+        centre = touch if touch is not None else max(floor, min(ceiling, centre_share))
+    clearance = context.clearance_px()
+    pitch, gap = clearance * pitch_share, clearance / 2.0
+    # `sink` is how far the base sits below the spiral's bottom on the page; `lift` how much further out on
+    # the page than in the flat layout the base sits, off to one side of the centre's radius. The flat dip is
+    # their sum, so the base lands `sink` below the bottom and only `sink` is taken from the room below.
+    sink, lift, lean = dip_share * pitch, 0.0, 1.0
+    for _ in range(CURL_PASSES):
+        if width_px is not None:
+            half_width = width_px
+        elif touch is not None:
+            half_width = context.angular_to_px(context.angular_limits, centre)
+        else:
+            half_width = width_share * context.angular_to_px(context.angular_limits, centre)
+        fit = _curl_fit(turns, eye, pitch, tall, CURL_FIT_SHARE * half_width - lean * gap,
+                        context.radial_to_px(centre - floor) - sink - CURL_FLOOR_MARGIN_PX,
+                        context.radial_to_px(ceiling - centre), lean)
+        if fit is None:
+            raise MotifError("curl does not fit its cell")
+        start, tighten, sweep, stretch_r, stretch_a, offset, outermost = fit
+        moved = centre
+        if touch is not None:
+            # The outermost vertex is the side-touch vertex: the centre sits so that vertex is on the radial.
+            radius = start - tighten * outermost
+            moved = touch - context.px_to_radial(stretch_r * radius * math.cos(math.pi - outermost))
+        # The stalk's control beside the spiral's bottom lies on the spiral's tangent, a little below the
+        # bottom; the base sits at least that low, so it stays the curl's lowest point.
+        stalk_drop = _curl_stalk_drop(gap + offset, start, tighten, stretch_r, stretch_a)
+        new_sink = max(dip_share * pitch, CURL_DROP_MARGIN * stalk_drop if stalk_drop > sink else sink)
+        base_radius = context.radius_at(moved) - stretch_r * start - new_sink
+        if base_radius <= 0:
+            raise MotifError("curl does not fit below its centre")
+        new_lift = math.hypot(base_radius, gap + offset) - base_radius
+        # The run across to the axis sits at the base's radius, lower than the centre's, where the same px
+        # span a wider angle: it counts `lean` times over in the room measured at the centre.
+        new_lean = context.radius_at(moved) / base_radius
+        if (new_sink == sink and abs(moved - centre) <= 1e-12 and abs(new_lift - lift) <= 1e-9
+                and abs(new_lean - lean) <= 1e-12):
+            break
+        centre, sink, lift, lean = moved, new_sink, new_lift, new_lean
+    dip = sink + lift
+    layout = CurlLayout(
+        centre=CellPoint(centre, 0.0), centre_radius=context.radius_at(centre), centre_angle=0.0,
+        centre_y=gap + offset, start_radius=start, tighten=tighten, sweep=sweep, stretch_radial=stretch_r,
+        stretch_angular=stretch_a, dip=dip, outermost=outermost, touch=touch,
+    )
+    layout.centre_angle = _curl_centre_angle(layout)
+    inner = offset / stretch_a if stretch_a < CURL_MAX_STRETCH else None
+    for _ in range(CURL_PASSES):
+        if touch is not None:
+            _pin_curl(context, layout, gap, inner)
+        # Off to one side of the centre's radius, the base sits a little further out on the page than the
+        # flat layout says; it goes deeper until it is below the spiral's end of the stalk. (Beside the base
+        # the stalk may sag a hair below it; `CURL_FLOOR_MARGIN_PX` keeps that inside the limits.)
+        lowest = min(math.hypot(*(a - b for a, b in zip(page, context.center)))
+                     for page in _curl_stalk_pages(context, layout)[32:])
+        base = math.hypot(*(a - b for a, b in zip(_curl_page(context, layout, *_curl_base_offset(layout)),
+                                                  context.center)))
+        if base <= lowest + 1e-9:
+            break
+        layout.dip += CURL_DROP_MARGIN * (base - lowest)
+        layout.centre_angle = _curl_centre_angle(layout)
+    layout.outermost = _curl_outermost(layout)[0]
+    layout.centre = context.to_cell(_curl_page(context, layout, 0.0, 0.0))
+    return layout
+
+
+def _curl_base_offset(layout: CurlLayout) -> Tuple[float, float]:
+    """The base's px offsets from the spiral's centre: the dip below the spiral's bottom, across on the axis."""
+    return -layout.stretch_radial * layout.start_radius - layout.dip, -layout.centre_y
+
+
+def _curl_stalk_pages(context: MotifContext, layout: CurlLayout) -> List[Tuple[float, float]]:
+    """The stalk sampled finely on the page, base to the spiral's start."""
+    at = _curl_stalk(layout)
+    return [_curl_page(context, layout, *at(k / 64)) for k in range(65)]
+
+
+def _curl_stalk(layout: CurlLayout):
+    """
+    The stalk as a function of its parameter (0 at the base, 1 at the spiral's start), in px offsets from the
+    spiral's centre: from the base on the axis, the dip below the spiral's bottom, out to the spiral's start,
+    leaving the axis square to it on the page (so the two stalks meet there in one smooth curve) and arriving
+    along the spiral's own tangent.
+    """
+    bottom = -layout.stretch_radial * layout.start_radius
+    tangent = (layout.stretch_radial * layout.tighten, layout.stretch_angular * layout.start_radius)
+    norm = math.hypot(*tangent)
+    handle = CURL_STALK_HANDLE * layout.centre_y
+    base = _curl_base_offset(layout)
+    # Square to the axis on the page is tilted by the centre's angle in the centre's own frame.
+    square = (math.sin(layout.centre_angle), math.cos(layout.centre_angle))
+    controls = [base, (base[0] + handle * square[0], base[1] + handle * square[1]),
+                (bottom - handle * tangent[0] / norm, -handle * tangent[1] / norm), (bottom, 0.0)]
+
+    def at(u: float) -> Tuple[float, float]:
+        w = ((1 - u) ** 3, 3 * (1 - u) ** 2 * u, 3 * (1 - u) * u * u, u ** 3)
+        return sum(a * c[0] for a, c in zip(w, controls)), sum(a * c[1] for a, c in zip(w, controls))
+
+    return at
+
+
+def _curl_centre_angle(layout: CurlLayout) -> float:
+    """The spiral centre's angle that puts the base, below and across from it, exactly on the axis."""
+    return math.atan2(layout.centre_y,
+                      layout.centre_radius - layout.stretch_radial * layout.start_radius - layout.dip)
+
+
+def _curl_page(context: MotifContext, layout: CurlLayout, x: float, y: float) -> Tuple[float, float]:
+    """The page point `x` px out along the spiral centre's radius and `y` px across it, toward the cell edge."""
+    angle = layout.centre_angle
+    along, across = (math.cos(angle), math.sin(angle)), (-math.sin(angle), math.cos(angle))
+    reach = layout.centre_radius + x
+    return (context.center[0] + reach * along[0] + y * across[0],
+            context.center[1] + reach * along[1] + y * across[1])
+
+
+def _curl_outermost(layout: CurlLayout) -> Tuple[float, float, float]:
+    """
+    The sweep angle, page angle (radians, in the unturned cell) and page radius of the spiral's outermost
+    point: the largest angle about the ring centre, where the spiral's tangent runs along the radial. A
+    golden-section search finds it within `CURL_OUTERMOST_BRACKET` of the flat layout's outermost angle.
+    """
+    def angle_at(t: float) -> float:
+        x, y = _curl_offsets(layout, t)
+        return math.atan2(y, layout.centre_radius + x)
+
+    lo = max(0.0, layout.outermost - CURL_OUTERMOST_BRACKET)
+    hi = min(math.pi, layout.outermost + CURL_OUTERMOST_BRACKET)
+    golden = (math.sqrt(5.0) - 1.0) / 2.0
+    for _ in range(60):
+        a, b = hi - golden * (hi - lo), lo + golden * (hi - lo)
+        lo, hi = (a, hi) if angle_at(a) < angle_at(b) else (lo, b)
+    t = (lo + hi) / 2.0
+    x, y = _curl_offsets(layout, t)
+    return t, layout.centre_angle + angle_at(t), math.hypot(layout.centre_radius + x, y)
+
+
+def _pin_curl(context: MotifContext, layout: CurlLayout, gap: float, inner: Optional[float]) -> None:
+    """
+    Pin the outermost vertex on the side-touch vertex: solve the across-stretch (keeping the gap to the axis)
+    or, when the stretch is capped (`inner` is None), the centre's distance from the axis, so the outermost
+    angle is the cell edge's; then move the centre along its radius so that vertex sits on the side-touch
+    radial. Alternating passes settle both; the generator then sets the vertex to the exact cell point.
+    """
+    target_angle = math.radians(context.half_angle * context.angular_limits)
+    target_radius = context.radius_at(layout.touch)
+
+    def outer_angle(value: float) -> float:
+        if inner is None:
+            layout.centre_y = value
+        else:
+            layout.stretch_angular, layout.centre_y = value, gap + value * inner
+        layout.centre_angle = _curl_centre_angle(layout)
+        return _curl_outermost(layout)[1]
+
+    for _ in range(CURL_PIN_PASSES):
+        layout.centre_radius += target_radius - _curl_outermost(layout)[2]
+        # Secant steps on the stretch (or distance), which the outermost angle follows almost linearly.
+        a = layout.centre_y if inner is None else layout.stretch_angular
+        b = a * 1.01
+        fa, fb = outer_angle(a) - target_angle, outer_angle(b) - target_angle
+        for _ in range(30):
+            if fb == fa or abs(fb) <= 1e-15:
+                break
+            a, b, fa = b, b - fb * (b - a) / (fb - fa), fb
+            fb = outer_angle(b) - target_angle
+        outer_angle(b)
+    if inner is not None and layout.stretch_angular < 1.0 - 1e-9:
+        raise MotifError("curl is too wide for its cell")
+
+
+def _curl_stalk_drop(centre_y: float, start: float, tighten: float, stretch_r: float, stretch_a: float) -> float:
+    """How far below the spiral's bottom the stalk's second control sits, in px (see `_curl_vector`)."""
+    tangent = (stretch_r * tighten, stretch_a * start)
+    return CURL_STALK_HANDLE * centre_y * tangent[0] / math.hypot(*tangent)
+
+
+def _curl_extent(start: float, tighten: float, sweep: float) -> Tuple[float, float, float]:
+    """
+    The unstretched spiral's reach toward the cell edge and toward the axis, in px from its centre, and the
+    sweep angle of its outermost point, where `d/dt (r sin t) = 0`, so `tan t = r / tighten`.
+    """
+    angle = math.pi / 2.0
+    for _ in range(60):
+        angle = math.atan2(start - tighten * angle, tighten)
+    samples = [sweep * k / 2000 for k in range(2001)]
+    inner = -min((start - tighten * t) * math.sin(t) for t in samples)
+    return (start - tighten * angle) * math.sin(angle), inner, angle
+
+
+def _curl_fit(turns, eye, pitch, tall, room, below, above, lean=1.0):
+    """
+    `(start, tighten, sweep, stretch_radial, stretch_angular, offset, outermost)` for a spiral filling `room`
+    px beside the gap to the axis (`offset` is its centre's distance past the gap; the side facing the axis
+    counts `lean` times over, see `curl_layout`), with `below` px under its
+    centre (the base's dip already taken off) and `above` px over it, in a flat approximation of the cell;
+    None when not even a loop fits. The spiral winds the drawn `turns` when there is room, fewer when there is
+    not; below `CURL_MIN_TURNS` it is a loop.
+    """
+    if room <= 0 or below <= 0 or above <= 0:
+        return None
+    attempts = []
+    start = min(eye * pitch + turns * pitch, (room + pitch) / 2.0, below, above + pitch / 2.0)
+    spiral_turns = min(turns, (start - CURL_MIN_EYE_PX) / pitch)
+    if spiral_turns >= CURL_MIN_TURNS:
+        attempts.append((start, pitch, 2.0 * math.pi * spiral_turns))
+    # A loop of 0.875 turns is about 2 * eye + 0.75 * pitch wide and starts 0.875 pitch out from its eye; its
+    # pitch keeps some slack below that, since its true width is a little more.
+    loop_pitch = min(pitch, CURL_LOOP_SLACK * (room - 2.0 * CURL_MIN_EYE_PX) / 0.75,
+                     CURL_LOOP_SLACK * (below - CURL_MIN_EYE_PX) / 0.875)
+    if loop_pitch >= CURL_MIN_LOOP_PITCH_PX:
+        attempts.append((min((room + loop_pitch) / 2.0, below, above + loop_pitch / 2.0), loop_pitch,
+                         CURL_LOOP_SWEEP))
+    for start, step, sweep in attempts:
+        tighten = step / (2.0 * math.pi)
+        # The width is only about 2 * start - step: shrink the start until the true width fits the room.
+        for _ in range(20):
+            outer, inner, outermost = _curl_extent(start, tighten, sweep)
+            if outer + lean * inner <= room:
+                break
+            start -= (outer + lean * inner - room) / 2.0 + 1e-9
+        if outer + lean * inner > room or start - tighten * sweep < CURL_MIN_EYE_PX:
+            continue
+        stretch_r = max(1.0, min(tall, below / start, above / (start - tighten * math.pi)))
+        # Stretched across to fill the room, up to `CURL_MAX_STRETCH`; past that the spiral keeps to the
+        # cell edge (its outermost vertex on the side-touch vertex) and a longer stalk reaches the axis.
+        stretch_a = min(room / (outer + lean * inner), CURL_MAX_STRETCH)
+        return start, tighten, sweep, stretch_r, stretch_a, (room - stretch_a * outer) / lean, outermost
+    return None
+
+
+def _curl_offsets(layout: CurlLayout, t: float) -> Tuple[float, float]:
+    """The spiral's px offsets from its centre at sweep angle `t` (0 at its bottom, then up the outer side)."""
+    radius = layout.start_radius - layout.tighten * t
+    return (layout.stretch_radial * radius * math.cos(math.pi - t),
+            layout.stretch_angular * radius * math.sin(math.pi - t))
+
+
+def _curl_vector(context: MotifContext, layout: CurlLayout) -> List[CellPoint]:
+    """The right spiral's open vector: stalk, spiral and connector, ending on its own earlier ink."""
+    def point(x: float, y: float) -> CellPoint:
+        return context.to_cell(_curl_page(context, layout, x, y))
+
+    count = max(8, int(math.ceil(layout.sweep / (2.0 * math.pi) * CURL_STEPS_PER_TURN)))
+    landing_angle = layout.sweep - 2.0 * math.pi
+    angles = sorted({layout.sweep * k / count for k in range(count + 1)} | {layout.outermost}
+                    | ({landing_angle} if landing_angle > 0 else set()))
+    spiral = [point(*_curl_offsets(layout, t)) for t in angles]
+    if layout.touch is not None:
+        spiral[angles.index(layout.outermost)] = CellPoint(layout.touch, context.angular_limits)
+
+    stalk_at = _curl_stalk(layout)
+    params = [k / CURL_STALK_STEPS for k in range(CURL_STALK_STEPS)]
+    landing_param = None
+    if landing_angle <= 0:
+        # A loop: its inner end drops straight down onto the stalk, at the stalk point level with it.
+        end_y = _curl_offsets(layout, layout.sweep)[1]
+        lo, hi = 0.0, 1.0
+        for _ in range(80):
+            mid = (lo + hi) / 2.0
+            lo, hi = (mid, hi) if stalk_at(mid)[1] < end_y else (lo, mid)
+        landing_param = hi
+        params = sorted(set(params) | {landing_param})
+    stalk = [point(*stalk_at(u)) for u in params]
+    stalk[0] = CellPoint(stalk[0].radial, 0.0)
+    if landing_param is None:
+        landing = spiral[angles.index(landing_angle)]
+    else:
+        landing = stalk[params.index(landing_param)]
+    # The stalk stops a sample short of the spiral's start, which the spiral already carries.
+    return stalk + spiral + [landing]
+
+
+def generate_curl(context: MotifContext) -> MotifInstance:
+    right = _curl_in_slot(context) if context.slot else _curl_base(context)
+    base = right[0]
+    # A base's own reach ends are never drawn: this one marks the curl as an open motif hanging from its base,
+    # whose contact with the structure comes from the ring (side touch, or a stem the composer adds).
+    reach = ReachEnd(point=base, direction="inward", max_length_px=context.ring_depth, style="straight")
+    return build_instance(context, [SmartVector(right), SmartVector(mirror_points(right))],
+                          reach_ends=[reach], base_point=base)
+
+
+def _curl_base(context: MotifContext) -> List[CellPoint]:
+    """The right spiral of a base curl, which must keep inside its radial and angular limits."""
+    right = _curl_vector(context, curl_layout(context))
+    low, high = context.radial_limits
+    if (min(p.radial for p in right) < max(low, 0.0) - 1e-9
+            or max(p.radial for p in right) > min(high, 1.0 + CURL_MAX_OVERFLOW) + 1e-9
+            or max(p.angular for p in right) > context.angular_limits + 1e-12):
+        raise MotifError("curl does not fit its cell")
+    return right
+
+
+def _curl_in_slot(context: MotifContext) -> List[CellPoint]:
+    """The right spiral laid out in the slot's box and shrunk about its middle until both lie inside the slot."""
+    box = fit_slot_box(context, "curl")
+    draws = _curl_draws(context.rng)
+    slot = Polygon([(p.angular, p.radial) for p in context.slot])
+    mid = box.radial_mid
+    scale = 1.0
+    while scale >= MIN_FIT_SCALE:
+        floor, ceiling = mid + (box.radial_min - mid) * scale, mid + (box.radial_max - mid) * scale
+        try:
+            right = _curl_vector(context, curl_layout(
+                context, draws, (floor, ceiling, context.angular_to_px(box.half_width, mid) * scale)))
+        except MotifError:
+            break
+        if all(slot.contains(LineString([(side * p.angular, p.radial) for p in right])) for side in (1, -1)):
+            return right
+        scale *= SHRINK_FACTOR
+    raise MotifError("curl does not fit slot")
+
+
 SCALLOP_STEPS = 24
 # Each step toward the base radial keeps this share of the lobe's height.
 SCALLOP_SHRINK = 0.9
@@ -651,6 +1189,40 @@ BOTANICAL_MOTIFS: List[Dict] = [
         "max_overflow_inward": 0.0,
         "max_overflow_outward": 0.2,
         "slot_estimate": (0.5, 0.5),
+    },
+    {
+        "name": "heart",
+        "category": "botanical",
+        "generator": generate_heart,
+        "positions": ["centre"],
+        "roles": ["base", "slot"],
+        "touch": True,
+        "side_touch_heights": ("mid",),
+        "seams": False,
+        "embellishments": ("echo",),
+        "spans_cell": False,
+        "min_cell_width_px": 14.0,
+        "min_ring_depth_px": 18.0,
+        "max_overflow_inward": 0.0,
+        "max_overflow_outward": 0.2,
+        "slot_estimate": (0.45, 0.4),
+    },
+    {
+        "name": "curl",
+        "category": "botanical",
+        "generator": generate_curl,
+        "positions": ["centre"],
+        "roles": ["base", "slot"],
+        "touch": True,
+        "side_touch_heights": ("mid",),
+        "seams": False,
+        "embellishments": (),
+        "spans_cell": False,
+        "min_cell_width_px": 28.0,
+        "min_ring_depth_px": 24.0,
+        "max_overflow_inward": 0.0,
+        "max_overflow_outward": 0.2,
+        "slot_estimate": None,
     },
     {
         "name": "scallop",

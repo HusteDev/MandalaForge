@@ -637,15 +637,18 @@ TANGENT_LIMIT_DEG = 10.0
 def _tangent(entry):
     """
     At each declared touch height the outline's side-touch vertex runs along the divider: the tangent
-    there is within `TANGENT_LIMIT_DEG` of radial for seeds 0 to 5. A missing touch vertex fails.
+    there is within `TANGENT_LIMIT_DEG` of radial for seeds 0 to 5. The vertex is on a closed outline or
+    inside an open vector (never an open end, whose chord would wrap). A missing touch vertex fails.
     """
     for height in entry.get('side_touch_heights', ()):
         radial = TOUCH_RADIALS[height]
         for seed in range(6):
             context = MotifContext(**PROPERTY_CELL, rng=random.Random(seed), side_touch_radial=radial)
             instance = entry['generator'](context)
-            found = [(vector.points, k) for vector in instance.vectors if vector.closed
-                     for k, p in enumerate(vector.points) if p.radial == radial and abs(p.angular) == 1.0]
+            # A closed outline's vertex, or an interior vertex of an open vector (each spiral of a curl).
+            found = [(vector.points, k) for vector in instance.vectors
+                     for k, p in enumerate(vector.points) if p.radial == radial and abs(p.angular) == 1.0
+                     and (vector.closed or 0 < k < len(vector.points) - 1)]
             sides = {points[k].angular for points, k in found}
             if sides != {1.0, -1.0}:  # both touch vertices must exist
                 return False
