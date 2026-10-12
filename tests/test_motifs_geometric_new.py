@@ -2,13 +2,20 @@
 import random
 
 import pytest
+from shapely.geometry import Polygon
 
 from motifs import find_motif
-from motifs.geometry import CellPoint, MotifContext
+from motifs.geometry import CellPoint, MotifContext, cell_rotation_deg
+from qa_patterns import tangent_error_deg, turn_at
 
 
 def make_ctx(cell_kwargs, seed=7, **over):
     return MotifContext(**{**cell_kwargs, "rng": random.Random(seed), **over})
+
+
+# The side leaves the touch vertex along the divider (smooth touch, spec 3.3) before it turns inward, so the
+# concavity is asserted past the first fifth of the corner-to-tip run only (controller ruling, Task 16 review).
+CONCAVE_FROM = 0.2
 
 
 def test_spike_sides_are_concave(cell_kwargs):
@@ -16,7 +23,8 @@ def test_spike_sides_are_concave(cell_kwargs):
     pts = find_motif("spike")["generator"](ctx).vectors[0].points
     tip = max(pts, key=lambda p: p.radial)
     corner = CellPoint(0.12, 1.0)
-    right = [p for p in pts if p.angular > 0 and corner.radial < p.radial < tip.radial]
+    start = corner.radial + CONCAVE_FROM * (tip.radial - corner.radial)
+    right = [p for p in pts if p.angular > 0 and start < p.radial < tip.radial]
     chord = lambda r: 1.0 - (r - corner.radial) / (tip.radial - corner.radial)
     assert right and all(p.angular < chord(p.radial) for p in right)
 
@@ -29,8 +37,33 @@ def test_spike_sides_are_concave_for_every_draw(cell_kwargs):
                 pts = gen(make_ctx(cell_kwargs, seed, angular_limits=limit, side_touch_radial=radial)).vectors[0].points
                 tip = max(pts, key=lambda p: p.radial)
                 chord = lambda r: limit * (1.0 - (r - radial) / (tip.radial - radial))
-                right = [p for p in pts if p.angular > 0 and radial < p.radial < tip.radial]
+                start = radial + CONCAVE_FROM * (tip.radial - radial)
+                right = [p for p in pts if p.angular > 0 and start < p.radial < tip.radial]
                 assert right and all(p.angular < chord(p.radial) for p in right), (seed, limit, radial)
+                # It still reads as concave: the side's midpoint radial sits well inside the chord.
+                middle = min(right, key=lambda p: abs(p.radial - (radial + tip.radial) / 2.0))
+                assert middle.angular < 0.8 * chord(middle.radial)
+
+
+def test_spike_touch_vertex_has_no_visible_corner(cell_kwargs):
+    gen = find_motif("spike")["generator"]
+    for seed in range(40):
+        for limit in (1.0, 0.5):
+            for radial in (0.08, 0.12, 0.2):
+                ctx = make_ctx(cell_kwargs, seed, angular_limits=limit, side_touch_radial=radial)
+                pts = gen(ctx).vectors[0].points
+                for side in (limit, -limit):
+                    k = pts.index(CellPoint(radial, side))
+                    assert turn_at(ctx, pts, k) <= 25.0, (seed, limit, radial)
+
+
+def test_spike_tip_is_sharp(cell_kwargs):
+    gen = find_motif("spike")["generator"]
+    for seed in range(40):
+        ctx = make_ctx(cell_kwargs, seed, side_touch_radial=0.12)
+        pts = gen(ctx).vectors[0].points
+        tip = max(range(len(pts)), key=lambda k: pts[k].radial)
+        assert pts[tip].angular == 0.0 and turn_at(ctx, pts, tip) >= 90.0
 
 
 def test_spike_has_exact_touch_vertices_a_sharp_tip_and_nothing_wider(cell_kwargs):
@@ -56,11 +89,6 @@ def test_spike_is_mirror_symmetric_and_widest_at_its_base_without_side_touch(cel
 
 
 # ----- bead -----------------------------------------------------------------
-
-from shapely.geometry import Polygon
-
-from qa_patterns import tangent_error_deg
-
 
 def _bead(ctx):
     return find_motif("bead")["generator"](ctx).vectors[0].points
@@ -100,7 +128,7 @@ def test_bead_becomes_an_oval_with_exact_ends_and_radial_tangents_at_full_budget
                 before, after = pts[k - 1], pts[(k + 1) % len(pts)]
                 # The vertex's neighbours sit on one ray, either side of it: the outline crosses it radially.
                 assert before.angular == pytest.approx(after.angular, abs=1e-12)
-                assert before.radial - radial == pytest.approx(radial - after.radial, abs=1e-12) or                     after.radial - radial == pytest.approx(radial - before.radial, abs=1e-12)
+                assert before.radial - radial == pytest.approx(radial - after.radial, abs=1e-12)
                 # The chord measure only reads the ray beside the vertex's own, well inside the TANG limit.
                 assert tangent_error_deg(ctx, pts, k) < 1.0
             # Squashed: the circle through those ends would not fit, so the radial extent is clamped.
@@ -127,3 +155,26 @@ def test_bead_in_a_slot_is_a_circle_inside_the_slot(cell_kwargs):
         half_px = ctx.radial_to_px(top - bottom) / 2.0
         mid = (top + bottom) / 2.0
         assert ctx.angular_to_px(max(p.angular for p in pts), mid) == pytest.approx(half_px)
+
+
+def test_bead_in_both_mode_meets_the_centre_motif_at_the_shared_vertices(cell_kwargs):
+    # In `both` mode the centre motif's budget is centre_share and the divider bead's is 1 - centre_share
+    # (spec 7.3): the bead's diameter ends are the side vertices it shares with the centre motifs either side.
+    divisions = round(360.0 / cell_kwargs["wedge_angle"])
+    for share in (0.45, 0.6, 0.75):
+        for radial in (0.12, 0.45):
+            centre_ctx = make_ctx(cell_kwargs, 3, angular_limits=share, side_touch_radial=radial)
+            bead_ctx = make_ctx(cell_kwargs, 3, position="divider", angular_limits=1.0 - share,
+                                side_touch_radial=radial)
+            petal = find_motif("petal")["generator"](centre_ctx).vectors[0].points
+            bead = _bead(bead_ctx)
+            for cell in (0, 1):
+                # The divider of cell 0 lies between centre cells 0 and 1.
+                petal_side = share if cell == 0 else -share
+                bead_side = -(1.0 - share) if cell == 0 else 1.0 - share
+                assert CellPoint(radial, petal_side) in petal and CellPoint(radial, bead_side) in bead
+                petal_xy = centre_ctx.to_cartesian(CellPoint(radial, petal_side),
+                                                   cell_rotation_deg(cell, divisions, "centre"))
+                bead_xy = bead_ctx.to_cartesian(CellPoint(radial, bead_side),
+                                                cell_rotation_deg(0, divisions, "divider"))
+                assert petal_xy == pytest.approx(bead_xy, abs=1e-9)

@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 from motifs.contract import Anatomy, MotifError, MotifInstance, build_instance, require_full_budget
 from motifs.embellish import apply_embellishments, holds_pen as _holds_pen
 from motifs.geometry import (
-    CellPoint, MotifContext, SmartVector, cubic_points, mirror_points, page_arc_points, quad_points,
+    CellPoint, MotifContext, SmartVector, cubic_points, mirror_points, quad_points,
 )
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
 
@@ -158,21 +158,38 @@ SPIKE_LENGTH_RANGE = (0.95, 1.15)
 SPIKE_CORNER_RANGE = (0.08, 0.2)
 SPIKE_WIDTH_RANGE = (0.75, 1.0)
 # Each concave side is a cubic from a base corner to the tip. Its first control sits at the corner's angular,
-# so the side leaves the corner along the divider (smooth touch, spec 3.3), this share of the corner-to-tip
-# radial above it; kept small so the side turns inward at once and every sample stays inside the chord.
-SPIKE_LEAVE_RANGE = (0.01, 0.025)
+# this share of the corner-to-tip radial above it, so the side leaves the corner along the divider (smooth
+# touch, spec 3.3) and turns inward gradually, with no visible corner at the touch vertex.
+SPIKE_LEAVE_RANGE = (0.15, 0.18)
 # The second control: its radial as a share of the corner-to-tip radial, and its angular as a share of the
-# corner's half-width. A lower angular share draws a deeper concave side and a finer tip. In shares of the
-# corner-to-tip run, the side at parameter t lies inside the chord exactly when
-# `(1 - t) * leave / t + waist + pinch < 1`, so the first sample (t = 1/8) holds it for every draw:
-# 7 * 0.025 + 0.5 + 0.3 = 0.975.
-SPIKE_WAIST_RANGE = (0.3, 0.5)
-SPIKE_PINCH_RANGE = (0.15, 0.3)
+# corner's half-width. A lower angular share draws a deeper concave side and a finer tip. The side at
+# parameter t lies inside the straight corner-to-tip chord exactly when `(1 - t) * leave / t + waist + pinch < 1`,
+# so from t = 0.18 / 0.63 (about 0.29) on for every draw; there the side has risen at most 0.18 of the run, so
+# everything past the first fifth of the run is concave.
+SPIKE_WAIST_RANGE = (0.35, 0.45)
+SPIKE_PINCH_RANGE = (0.0, 0.1)
 # The cup below the corners leaves the base vertex across the axis, its control this share of the half-width
 # out, and arrives at the corner along the divider, its control this share of the cup's height below it.
 SPIKE_CUP_SPREAD = 0.3
 SPIKE_CUP_RISE = 0.8
-SPIKE_STEPS = 8
+# Samples per cubic, spaced quadratically closer toward the corner, so the traced pieces either side of the
+# touch vertex are short and follow the curves' radial tangents there.
+SPIKE_STEPS = 16
+
+
+def _cubic_at(start: CellPoint, control1: CellPoint, control2: CellPoint, end: CellPoint,
+              ts: List[float]) -> List[CellPoint]:
+    """A cubic in cell space sampled at the parameters `ts`, which run from 0 to 1; exact ends, nothing clamped."""
+    points = []
+    for t in ts:
+        u = 1.0 - t
+        w0, w1, w2, w3 = u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t
+        points.append(CellPoint(
+            radial=w0 * start.radial + w1 * control1.radial + w2 * control2.radial + w3 * end.radial,
+            angular=w0 * start.angular + w1 * control1.angular + w2 * control2.angular + w3 * end.angular,
+        ))
+    points[0], points[-1] = start, end
+    return points
 
 
 def _spike(base: float, corner: float, width: float, tip: float, leave: float, waist: float,
@@ -183,13 +200,15 @@ def _spike(base: float, corner: float, width: float, tip: float, leave: float, w
     sit at the corner's angular, so the outline runs along the divider there.
     """
     rise, run = corner - base, tip - corner
-    cup = cubic_points(
+    away = [(k / SPIKE_STEPS) ** 2 for k in range(SPIKE_STEPS + 1)]
+    toward = [1.0 - t for t in reversed(away)]
+    cup = _cubic_at(
         CellPoint(base, 0.0), CellPoint(base, width * SPIKE_CUP_SPREAD),
-        CellPoint(corner - rise * SPIKE_CUP_RISE, width), CellPoint(corner, width), SPIKE_STEPS,
+        CellPoint(corner - rise * SPIKE_CUP_RISE, width), CellPoint(corner, width), toward,
     )
-    side = cubic_points(
+    side = _cubic_at(
         CellPoint(corner, width), CellPoint(corner + run * leave, width),
-        CellPoint(corner + run * waist, width * pinch), CellPoint(tip, 0.0), SPIKE_STEPS,
+        CellPoint(corner + run * waist, width * pinch), CellPoint(tip, 0.0), away,
     )
     right = cup + side[1:]
     return right + mirror_points(right)[1:-1][::-1]
@@ -233,19 +252,15 @@ BEAD_HALF_STEPS = 12
 def _bead_outline(context: MotifContext, centre: float, half_width: float, along_px: float) -> List[CellPoint]:
     """
     A closed, mirror-symmetric bead centred on `(centre, 0)`, `half_width` across in angular units and
-    `along_px` from the centre to the top and the bottom. When `along_px` is the across radius in pixels it
-    is `page_circle_points`' circle, round on the page; a smaller `along_px` squashes it into an oval with the
-    same ends. The ends `(centre, ±half_width)` are exact vertices, and the outline runs radially through them.
+    `along_px` from the centre to the top and the bottom. When `along_px` is `angular_to_px(half_width,
+    centre)` it is the circle `page_circle_points` draws, round on the page; a smaller `along_px` squashes it
+    into an oval with the same ends. The ends `(centre, ±half_width)` are exact vertices, and the outline runs radially through them.
     """
-    across_px = context.angular_to_px(half_width, centre)
-    if along_px == across_px:
-        right = page_arc_points(context, CellPoint(centre, 0.0), across_px, 0.0, 180.0, BEAD_HALF_STEPS)
-    else:
-        right = []
-        for index in range(BEAD_HALF_STEPS + 1):
-            theta = math.pi * index / BEAD_HALF_STEPS
-            right.append(CellPoint(centre + context.px_to_radial(along_px * math.cos(theta)),
-                                   half_width * math.sin(theta)))
+    right = []
+    for index in range(BEAD_HALF_STEPS + 1):
+        theta = math.pi * index / BEAD_HALF_STEPS
+        right.append(CellPoint(centre + context.px_to_radial(along_px * math.cos(theta)),
+                               half_width * math.sin(theta)))
     along = context.px_to_radial(along_px)
     quarter = BEAD_HALF_STEPS // 2
     right[0], right[quarter], right[-1] = (
@@ -360,6 +375,8 @@ GEOMETRIC_MOTIFS: List[Dict] = [
         "min_ring_depth_px": 18.0,
         "max_overflow_inward": 0.0,
         "max_overflow_outward": 0.2,
-        "slot_estimate": (0.4, 0.4),
+        # Measured: the spike's slot is a narrow triangle, its bounding box a median 0.37 of the mid-ring cell
+        # width and 0.34 of the ring depth; at 0.3 most slot children the gate admits really fit.
+        "slot_estimate": (0.3, 0.3),
     },
 ]
