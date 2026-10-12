@@ -16,7 +16,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import shapely
 from shapely.geometry import LineString, MultiPoint, Point, Polygon, box
-from shapely.ops import polygonize, unary_union
+from shapely.ops import polygonize_full, unary_union
 
 from motifs.contract import Anatomy, MotifError, inset_outline
 from motifs.geometry import (
@@ -145,10 +145,19 @@ def _faces_hold_pen(context: MotifContext, vectors: Sequence[SmartVector], clear
     noded and polygonized on the page as `topology_validator` does it; and, given a `clearance_px` between
     the centrelines of the lines involved, whether each face is somewhere that wide, so it has
     `min_white_space` of white between its edges.
+
+    Snap-rounding in this cell's own frame can turn a small face into an invalid ring that `polygonize`
+    silently leaves out, while the same face, rotated onto the page, is valid and the validator measures it.
+    Each invalid ring is therefore kept as a face too, repaired with `make_valid` (every polygon part kept), as
+    the validator repairs a face it cannot measure, so no face below the floor goes unseen.
     """
     lines = [LineString(context.polyline(vector)) for vector in vectors]
     noded = shapely.set_precision(unary_union(lines), 0.001)
-    faces = list(polygonize(getattr(noded, "geoms", [noded])))
+    polygons, _cuts, _dangles, invalids = polygonize_full(getattr(noded, "geoms", [noded]))
+    faces = list(polygons.geoms)
+    for ring in invalids.geoms:
+        repaired = shapely.make_valid(Polygon(ring.coords))
+        faces.extend(part for part in getattr(repaired, "geoms", [repaired]) if isinstance(part, Polygon))
     erode = clearance_px / 2.0
     return bool(faces) and all(
         _face_holds_pen(face) and (erode <= PEN_RADIUS_PX or not face.buffer(-erode).is_empty) for face in faces
