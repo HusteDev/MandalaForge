@@ -38,17 +38,23 @@ The authoring guide `docs/motifs.md` explains the motif contract in full; `docs/
 
 ## The motif catalog
 
-| Motif | Category | Kind | Roles | Positions | `side_touch` | What it exercises |
-|---|---|---|---|---|---|---|
-| `petal` | botanical | enclosing | base, slot | centre, divider | yes | slot for a nested child, overflow both ways, both positions in one ring, ring-filling length 0.95 to 1.3 of ring depth |
-| `leaf` | botanical | enclosing | base, slot | centre | yes | midrib as a self-touch, drawn only when each half is wide enough; no slot of its own; length 1.0 to 1.2 of ring depth |
-| `scallop` | botanical | enclosing | base | divider | yes | inward overflow, `spans_cell` |
-| `stem` | botanical | open | attachment | centre, divider | no | inward reach to the neighbour ring's inner boundary, wavy style at complexity 0.6 and above |
-| `diamond` | geometric | enclosing | slot | centre | no | pure island inside a parent's slot |
-| `ring_band` | geometric | enclosing | base | centre, divider | yes | `spans_cell`, cell-to-cell contact, the innermost ring |
-| `<category>_safe_band` | every category | enclosing | base (fallback) | centre, divider | yes | plain band at radial 0.4 to 0.6, `spans_cell`, valid in any cell |
+| Motif | Category | Kind | Roles | Positions | Touch heights | Embellishments | What it draws |
+|---|---|---|---|---|---|---|---|
+| `petal` | botanical | enclosing | base, slot, back | centre, divider | base, mid | echo, veins, fan, dot | lotus profile, length 0.95 to 1.3 of ring depth, dips into the ring below; declares a slot |
+| `leaf` | botanical | enclosing | base, slot, back | centre | base, mid | echo, veins | pointed leaf with an apex curved to one side; its midrib is the `veins` embellishment |
+| `teardrop` | botanical | enclosing | base, slot, back | centre, divider | base, mid | echo, dot | round circular bulb below a drawn point; declares a slot |
+| `rounded_petal` | botanical | enclosing | base, slot, back | centre, divider | base, mid | echo, veins, fan, dot | lotus profile with a circular cap for a tip; declares a slot |
+| `heart` | botanical | enclosing | base, slot | centre | mid | echo | two circular lobes meeting at a cusp, running to a point; declares a slot |
+| `curl` | botanical | open | base, slot | centre | mid | none | two mirrored spirals on stalks, each inner end landing on its own earlier turn; gates scale with white space |
+| `scallop` | botanical | enclosing | base | divider | seams | none | one circular lobe per cell through shared seam ends, `spans_cell` |
+| `stem` | botanical | open | attachment | centre, divider | none | none | inward reach to the neighbour ring, drawn as a bow, S-curve or wave |
+| `diamond` | geometric | enclosing | slot | centre | none | none | pure island inside a parent's slot, sometimes with bowed edges |
+| `band` | geometric | enclosing | base | centre, divider | seams | beads | two seam arcs tied by a lens per cell, `spans_cell`, the innermost ring (`ring_band` is an alias) |
+| `bead` | geometric | enclosing | base, slot | divider | base, mid | echo | round bead on the divider (an oval when the circle cannot reach the touch vertices) |
+| `spike` | geometric | enclosing | base, back | centre, divider | base | echo, fan | star point with concave sides on a rounded cup |
+| `<category>_safe_band` | every category | enclosing | base (fallback) | centre, divider | mid | none | plain band at radial 0.4 to 0.6, `spans_cell`, valid in any cell |
 
-`side_touch` is the registry key that says a base draws to its full angular budget with exact vertices at the ring's side-touch radial, so it meets its neighbours there. A ring whose bases all support it is a `side` ring: one connected band that needs only one stem per wedge, and at least `MIN_RING_CONTACTS` (3) in the ring when the base symmetry is 1 or 2, or none when a base overflows inward.
+Touch heights (`side_touch_heights` in the registry) say where a base draws to its full angular budget with exact vertices at the ring's side-touch radial, so it meets its neighbours there. A ring whose bases all support it is a `side` ring: one connected band that needs only one stem per wedge, and at least `MIN_RING_CONTACTS` (3) in the ring when the base symmetry is 1 or 2, or none when a base overflows inward.
 
 Only botanical and geometric register motifs so far. The UI shows celtic, art deco and abstract disabled and unchecked with a "coming soon: no motifs yet" note, Randomise never picks them, and a saved gallery design that included them restores without them (botanical when nothing remains). The API still accepts them; a design limited to those categories is built from their safe bands.
 
@@ -92,7 +98,7 @@ Before measuring, the pipeline nodes the arrangement, prunes overshoot whiskers 
 .venv/Scripts/python qa_check.py design.svg                # any standalone SVG
 ```
 
-`qa_patterns.py` forces each registered motif in every position (centre, divider, both) and role (base, slot child, contact attachment) over a matrix of ring-division fixtures, whose base symmetries run from 1 to 24 and appear in each case's label, with fallback disabled, and runs four generator property checks (determinism, monotone limits, angular containment, slot honesty). `qa_patterns.py --list` lists the registry and `--probe` ignores the declared size gates for recalibration. `qa_report.py --corpus` runs the pinned corpus with uniform and varied divisions, and its table shows each design's base symmetry in the `B` column; `--overlays always` writes an overlay for every design instead of only for failures.
+`qa_patterns.py` forces each registered motif in every position (centre, divider, both) and role (base, slot child, contact attachment) over a matrix of ring-division fixtures, whose base symmetries run from 1 to 24 and appear in each case's label, with fallback disabled, runs a pairing job for every embellishment a motif accepts and every layered front and back pair, and runs eight generator property checks (determinism, monotone limits, angular containment, slot honesty, seams, smooth side touch, layered cuts, embellished output). The full tier must list all twelve motifs with every property column PASS. `qa_patterns.py --list` lists the registry and `--probe` ignores the declared size gates for recalibration. `qa_report.py --corpus` runs the pinned corpus with uniform and varied divisions, and its table shows each design's base symmetry in the `B` column; `--overlays always` writes an overlay for every design instead of only for failures.
 
 All of these exit non-zero on failure. `qa_report.py` and `qa_check.py` can write a **visual QA overlay**: every detected region filled with a random pastel, defects in red (floating base motifs in dashed boxes), and reaches traced in green.
 
