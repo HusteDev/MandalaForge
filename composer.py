@@ -175,6 +175,23 @@ class DesignPlan:
         return cls.from_dict(json.loads(text))
 
 
+def recipe_at(ring: RingPlan, position: str, node_path: Tuple[int, ...], on_back: bool = False) -> Optional[CellRecipe]:
+    """
+    The plan recipe behind a placed node: the ring's back when `on_back`, else the sequence entry
+    `node_path[0]` at `position`, then its slot child once per further element. None where the chain ends.
+    """
+    if on_back:
+        return ring.back
+    if not node_path or not 0 <= node_path[0] < len(ring.sequence) or position not in ("centre", "divider"):
+        return None
+    recipe = getattr(ring.sequence[node_path[0]], position)
+    for _ in node_path[1:]:
+        if recipe is None:
+            return None
+        recipe = recipe.slot_child
+    return recipe
+
+
 def node_seed(seed: int, ring_index: int, seq_pos: int, depth: int, position: str, salt: str = "") -> int:
     """Integer seed of one node's stream, kept so the node can be regenerated later. A salt forks an independent stream."""
     base = (

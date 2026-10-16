@@ -1,8 +1,12 @@
 import hashlib
+import math
 
 import pytest
 
 from coloring_generator import DesignGenerator
+from composer import CellEntry, CellRecipe, RingPlan, recipe_at
+from placement import PlacedPath
+from region_repair import classify_faces, face_sets
 from topology_validator import PX_PER_INCH, TopologyValidator, max_region_in2, max_region_px2
 
 PRE_CAP_SVG_SHA = {
@@ -61,3 +65,74 @@ def test_cap_off_reproduces_the_pre_cap_engine(case):
     seed, complexity, category = case
     svg = DesignGenerator(seed=seed, complexity=complexity, categories=[category], max_region_cap=False).generate()
     assert hashlib.sha256(svg.encode("utf-8")).hexdigest() == PRE_CAP_SVG_SHA[case]
+
+
+CENTER = (306.0, 306.0)
+RINGS = [{"inner_radius": 20, "outer_radius": 100}, {"inner_radius": 100, "outer_radius": 200}]
+
+
+def circle(radius, n=96):
+    cx, cy = CENTER
+    pts = [(cx + radius * math.cos(2 * math.pi * i / n), cy + radius * math.sin(2 * math.pi * i / n)) for i in range(n)]
+    return pts + [pts[0]]
+
+
+def petal(angle_deg, radius=150.0, side=40.0):
+    cx = CENTER[0] + radius * math.cos(math.radians(angle_deg)) - side / 2
+    cy = CENTER[1] + radius * math.sin(math.radians(angle_deg)) - side / 2
+    return square(side, (cx, cy))
+
+
+def placed(ring, cell, position, node_path, role, coords):
+    return PlacedPath(ring, cell, position, node_path, role, list(coords), [0.5] * len(coords), True, 1.0)
+
+
+def build_design(petal_cells):
+    paths = [placed(0, 0, "centre", (0,), "base", circle(100.0)),
+             placed(1, 0, "centre", (0,), "base", circle(200.0))]
+    paths += [placed(1, cell, "divider", (1,), "base", petal(cell * 30.0)) for cell in petal_cells]
+    regions = TopologyValidator().faces([p.coords for p in paths])
+    return regions, paths, RINGS, CENTER
+
+
+@pytest.fixture
+def design():
+    return build_design([3])
+
+
+@pytest.fixture
+def design_four_petals():
+    return build_design([0, 3, 6, 9])
+
+
+def test_centre_face_is_owned_by_ring_zero(design):
+    centre = [f for f in classify_faces(*design) if f.kind == "centre"]
+    assert len(centre) == 1 and centre[0].ring_index == 0 and centre[0].key == ("centre", 0)
+
+
+def test_host_face_maps_to_its_node(design):
+    host = [f for f in classify_faces(*design) if f.kind == "host"]
+    assert len(host) == 1
+    assert (host[0].ring_index, host[0].position, host[0].node_path) == (1, "divider", (1,))
+    assert host[0].key == ("host", 1, "divider", 1, (), False)
+
+
+def test_background_face_is_owned_by_the_ring_holding_most_of_it(design):
+    back = [f for f in classify_faces(*design) if f.kind == "background"]
+    assert len(back) == 1 and back[0].ring_index == 1
+    assert (1, 3, "divider", (1,)) in back[0].bordering and (0, 0, "centre", (0,)) in back[0].bordering
+
+
+def test_symmetric_copies_form_one_set(design_four_petals):    # four copies of the petal, cells 0, 3, 6, 9
+    sets = face_sets([f for f in classify_faces(*design_four_petals) if f.kind == "host"])
+    assert len(sets) == 1 and len(sets[0].faces) == 4
+
+
+def test_recipe_at_walks_slot_children_and_back():
+    child = CellRecipe("diamond", "geometric")
+    ring = RingPlan(1, 8, 1.0, [CellEntry(CellRecipe("petal", "botanical", slot_child=child), None)], 0,
+                    back=CellRecipe("leaf", "botanical"))
+    assert recipe_at(ring, "centre", (0,)) is ring.sequence[0].centre
+    assert recipe_at(ring, "centre", (0, 0, 0)) is None
+    assert recipe_at(ring, "centre", (0, 0)) is ring.sequence[0].centre.slot_child
+    assert recipe_at(ring, "divider", (0,), on_back=True) is ring.back
