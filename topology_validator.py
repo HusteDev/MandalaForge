@@ -45,6 +45,19 @@ _NODE_DECIMALS = 4
 PEN_RADIUS_PX = 2.0
 MIN_REGION_AREA_PX2 = 20.0
 
+# The page prints at 72 px per inch. No colourable face may exceed a complexity-scaled print size.
+PX_PER_INCH = 72.0
+
+
+def max_region_in2(complexity: float) -> float:
+    """The largest face allowed, in square inches: 1.25 at complexity 0 down to 0.6 at complexity 1."""
+    return 1.25 - 0.65 * max(0.0, min(1.0, complexity))
+
+
+def max_region_px2(complexity: float) -> float:
+    """`max_region_in2` in square pixels."""
+    return max_region_in2(complexity) * PX_PER_INCH * PX_PER_INCH
+
 
 @dataclass
 class RegionInfo:
@@ -91,6 +104,8 @@ class TopologyReport:
     regions: List[RegionInfo] = field(default_factory=list)
     free_lanes: List[Tuple[float, float]] = field(default_factory=list)
     encircling_regions: List[RegionInfo] = field(default_factory=list)
+    # Faces above the print-size cap. Reported, never an issue: the repair ladder reads them.
+    oversized_regions: List[RegionInfo] = field(default_factory=list)
     stats: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -139,6 +154,7 @@ class TopologyValidator:
         sliver_area: float = 0.5,
         fail_on_isolated_loops: bool = False,
         check_tiny_regions: bool = True,
+        max_region_px2: Optional[float] = None,
     ):
         self.snap_tolerance = snap_tolerance
         self.whisker_tolerance = whisker_tolerance
@@ -149,6 +165,7 @@ class TopologyValidator:
         self.sliver_area = sliver_area
         self.fail_on_isolated_loops = fail_on_isolated_loops
         self.check_tiny_regions = check_tiny_regions
+        self.max_region_px2 = max_region_px2
 
     # ------------------------------------------------------------------ API
 
@@ -303,6 +320,12 @@ class TopologyValidator:
                 "so that space runs all the way around the design"
             )
 
+        # Reported, not failed: an oversized face never changes validity.
+        oversized = (
+            [r for r in regions if r.area > self.max_region_px2]
+            if self.max_region_px2 is not None else []
+        )
+
         report = TopologyReport(
             is_valid=len(issues) == 0,
             issues=issues,
@@ -310,6 +333,7 @@ class TopologyValidator:
             tiny_regions=tiny,
             free_lanes=lanes,
             encircling_regions=encircling,
+            oversized_regions=oversized,
             dangle_points=list(dangle_points),
             dangle_lines=self._as_line_list(dangles),
             floating_components=floating,
@@ -330,6 +354,10 @@ class TopologyValidator:
                 'num_free_lanes': len(lanes),
                 'num_bare_bands': len(bare),
                 'num_encircling_regions': len(encircling),
+                'num_oversized_regions': len(oversized),
+                'largest_region_in2': round(
+                    max((r.area for r in regions), default=0.0) / (PX_PER_INCH * PX_PER_INCH), 3
+                ),
                 'num_floating_base': len(floating_base),
                 'num_overflow_crossings': len(crossings),
                 'widest_lane_px': round(max((h - l for l, h in lanes), default=0.0), 1),

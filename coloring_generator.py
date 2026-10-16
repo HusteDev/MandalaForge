@@ -9,13 +9,15 @@ topology validator checks the result; this module turns that ink into SVG.
 import svgwrite
 import random
 import math
-from typing import Any
+from typing import Any, List, Tuple
 
 from assembler import Assembler, AssembledDesign, LayeredRingFailed
 from composer import Composer, ComposerSettings, DesignPlan
 from motifs.geometry import cell_rotation_deg
 from placement import PlacedPath
-from topology_validator import MIN_REGION_AREA_PX2, PEN_RADIUS_PX, TopologyReport, TopologyValidator
+from topology_validator import (
+    MIN_REGION_AREA_PX2, PEN_RADIUS_PX, TopologyReport, TopologyValidator, max_region_px2,
+)
 
 
 # Width bounds for a regenerated ring, as fractions of the mean ring width.
@@ -52,6 +54,7 @@ class DesignGenerator:
         force_motif: dict[str, str] | None = None,
         force_position_mode: str | None = None,
         force_embellishments: tuple[str, ...] | None = None,
+        max_region_cap: bool = True,
         # Debug options
         draw_rings: bool = False,
         draw_divisions: bool = False,
@@ -78,6 +81,7 @@ class DesignGenerator:
         self.force_motif = force_motif
         # "centre", "divider", "both" or "layered", forced on every ring past the innermost where eligible.
         self.force_position_mode = force_position_mode
+        self.max_region_cap = max_region_cap
         # Embellishments added to every base and back that accepts them (QA forcing, see ComposerSettings).
         self.force_embellishments = tuple(force_embellishments) if force_embellishments else None
 
@@ -222,6 +226,7 @@ class DesignGenerator:
             ring_seeds=self.ring_seeds,
             force_position_mode=self.force_position_mode,
             force_embellishments=self.force_embellishments,
+            max_region_cap=self.max_region_cap,
         )
         self.composer = Composer(self.seed, self.rings, settings)
         self.plan = self.composer.plan()
@@ -317,22 +322,28 @@ class DesignGenerator:
         element['data-role'] = path.role
         return element
 
-    def _validate(self) -> None:
-        print("\n=== VALIDATING DESIGN ===")
-        polylines = self.assembled.polylines()
+    def _validation_report(self, assembled: AssembledDesign) -> Tuple[TopologyReport, List[List[Tuple[float, float]]]]:
+        """Validate `assembled` and return the report with the polylines it was measured on."""
+        polylines = assembled.polylines()
         validator = TopologyValidator(
             snap_tolerance=2.5,     # gaps under a stroke width render connected
             whisker_tolerance=5.0,  # overshoot stubs up to 5px read as corners
             pen_radius=PEN_RADIUS_PX,  # a face must fit a 2px pen tip somewhere
             min_region_area=MIN_REGION_AREA_PX2,
+            max_region_px2=max_region_px2(self.complexity) if self.max_region_cap else None,
         )
         result = validator.analyze(
             polylines,
             center=self.center,
-            base_mask=self.assembled.base_mask(),
-            ring_ids=self.assembled.ring_ids(),
-            overflow_parts=self.assembled.overflow_parts(),
+            base_mask=assembled.base_mask(),
+            ring_ids=assembled.ring_ids(),
+            overflow_parts=assembled.overflow_parts(),
         )
+        return result, polylines
+
+    def _validate(self) -> None:
+        print("\n=== VALIDATING DESIGN ===")
+        result, polylines = self._validation_report(self.assembled)
         self.last_validation_result = result
         self.last_validation_polylines = polylines
 
