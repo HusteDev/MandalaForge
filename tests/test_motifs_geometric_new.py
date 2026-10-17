@@ -1,10 +1,12 @@
 """Shape-specific tests for the Phase 3 geometric motifs (spec 7.3): bead and spike."""
+import math
 import random
 
 import pytest
 from shapely.geometry import Polygon
 
 from motifs import find_motif
+from motifs.contract import MotifError
 from motifs.geometry import CellPoint, MotifContext, cell_rotation_deg
 from qa_patterns import tangent_error_deg, turn_at
 
@@ -178,3 +180,130 @@ def test_bead_in_both_mode_meets_the_centre_motif_at_the_shared_vertices(cell_kw
                 bead_xy = bead_ctx.to_cartesian(CellPoint(radial, bead_side),
                                                 cell_rotation_deg(0, divisions, "divider"))
                 assert petal_xy == pytest.approx(bead_xy, abs=1e-9)
+
+
+# The rosette fills ring 0's open middle: inner radius 0, the touch distance as the outer radius, one lobe per
+# wedge. The brief's 30-degree wedge on a 60px free radius cannot hold a lobe at this fixture's 10px white
+# space (neighbouring lobes come closer than a clearance on the dot arc), so the default is a 90-degree wedge
+# (four lobes) on 55px, inside the 35px to 67px free radii the corpus's oversized centres measure.
+def rosette_ctx(cell_kwargs, seed=7, **over):
+    return make_ctx(cell_kwargs, seed, **{"inner_radius": 0.0, "outer_radius": 55.0, "wedge_angle": 90.0,
+                                          "ring_stream_seed": 31, **over})
+
+
+def test_rosette_is_never_picked_by_the_composer():
+    entry = find_motif("rosette")
+    assert not {"base", "slot", "back", "attachment"} & set(entry["roles"])
+
+
+def test_rosette_cells_draw_the_same_ink(cell_kwargs):
+    a = find_motif("rosette")["generator"](rosette_ctx(cell_kwargs, 1))
+    b = find_motif("rosette")["generator"](rosette_ctx(cell_kwargs, 2))
+    assert [v.points for v in a.vectors] == [v.points for v in b.vectors]
+
+
+def test_rosette_tip_reaches_the_outer_edge_and_lobe_rests_on_the_dot(cell_kwargs):
+    dot, lobe = find_motif("rosette")["generator"](rosette_ctx(cell_kwargs)).vectors
+    assert all(v.weight == "detail" for v in (dot, lobe))
+    assert abs(dot.points[0].angular) == 1.0 and abs(dot.points[-1].angular) == 1.0
+    assert CellPoint(1.0, 0.0) in lobe.points
+    assert lobe.points[0] in dot.points and lobe.points[-1] in dot.points
+
+
+def test_rosette_lobe_is_mirror_symmetric_with_a_stem_to_the_touch_point(cell_kwargs):
+    from motifs.geometric import rosette_stem_px
+    gen = find_motif("rosette")["generator"]
+    for ring_seed in range(30):
+        ctx = rosette_ctx(cell_kwargs, ring_stream_seed=ring_seed)
+        dot, lobe = gen(ctx).vectors
+        neck = lobe.points[-1].angular
+        assert not dot.closed and not lobe.closed
+        assert all(p.radial == dot.points[0].radial for p in dot.points)
+        assert lobe.points[0] == CellPoint(lobe.points[-1].radial, -neck)
+        assert lobe.points == [CellPoint(p.radial, -p.angular) for p in reversed(lobe.points)]
+        assert all(abs(p.angular) < 1.0 and p.radial <= 1.0 for p in lobe.points)
+        # The body ends a stem's length short of the touch point; the stem runs out to it on the axis and back.
+        body_tip = 1.0 - ctx.px_to_radial(rosette_stem_px(ctx))
+        k = lobe.points.index(CellPoint(1.0, 0.0))
+        assert lobe.points[k - 1] == lobe.points[k + 1] == CellPoint(pytest.approx(body_tip), 0.0)
+        assert max(p.radial for p in lobe.points if p.angular != 0.0) < body_tip
+
+
+def test_rosette_tip_stops_at_the_radial_limit(cell_kwargs):
+    _dot, lobe = find_motif("rosette")["generator"](rosette_ctx(cell_kwargs, radial_limits=(0.0, 0.9))).vectors
+    assert CellPoint(0.9, 0.0) in lobe.points and max(p.radial for p in lobe.points) == 0.9
+
+
+def test_rosette_refuses_a_small_free_radius(cell_kwargs):
+    with pytest.raises(MotifError):
+        find_motif("rosette")["generator"](rosette_ctx(cell_kwargs, outer_radius=12.0))
+
+
+def test_rosette_refuses_crowded_lobes(cell_kwargs):
+    with pytest.raises(MotifError):
+        find_motif("rosette")["generator"](rosette_ctx(cell_kwargs, wedge_angle=15.0, outer_radius=25.0))
+
+
+def test_rosette_refuses_lobes_too_close_on_the_dot_arc(cell_kwargs):
+    # The brief's one lobe per 30-degree cell on 60px passes the size floor but crowds the dot arc even with
+    # the dot grown to its largest.
+    with pytest.raises(MotifError, match="crowded"):
+        find_motif("rosette")["generator"](rosette_ctx(cell_kwargs, wedge_angle=30.0, outer_radius=60.0))
+
+
+def ring_zero_ink(center, radius, divisions, cusp=0.0):
+    """A ring-0 inner edge around `center`: a circle, or with `cusp` px, arcs bulging out between inward cusps."""
+    from shapely.geometry import LineString
+    cx, cy = center
+    points = []
+    for k in range(divisions * 24 + 1):
+        theta = 2.0 * math.pi * k / (divisions * 24)
+        bulge = cusp * abs(math.sin(divisions * theta / 2.0))
+        points.append((cx + (radius + bulge) * math.cos(theta), cy + (radius + bulge) * math.sin(theta)))
+    return LineString(points)
+
+
+def fit_ctx(cell_kwargs, divisions, **over):
+    return make_ctx(cell_kwargs, 3, **{"inner_radius": 0.0, "outer_radius": 1.0, "wedge_angle": 360.0 / divisions,
+                                       "min_white_space": 8.0, "stroke_width": 2.0, "ring_stream_seed": 17,
+                                       **over})
+
+
+@pytest.mark.parametrize("cusp", [0.0, 8.0])
+def test_fit_rosette_touches_ring_zero_and_keeps_clear_of_it(cell_kwargs, cusp):
+    from shapely.geometry import LineString, Point
+    from motifs.geometric import fit_rosette, rosette_stem_px
+    ctx = fit_ctx(cell_kwargs, 12)
+    ink = ring_zero_ink(ctx.center, 42.0, 12, cusp)
+    fit = fit_rosette(ctx, ink)
+    count = len(fit.rotations)
+    assert count >= 3 and 12 % count == 0 and fit.cells_per_lobe * count == 12
+    assert fit.rotations == [k * 360.0 / count + fit.rotations[0] for k in range(count)]
+    keep = ctx.clearance_px("detail", "outline")
+    for rotation in fit.rotations:
+        tip = Point(fit.context.to_cartesian(CellPoint(1.0, 0.0), rotation))
+        assert tip.distance(ink) < 1e-6
+        for vector in fit.instance.vectors:
+            line = LineString(fit.context.polyline(vector, rotation)).difference(tip.buffer(rosette_stem_px(ctx)))
+            assert line.distance(ink) >= keep
+    # The same ring stream and ink fit the same rosette.
+    again = fit_rosette(ctx, ink)
+    assert (again.rotations, [v.points for v in again.instance.vectors]) == (
+        fit.rotations, [v.points for v in fit.instance.vectors])
+
+
+def test_fit_rosette_touches_the_nearer_axis(cell_kwargs):
+    from motifs.geometric import fit_rosette
+    ctx = fit_ctx(cell_kwargs, 12)
+    # Inward cusps on the dividers (half a wedge on): the cusp is the nearest ink, so the lobes touch it there.
+    ink = ring_zero_ink(ctx.center, 42.0, 12, 8.0)
+    from shapely import affinity
+    turned = affinity.rotate(ink, 15.0, origin=ctx.center)
+    assert fit_rosette(ctx, ink).axis == "cell" and fit_rosette(ctx, turned).axis == "divider"
+
+
+def test_fit_rosette_refuses_a_centre_too_small(cell_kwargs):
+    from motifs.geometric import fit_rosette
+    ctx = fit_ctx(cell_kwargs, 12)
+    with pytest.raises(MotifError):
+        fit_rosette(ctx, ring_zero_ink(ctx.center, 20.0, 12))

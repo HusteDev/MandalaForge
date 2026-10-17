@@ -207,6 +207,24 @@ def test_seam_check_fails_a_motif_whose_open_end_is_off_the_edge():
     assert not _seam(entry)
 
 
+
+def test_seam_check_accepts_an_open_end_on_another_vectors_vertex_only():
+    from qa_patterns import _seam
+    from motifs.geometry import CellPoint
+    entry = dict(find_motif("rosette"))
+    good = entry["generator"]
+
+    def lobe_off_the_arc(context):
+        instance = good(context)
+        lobe = instance.vectors[1]
+        lobe.points[0] = CellPoint(lobe.points[0].radial + 0.01, lobe.points[0].angular)
+        return instance
+
+    # The rosette's lobe ends rest on vertices of its dot arc, so they are accounted for; moved off, they dangle.
+    assert _seam(entry)
+    entry["generator"] = lobe_off_the_arc
+    assert not _seam(entry)
+
 def test_tangent_check_fails_a_motif_with_a_kinked_touch_vertex():
     from qa_patterns import _tangent
     from motifs.geometry import CellPoint

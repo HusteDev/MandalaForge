@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional
+from dataclasses import dataclass, replace
+from typing import Dict, List, Optional, Tuple
+
+from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry.base import BaseGeometry
 
 from motifs.contract import Anatomy, MotifError, MotifInstance, build_instance, require_full_budget
-from motifs.embellish import apply_embellishments, holds_pen as _holds_pen
+from motifs.embellish import _face_holds_pen, apply_embellishments, holds_pen as _holds_pen
 from motifs.geometry import (
-    CellPoint, MotifContext, SmartVector, cubic_points, mirror_points, quad_points,
-    size_draw,
+    CellPoint, MotifContext, PointTuple, SmartVector, cubic_points, insert_vertex_on_outline, mirror_points,
+    quad_points, size_draw,
 )
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
 
@@ -309,6 +313,235 @@ def generate_bead(context: MotifContext) -> MotifInstance:
     return build_instance(context, result.vectors, anatomy=anatomy, dropped_embellishments=result.dropped)
 
 
+# The rosette: a repair-only centre motif that fills the open middle inside ring 0 (max-region spec 5, step 3).
+# Its cell is one lobe's wedge, from the page centre (inner radius 0) out to the point where the lobe touches
+# ring 0's ink (radial 1), so the open centre splits into one face per gap between lobes and none encircles it.
+# A lobe is a body on the dot arc and a stem: the body ends a stem's length inside the circle ring 0's ink leaves
+# free, and the stem runs on along the axis to the touch point, out and back on the same line, so the body keeps
+# its clearance from the ink however that ink meets the touch point. `fit_rosette` picks the lobe count and the
+# axis on the page. Every value comes from the ring stream, so every wedge draws the same lobe: the dot's share
+# of the body's radial, the lobe's half-width at its belly (its ends on the dot arc are `ROSETTE_NECK` of it), and
+# the share of the dot-to-body-tip radial at which the lobe is widest.
+ROSETTE_DOT_RANGE = (0.18, 0.28)
+ROSETTE_LOBE_WIDTH_RANGE = (0.45, 0.75)
+ROSETTE_BELLY_RANGE = (0.45, 0.7)
+# The free radius must be at least this many detail-to-detail clearances, or nothing colourable fits in it.
+ROSETTE_MIN_FREE_CLEARANCES = 3.0
+# The lobe's ends on the dot arc sit at this share of its belly's half-width: a petal with a neck.
+ROSETTE_NECK = 0.6
+# When neighbouring lobes would come closer than a clearance on the dot arc, an adapting rosette grows the dot,
+# up to this share of the body's radial, then narrows the neck, down to this angular; past both it is refused.
+ROSETTE_MAX_DOT = 0.4
+ROSETTE_MIN_NECK = 0.2
+# Fewer lobes than this read as a propeller, not a rosette.
+ROSETTE_MIN_LOBES = 3
+# The stem is the detail-to-outline clearance plus this share of it, so the body clears ring 0's ink with room.
+ROSETTE_STEM_MARGIN = 0.15
+ROSETTE_STEPS = 12
+# The body's sides: from the neck, the first control this share of the neck-to-belly radial on at the belly's
+# half-width, the second as far short of the belly; from the belly, the first control this share of the
+# belly-to-tip radial on at the full half-width, the second this share short of the tip at this share of it.
+ROSETTE_FLANK = 0.35
+ROSETTE_SHOULDER = 0.5
+ROSETTE_TIP_LEAN = 0.3
+ROSETTE_TIP_WIDTH = 0.2
+# A ray this long from the centre crosses the whole page.
+RAY_REACH_PX = 10000.0
+# A lobe's touch point lies on the ink when it is this close to it (float noise on a turned copy).
+ROSETTE_TOUCH_TOLERANCE_PX = 1e-6
+
+
+def _rosette_body(dot: float, neck: float, half_width: float, belly: float, tip: float) -> List[CellPoint]:
+    """
+    The right half of a lobe body, from its neck `(dot, neck)` on the dot arc out to the belly `(belly,
+    half_width)`, where it runs along the radial, and on to its sharp tip `(tip, 0)`.
+    """
+    rise = belly - dot
+    lower = cubic_points(
+        CellPoint(dot, neck), CellPoint(dot + rise * ROSETTE_FLANK, half_width),
+        CellPoint(belly - rise * ROSETTE_FLANK, half_width), CellPoint(belly, half_width), ROSETTE_STEPS,
+    )
+    run = tip - belly
+    upper = cubic_points(
+        CellPoint(belly, half_width), CellPoint(belly + run * ROSETTE_SHOULDER, half_width),
+        CellPoint(tip - run * ROSETTE_TIP_LEAN, half_width * ROSETTE_TIP_WIDTH), CellPoint(tip, 0.0),
+        ROSETTE_STEPS,
+    )
+    return lower + upper[1:]
+
+
+def rosette_stem_px(context: MotifContext) -> float:
+    """The stem's length on the page: the clearance a detail line keeps from ring 0's outline, with a margin."""
+    return context.clearance_px("detail", "outline") * (1.0 + ROSETTE_STEM_MARGIN)
+
+
+def _draw_rosette(context: MotifContext, body_px: float, adapt: bool = True) -> MotifInstance:
+    """
+    One lobe and its stretch of the dot arc in a wedge that holds exactly one lobe, the body ending `body_px`
+    from the centre and the stem running on to the touch point `(1, 0)`. Neighbouring lobes keep a clearance
+    apart on the dot arc and at their bellies; without `adapt` the drawn dot and neck must already allow it.
+    Raises `MotifError` when the free radius is under `ROSETTE_MIN_FREE_CLEARANCES` clearances, when the
+    lobes are too crowded, when the dot cannot be coloured, or when the body is nowhere a clearance wide.
+    """
+    require_full_budget(context, "rosette")
+    ring = context.ring_rng
+    # Every parameter is drawn before any limit is applied, in a fixed order, so all wedges agree.
+    dot_share = ring.uniform(*ROSETTE_DOT_RANGE)
+    half_width = ring.uniform(*ROSETTE_LOBE_WIDTH_RANGE)
+    belly_share = ring.uniform(*ROSETTE_BELLY_RANGE)
+
+    clearance = context.clearance_px("detail", "detail")
+    if context.radial_to_px(1.0) < ROSETTE_MIN_FREE_CLEARANCES * clearance:
+        raise MotifError("rosette does not fit: the free radius is too small")
+    low, high = context.radial_limits
+    tip = min(1.0, high)
+    body_tip = min(tip, context.px_to_radial(body_px - context.inner_radius))
+    wedge = math.radians(context.half_angle)
+    neck = half_width * ROSETTE_NECK
+    dot = dot_share * body_tip
+
+    def gap_px(radial: float, angular: float) -> float:
+        """The page gap between neighbouring lobes whose sides sit at `angular` on `radial`."""
+        return 2.0 * (1.0 - angular) * wedge * context.radius_at(radial)
+
+    if gap_px(dot, neck) < clearance:
+        if not adapt:
+            raise MotifError("rosette lobes are too crowded on the dot arc")
+        # The dot grows to the radial whose arc leaves a clearance beside the drawn neck, as far as it may.
+        needed = context.px_to_radial(clearance / (2.0 * (1.0 - neck) * wedge) - context.inner_radius)
+        dot = max(dot, min(needed, ROSETTE_MAX_DOT * body_tip))
+        neck = min(neck, 1.0 - clearance / (2.0 * wedge * context.radius_at(dot)))
+        if neck < ROSETTE_MIN_NECK:
+            raise MotifError("rosette lobes are too crowded on the dot arc")
+    if not low <= dot < body_tip:
+        raise MotifError("rosette does not fit its radial limits")
+    # The dot is one face, the disc inside the dot arc: a clearance across, and a face the validator accepts.
+    dot_px = context.radius_at(dot)
+    if 2.0 * dot_px < clearance or not _face_holds_pen(Point(0.0, 0.0).buffer(dot_px)):
+        raise MotifError("rosette dot is too small to colour")
+    belly = dot + belly_share * (body_tip - dot)
+    # The bellies keep a clearance apart too; the belly narrows to its neck at most.
+    half_width = max(neck, min(half_width, 1.0 - clearance / (2.0 * wedge * context.radius_at(belly))))
+    if gap_px(belly, half_width) < clearance:
+        raise MotifError("rosette lobes are too crowded at their bellies")
+
+    right = _rosette_body(dot, neck, half_width, belly, body_tip)
+    body = mirror_points(right)[:-1] + right[::-1]
+    # The body's interior, closed by the dot arc between its ends, must hold the pen and be a clearance wide.
+    interior = Polygon(context.polyline(SmartVector(body, closed=True)))
+    if not _holds_pen(context, body) or interior.buffer(-clearance / 2.0).is_empty:
+        raise MotifError("rosette lobe is too small to colour")
+    # The stem runs out from the body tip to the touch point and back along the same line.
+    stem = [CellPoint(tip, 0.0), CellPoint(body_tip, 0.0)] if body_tip < tip else []
+    lobe = mirror_points(right) + stem + right[::-1][1:]
+    # The dot arc is a seam arc, like the band's; the lobe's ends are exact vertices on it.
+    arc = [CellPoint(dot, -1.0), CellPoint(dot, 1.0)]
+    for end in (lobe[0], lobe[-1]):
+        arc = insert_vertex_on_outline(arc, False, end)
+    vectors = [SmartVector(arc, weight="detail"), SmartVector(lobe, weight="detail")]
+    return build_instance(context, vectors, seams=True)
+
+
+def generate_rosette(context: MotifContext) -> MotifInstance:
+    """One lobe of the rosette in a wedge that holds one lobe, touching at `(1, 0)`; see `_draw_rosette`."""
+    return _draw_rosette(context, context.radius_at(1.0) - rosette_stem_px(context))
+
+
+@dataclass
+class RosetteFit:
+    """
+    A rosette fitted inside ring 0: one lobe drawn in `context` (inner radius 0, outer radius the touch
+    distance, a wedge of `cells_per_lobe` of ring 0's cells), placed turned by each of `rotations` degrees,
+    on ring 0's cell axes or its dividers (`axis`). `instance` is in `context`'s cell space; each lobe
+    touches the ink at `(1, 0)`.
+    """
+    cells_per_lobe: int
+    axis: str
+    rotations: List[float]
+    context: MotifContext
+    instance: MotifInstance
+
+
+def rosette_lobe_counts(divisions: int) -> List[int]:
+    """
+    The lobe counts a ring of `divisions` cells holds symmetrically, most first: its divisors from
+    `ROSETTE_MIN_LOBES` up, one lobe every `divisions // count` cells.
+    """
+    return [count for count in range(divisions, ROSETTE_MIN_LOBES - 1, -1) if divisions % count == 0]
+
+
+def _ray_px(center: PointTuple, ink: BaseGeometry, degrees: float) -> float:
+    """How far from `center` a ray at `degrees` first meets `ink`; infinite when it never does."""
+    angle = math.radians(degrees)
+    far = (center[0] + RAY_REACH_PX * math.cos(angle), center[1] + RAY_REACH_PX * math.sin(angle))
+    hit = LineString([center, far]).intersection(ink)
+    return math.inf if hit.is_empty else Point(center).distance(hit)
+
+
+def fit_rosette(context: MotifContext, ink: BaseGeometry) -> RosetteFit:
+    """
+    The rosette for ring 0, given the context of its cell 0 (the ring's cell wedge, rotation 0, its ring
+    stream; its radii are ignored) and `ink`, every placed line on the page.
+
+    A lobe's axis is a cell axis or a divider. Its tip touches the ink where a ray along that axis first meets
+    it, and its body ends a stem's length inside the largest circle about the centre that the ink leaves free.
+    The lobe counts of `rosette_lobe_counts` are tried most first, with each count's axes nearest ink first,
+    once keeping the drawn dot and neck and then letting them adapt; the first fit whose every lobe draws,
+    touches ink, and keeps `clearance_px("detail", "outline")` from the ink away from its own stem (a disc of
+    `rosette_stem_px` about its touch point) is returned. Every try draws the same ring-stream values and the
+    order is fixed, so the choice is deterministic. Raises `MotifError` when nothing fits.
+    """
+    divisions = round(360.0 / context.wedge_angle)
+    centre = context.center
+    keep = context.clearance_px("detail", "outline")
+    free_px = Point(centre).distance(ink)
+    axes = sorted((_ray_px(centre, ink, offset), name, offset)
+                  for name, offset in (("cell", 0.0), ("divider", context.wedge_angle / 2.0)))
+    reasons = []
+    for adapt in (False, True):
+        for count in rosette_lobe_counts(divisions):
+            step = divisions // count
+            for touch_px, axis, offset in axes:
+                if not math.isfinite(touch_px):
+                    continue
+                label = f"{count} lobes on the {axis}{' (adapted)' if adapt else ''}"
+                lobe_context = replace(context, inner_radius=0.0, outer_radius=touch_px,
+                                       wedge_angle=context.wedge_angle * step)
+                stem_px = rosette_stem_px(lobe_context)
+                try:
+                    instance = _draw_rosette(lobe_context, free_px - stem_px, adapt)
+                except MotifError as error:
+                    reasons.append(f"{label}: {error}")
+                    continue
+                rotations = [index * context.wedge_angle + offset for index in range(0, divisions, step)]
+                # The ray may have met a deeper ring through a gap in ring 0, with another symmetry: every lobe
+                # must touch ink where it ends.
+                touches = [Point(lobe_context.to_cartesian(CellPoint(1.0, 0.0), r)).distance(ink) for r in rotations]
+                if max(touches) > ROSETTE_TOUCH_TOLERANCE_PX:
+                    reasons.append(f"{label}: not every lobe touches ink")
+                elif not _rosette_clears(lobe_context, instance, rotations, ink, keep, stem_px):
+                    reasons.append(f"{label}: closer than {keep:.1f}px to the ink")
+                else:
+                    return RosetteFit(step, axis, rotations, lobe_context, instance)
+    if not reasons:
+        raise MotifError(f"rosette needs at least {ROSETTE_MIN_LOBES} cells, the ring has {divisions}")
+    raise MotifError("rosette fits nowhere: " + "; ".join(reasons))
+
+
+def _rosette_clears(context: MotifContext, instance: MotifInstance, rotations: List[float],
+                    ink: BaseGeometry, keep: float, stem_px: float) -> bool:
+    """
+    Whether every traced lobe keeps `keep` px from `ink` outside a disc of `stem_px` about its touch point: the
+    stem meets the ink there on purpose, and only the body and the dot arc must keep their distance.
+    """
+    for rotation in rotations:
+        touch = Point(context.to_cartesian(CellPoint(1.0, 0.0), rotation)).buffer(stem_px)
+        for vector in instance.vectors:
+            line = LineString(context.polyline(vector, rotation)).difference(touch)
+            if not line.is_empty and line.distance(ink) < keep:
+                return False
+    return True
+
 GEOMETRIC_MOTIFS: List[Dict] = [
     {
         "name": "diamond",
@@ -379,5 +612,24 @@ GEOMETRIC_MOTIFS: List[Dict] = [
         # Measured: the spike's slot is a narrow triangle, its bounding box a median 0.37 of the mid-ring cell
         # width and 0.34 of the ring depth; at 0.3 most slot children the gate admits really fit.
         "slot_estimate": (0.3, 0.3),
+    },
+    {
+        "name": "rosette",
+        "category": "geometric",
+        "generator": generate_rosette,
+        "positions": ["centre"],
+        # Repair-only: no composer filter asks for the "centre" role, so it is never a base, slot child, back
+        # or attachment. The repair ladder places it inside ring 0 by name.
+        "roles": ["centre"],
+        "touch": True,
+        "side_touch_heights": (),
+        "seams": True,
+        "embellishments": (),
+        "spans_cell": True,
+        "min_cell_width_px": 0.0,
+        "min_ring_depth_px": 0.0,
+        "max_overflow_inward": 0.0,
+        "max_overflow_outward": 0.0,
+        "slot_estimate": None,
     },
 ]

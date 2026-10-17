@@ -70,7 +70,7 @@ def test_declared_slot_is_present_at_default_size(entry, cell_kwargs):
 def test_registry_lookup():
     assert find_motif("petal")["category"] == "botanical"
     assert find_motif("nope") is None
-    assert {e["name"] for e in motifs_for_categories(["geometric"])} == {"diamond", "band", "bead", "spike"}
+    assert {e["name"] for e in motifs_for_categories(["geometric"])} == {"diamond", "band", "bead", "spike", "rosette"}
     assert safe_motif("celtic")["name"] == "celtic_safe_band"
 
 def test_diamond_requires_slot(cell_kwargs):
@@ -323,9 +323,9 @@ def test_registry_phase_one_touch_heights():
         "petal": ("base", "mid"), "leaf": ("base", "mid"), "scallop": (), "stem": (),
         "diamond": (), "band": (), "botanical_safe_band": ("mid",),
         "teardrop": ("base", "mid"), "rounded_petal": ("base", "mid"), "heart": ("mid",), "curl": ("mid",),
-        "bead": ("base", "mid"), "spike": ("base",),
+        "bead": ("base", "mid"), "spike": ("base",), "rosette": (),
     }
-    assert {e["name"] for e in all_entries() if e["seams"]} == {"band", "scallop"}
+    assert {e["name"] for e in all_entries() if e["seams"]} == {"band", "scallop", "rosette"}
     # Task 9 (spec 6.4) and Phase 3 (spec 7.3): the accepted embellishments; every other entry accepts none.
     accepted = {
         "petal": ("echo", "veins", "fan", "dot"), "leaf": ("echo", "veins"), "band": ("beads",),

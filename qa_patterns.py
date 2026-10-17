@@ -647,16 +647,24 @@ def _slot(entry):
 
 def _seam(entry):
     """
-    A seam motif's open ends sit at angular exactly +-1.0, and two cells of one ring (seeds 11 and 12,
-    one `ring_stream_seed`) draw identical vectors, so neighbours meet along the shared edge.
+    A seam motif's open ends sit at angular exactly +-1.0 or on a vertex of another of its vectors (as the
+    motif analyzer accepts an end touching other ink: the rosette's lobe ends rest on its dot arc), and two
+    cells of one ring (seeds 11 and 12, one `ring_stream_seed`) draw identical vectors, so neighbours meet
+    along the shared edge.
     """
     if not entry.get('seams', False):
         return True
     ring_seed = ring_stream_seed(7, 1, f"ring:{entry['name']}:divider")
     first = _generate(entry, 11, ring_stream_seed=ring_seed)
     second = _generate(entry, 12, ring_stream_seed=ring_seed)
-    ends = [vector.points[k] for vector in first.vectors if not vector.closed for k in (0, -1)]
-    return (all(abs(point.angular) == 1.0 for point in ends)
+
+    def accounted_for(point, index):
+        return abs(point.angular) == 1.0 or any(
+            point in other.points for k, other in enumerate(first.vectors) if k != index)
+
+    ends = [(vector.points[k], index) for index, vector in enumerate(first.vectors) if not vector.closed
+            for k in (0, -1)]
+    return (all(accounted_for(point, index) for point, index in ends)
             and [(v.points, v.closed) for v in first.vectors] == [(v.points, v.closed) for v in second.vectors])
 
 
