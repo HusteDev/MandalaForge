@@ -27,6 +27,9 @@ class CellRecipe:
     once_per_wedge: bool = False
     # Embellishment names for this node, in EMBELLISHMENT_ORDER (spec 6.4); picked for base nodes only.
     embellishments: List[str] = field(default_factory=list)
+    # Share of each size range below which the node's size draws never fall (max-region spec 5, step 2): 0.0
+    # draws the whole range, REPAIR_SIZE_FLOOR its upper end.
+    size_floor: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -39,6 +42,7 @@ class CellRecipe:
             "dropped": self.dropped,
             "once_per_wedge": self.once_per_wedge,
             "embellishments": list(self.embellishments),
+            "size_floor": self.size_floor,
         }
 
     @classmethod
@@ -54,6 +58,7 @@ class CellRecipe:
             dropped=d.get("dropped", False),
             once_per_wedge=d.get("once_per_wedge", False),
             embellishments=list(d.get("embellishments", [])),
+            size_floor=d.get("size_floor", 0.0),
         )
 
 
@@ -244,6 +249,8 @@ def pick_embellishments(entry: Dict, complexity: float, rng: random.Random) -> L
 BOTH_MIN_CELL_WIDTH_PX = 2 * 14.0
 CONTACT_OVERFLOW = 0.1
 MAX_NODE_DEPTH = 3
+# The size floor a background repair gives a ring's bases (max-region spec 5, step 2).
+REPAIR_SIZE_FLOOR = 0.7
 POSITION_MODES = ("centre", "divider", "both", "layered")
 # The modes a style may prefer: a layered ring is eligible only outside ring 0 and with a back motif that fits.
 STYLE_POSITION_MODES = POSITION_MODES[:3]
@@ -631,6 +638,54 @@ class Composer:
             return False
         chosen = self._pick(candidates, rng)
         host.slot_child = CellRecipe(chosen["name"], chosen["category"])
+        return True
+
+    def switch_to_both(self, ring: RingPlan, rng: random.Random) -> bool:
+        """
+        Give a centre ring a divider motif in every gap (max-region spec 5, step 2): `both` mode with a centre
+        share drawn from `rng`, and a non-seam divider base per entry planned with the divider budget. False,
+        changing nothing, when the ring is not in `centre` mode, is the innermost ring, has a seam base, any
+        motif or position mode is forced, `both` is not eligible, a centre base no longer passes its gates at
+        the narrower centre width, or no divider base fits.
+        """
+        if (ring.position_mode != "centre" or ring.ring_index == 0 or ring.back is not None
+                or self.settings.force_motif or self.settings.force_position_mode is not None
+                or any(self._is_seam(node) for node in _base_nodes(ring.sequence))
+                or not self._mode_eligible("both", ring.ring_index, ring.divisions)):
+            return False
+        share = rng.uniform(0.45, 0.75)
+        cell_width, ring_depth = self._ring_metrics(ring.ring_index, ring.divisions)
+        centre_width = cell_width * self._budget("both", share, "centre")
+        if any(entry.centre is None or not self._passes(self._registry_entry(entry.centre), centre_width, ring_depth)
+               for entry in ring.sequence):
+            return False
+        divider_width = cell_width * self._budget("both", share, "divider")
+        avoid = set(self._neighbour_base_names(ring.ring_index))
+        dividers = [
+            self._plan_node(ring.ring_index, ring.ring_seed, s, "divider", divider_width, ring_depth, avoid, None,
+                            allow_seams=False)
+            for s in range(len(ring.sequence))
+        ]
+        if any(node.is_fallback for node in dividers):
+            return False
+        ring.position_mode = "both"
+        ring.centre_share = share
+        for entry, node in zip(ring.sequence, dividers):
+            entry.divider = node
+        self._refresh_contact(ring)
+        return True
+
+    @staticmethod
+    def raise_size_floor(ring: RingPlan) -> bool:
+        """
+        Redraw the ring's bases from the upper end of their size ranges (max-region spec 5, step 2): every base
+        node's `size_floor` becomes `REPAIR_SIZE_FLOOR`. False when all of them already have it.
+        """
+        nodes = _base_nodes(ring.sequence)
+        if all(node.size_floor == REPAIR_SIZE_FLOOR for node in nodes):
+            return False
+        for node in nodes:
+            node.size_floor = REPAIR_SIZE_FLOOR
         return True
 
     def _substitute(self, ring: RingPlan, seq_pos: int, position: str, side_only: bool) -> bool:

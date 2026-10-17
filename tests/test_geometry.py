@@ -94,3 +94,17 @@ def test_to_cell_inverts_to_cartesian(cell_kwargs):
             back = ctx.to_cell(ctx.to_cartesian(point, rotation), rotation)
             assert back.radial == pytest.approx(point.radial, abs=1e-12)
             assert back.angular == pytest.approx(point.angular, abs=1e-12)
+
+
+def test_size_draw_matches_uniform_at_floor_zero(cell_kwargs):
+    import random
+    from motifs.geometry import size_draw
+    ctx = MotifContext(**cell_kwargs)
+    assert size_draw(ctx, random.Random(5), 0.4, 0.9) == random.Random(5).uniform(0.4, 0.9)
+
+
+def test_size_floor_draws_from_the_upper_end(cell_kwargs):
+    import random
+    from motifs.geometry import size_draw
+    ctx = MotifContext(**cell_kwargs, size_floor=0.7)
+    assert all(size_draw(ctx, random.Random(s), 0.0, 1.0) >= 0.7 for s in range(50))

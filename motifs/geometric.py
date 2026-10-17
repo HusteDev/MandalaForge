@@ -9,6 +9,7 @@ from motifs.contract import Anatomy, MotifError, MotifInstance, build_instance, 
 from motifs.embellish import apply_embellishments, holds_pen as _holds_pen
 from motifs.geometry import (
     CellPoint, MotifContext, SmartVector, cubic_points, mirror_points, quad_points,
+    size_draw,
 )
 from motifs.slot_fit import fit_inside_slot, fit_slot_box
 
@@ -58,7 +59,7 @@ def _diamond(mid: float, half_height: float, width: float, bow: Optional[float])
 def generate_diamond(context: MotifContext) -> MotifInstance:
     rng = context.rng
     # Every parameter is drawn before the slot is measured, whichever variant is kept.
-    aspect = rng.uniform(0.6, 1.0)
+    aspect = size_draw(context, rng, 0.6, 1.0)
     concave = rng.random() < DIAMOND_CONCAVE_CHANCE
     bow = rng.uniform(*DIAMOND_BOW_RANGE)
     box = fit_slot_box(context, "diamond")
@@ -217,9 +218,9 @@ def _spike(base: float, corner: float, width: float, tip: float, leave: float, w
 def generate_spike(context: MotifContext) -> MotifInstance:
     rng = context.rng
     # Every parameter is drawn before any limit is applied, whether side touch uses the corner draws or not.
-    length = rng.uniform(*SPIKE_LENGTH_RANGE)
+    length = size_draw(context, rng, *SPIKE_LENGTH_RANGE)
     corner = rng.uniform(*SPIKE_CORNER_RANGE)
-    width = context.angular_limits * rng.uniform(*SPIKE_WIDTH_RANGE)
+    width = context.angular_limits * size_draw(context, rng, *SPIKE_WIDTH_RANGE)
     leave = rng.uniform(*SPIKE_LEAVE_RANGE)
     waist = rng.uniform(*SPIKE_WAIST_RANGE)
     pinch = rng.uniform(*SPIKE_PINCH_RANGE)
@@ -272,7 +273,7 @@ def generate_bead(context: MotifContext) -> MotifInstance:
     rng = context.rng
     # Every parameter is drawn before the slot or the limits are looked at, whichever branch draws.
     centre = rng.uniform(*BEAD_CENTRE_RANGE)
-    size = rng.uniform(*BEAD_SIZE_RANGE)
+    size = size_draw(context, rng, *BEAD_SIZE_RANGE)
     low, high = context.radial_limits
 
     if context.slot:

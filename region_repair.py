@@ -14,13 +14,14 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 import math
+import random
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from assembler import AssembledDesign
-from composer import DesignPlan, RingPlan, node_rng, recipe_at
+from composer import DesignPlan, RingPlan, node_rng, recipe_at, ring_stream_seed
 from motifs import find_motif, safe_motif
 from motifs.embellish import INTERIOR_FILLS
 from motifs.geometry import PointTuple
@@ -225,6 +226,8 @@ class RegionRepair:
             handled.add(face_set.key)
             if face_set.kind == "host":
                 current = self.step_host(current, face_set)
+            elif face_set.kind == "background":
+                current = self.step_background(current, face_set)
         return current
 
     def step_host(self, trial: Trial, face_set: FaceSet) -> Trial:
@@ -260,6 +263,31 @@ class RegionRepair:
             current = self._keep_better(current, self.generator._trial(plan))
         return current
 
+    def step_background(self, trial: Trial, face_set: FaceSet) -> Trial:
+        """
+        Step 2, fill the background: a centre ring switches to `both`, so each gap gets a divider motif; a
+        `both` or divider ring, or a centre ring that cannot switch, redraws its bases from the upper end of
+        their size ranges. A layered or seam ring is left alone (its geometry is ring-wide by construction).
+        """
+        ring_index = face_set.ring_index
+        plan = deepcopy(trial.plan)
+        ring = _ring_of(plan, ring_index)
+        if ring is None or ring.position_mode == "layered" or has_seam_base(ring):
+            return trial
+        composer = self.generator._new_composer()
+        composer.adopt(plan)
+        change = None
+        if ring.position_mode == "centre":
+            rng = random.Random(ring_stream_seed(ring.ring_seed, ring_index, "repair:2"))
+            if composer.switch_to_both(ring, rng):
+                change = "position_mode:both"
+        if change is None and composer.raise_size_floor(ring):
+            change = "size_floor"
+        if change is None:
+            return trial
+        plan.repairs.append({"step": 2, "kind": face_set.kind, "ring": ring_index, "change": change})
+        return self._keep_better(trial, self.generator._trial(plan))
+
     @staticmethod
     def _keep_better(current: Trial, trial: Optional[Trial]) -> Trial:
         """`trial` when it assembled, is valid and leaves no more oversized area than `current`, else `current`."""
@@ -287,6 +315,14 @@ class RegionRepair:
             if node.ring_index == ring_index and node.position == position and tuple(node.node_path) == node_path:
                 return node.instance is not None and bool(node.instance.declaration.slot)
         return False
+
+
+def has_seam_base(ring: RingPlan) -> bool:
+    """Whether any base of the ring is a seam motif (a band or scallop), which owns its whole position."""
+    return any(
+        (find_motif(node.motif) or safe_motif(node.category)).get("seams", False)
+        for entry in ring.sequence for node in (entry.centre, entry.divider) if node is not None
+    )
 
 
 def _ring_of(plan: DesignPlan, ring_index: int) -> Optional[RingPlan]:

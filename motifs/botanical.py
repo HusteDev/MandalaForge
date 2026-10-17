@@ -19,6 +19,7 @@ from motifs.geometry import (
     mirror_points,
     page_arc_points,
     side_touch_radial_within,
+    size_draw,
 )
 from motifs.slot_fit import MIN_FIT_SCALE, SHRINK_FACTOR, fit_inside_slot, fit_slot_box
 
@@ -120,9 +121,9 @@ def generate_petal(context: MotifContext) -> MotifInstance:
     # Every parameter is drawn before any limit is applied, so tightening the
     # limits changes what is kept but never what the rng produced.
     # Ring fill (spec 13.3): the tip reaches the next ring or past it, and the base may dip below.
-    length = rng.uniform(0.95, 1.3)
+    length = size_draw(context, rng, 0.95, 1.3)
     dip = rng.uniform(0.0, 0.5)
-    half_width = context.angular_limits * rng.uniform(0.55, 0.95)
+    half_width = context.angular_limits * size_draw(context, rng, 0.55, 0.95)
     belly = rng.uniform(*PETAL_BELLY_RANGE)
     flare = rng.uniform(*PETAL_FLARE_RANGE)
     sharpness = rng.uniform(*PETAL_SHARPNESS_RANGE)
@@ -210,8 +211,8 @@ def generate_leaf(context: MotifContext) -> MotifInstance:
     rng = context.rng
     # Every parameter is drawn before any limit is applied (the MONO property).
     # Ring fill (spec 13.3): the apex reaches the ring boundary or a little past it.
-    length = rng.uniform(1.0, 1.2)
-    half_width = context.angular_limits * rng.uniform(0.45, 0.85)
+    length = size_draw(context, rng, 1.0, 1.2)
+    half_width = context.angular_limits * size_draw(context, rng, 0.45, 0.85)
     belly = rng.uniform(*LEAF_BELLY_RANGE)
     roundness = rng.uniform(*LEAF_ROUNDNESS_RANGE)
 
@@ -380,8 +381,8 @@ def _teardrop_outline(
 def generate_teardrop(context: MotifContext) -> MotifInstance:
     rng = context.rng
     # Every parameter is drawn before any limit is applied (the MONO property).
-    length = rng.uniform(*FILL_LENGTH_RANGE)
-    half_width = context.angular_limits * rng.uniform(*TEARDROP_WIDTH_RANGE)
+    length = size_draw(context, rng, *FILL_LENGTH_RANGE)
+    half_width = context.angular_limits * size_draw(context, rng, *TEARDROP_WIDTH_RANGE)
     belly = rng.uniform(*TEARDROP_BELLY_RANGE)
     bulb = rng.uniform(*TEARDROP_BULB_RANGE)
     beta_start = rng.uniform(*TEARDROP_BETA_RANGE)
@@ -495,8 +496,8 @@ def _rounded_outline(
 def generate_rounded_petal(context: MotifContext) -> MotifInstance:
     rng = context.rng
     # Every parameter is drawn before any limit is applied (the MONO property).
-    length = rng.uniform(*FILL_LENGTH_RANGE)
-    half_width = context.angular_limits * rng.uniform(0.55, 0.95)
+    length = size_draw(context, rng, *FILL_LENGTH_RANGE)
+    half_width = context.angular_limits * size_draw(context, rng, 0.55, 0.95)
     belly = rng.uniform(*PETAL_BELLY_RANGE)
     flare = rng.uniform(*PETAL_FLARE_RANGE)
     cap = rng.uniform(*ROUNDED_CAP_RANGE)
@@ -610,7 +611,7 @@ def generate_heart(context: MotifContext) -> MotifInstance:
     # Every parameter is drawn before any limit is applied (the MONO property).
     bottom = rng.uniform(*HEART_BOTTOM_RANGE)
     waist_share = rng.uniform(*HEART_WAIST_RANGE)
-    width_share = rng.uniform(*HEART_WIDTH_RANGE)
+    width_share = size_draw(context, rng, *HEART_WIDTH_RANGE)
     notch = rng.uniform(*HEART_NOTCH_RANGE)
     spread = rng.uniform(*HEART_SPREAD_RANGE)
 

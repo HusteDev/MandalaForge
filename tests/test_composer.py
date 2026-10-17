@@ -940,3 +940,36 @@ def test_regenerated_ring_plan_depends_only_on_the_design_seed_and_its_ring_seed
     with_inner = plan_for(11, ring_seeds={1: 77, 2: 1001}).rings[2]
     with_both = plan_for(11, ring_seeds={1: 77, 2: 1001, 3: 5}).rings[2]
     assert alone.to_dict() == with_inner.to_dict() == with_both.to_dict()
+
+
+# ---------------------------------------------------------------- region-cap repairs (max-region spec 5, step 2)
+
+def composer_for(seed=123, **over):
+    return Composer(seed, GEOM, ComposerSettings(**{"categories": ["botanical", "geometric"], **over}))
+
+
+def test_switch_to_both_refuses_forced_and_seam_rings():
+    c = composer_for(seed=3, force_position_mode="centre")
+    ring = next(r for r in c.plan().rings if r.ring_index > 0)
+    assert not c.switch_to_both(ring, random.Random(1)) and ring.position_mode == "centre"
+
+
+def test_switch_to_both_puts_a_divider_in_every_entry():
+    from composer import REPAIR_SIZE_FLOOR
+    c = composer_for(seed=3)
+    plan = c.plan()
+    ring = next(r for r in plan.rings if r.ring_index > 0 and r.position_mode == "centre"
+                and not any(c._is_seam(e.centre) for e in r.sequence))
+    assert c.switch_to_both(ring, random.Random(1))
+    assert ring.position_mode == "both" and 0.45 <= ring.centre_share <= 0.75
+    assert all(e.divider is not None and not e.divider.is_fallback for e in ring.sequence)
+    assert not c.switch_to_both(ring, random.Random(1))          # no longer a centre ring
+    assert c.raise_size_floor(ring)
+    assert all(n.size_floor == REPAIR_SIZE_FLOOR for e in ring.sequence for n in (e.centre, e.divider))
+    assert not c.raise_size_floor(ring)                          # already raised
+
+
+def test_old_recipe_json_loads_with_floor_zero():
+    node = next(n for e in plan_for(seed=3).rings[1].sequence for n in (e.centre, e.divider) if n is not None)
+    d = node.to_dict(); d.pop("size_floor")
+    assert CellRecipe.from_dict(d).size_floor == 0.0

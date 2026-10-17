@@ -71,6 +71,9 @@ class MotifContext:
     node_seed: int = 0
     # Embellishment names the composer picked for this node (spec 6.4); `apply_embellishments` runs them.
     embellishments: Tuple[str, ...] = ()
+    # Share of a size range below which this node's size draws never fall (max-region spec 5, step 2); 0.0 draws
+    # the whole range exactly as before.
+    size_floor: float = 0.0
     # Rebuilt from ring_stream_seed on every construction, so dataclasses.replace yields a fresh, identical stream.
     ring_rng: random.Random = field(init=False, repr=False, compare=False)
 
@@ -211,6 +214,15 @@ class MotifContext:
             },
             "smart_vector": vector,
         }
+
+
+def size_draw(context: MotifContext, rng: random.Random, low: float, high: float) -> float:
+    """
+    A size drawn from [low, high] with one `rng.random()`, from the top `1 - size_floor` of the range; at floor
+    0.0 it is exactly `rng.uniform(low, high)`, so an unrepaired node draws as it always has.
+    """
+    floor = context.size_floor
+    return low + (high - low) * (floor + (1.0 - floor) * rng.random())
 
 
 def cell_rotation_deg(cell_index: int, divisions: int, position: str) -> float:

@@ -354,6 +354,7 @@ class Assembler:
             ring_stream_seed=ring_stream_seed(ring.ring_seed, ring.ring_index, f"ring:{recipe.motif}:{position}"),
             node_seed=rng_seed,
             embellishments=tuple(recipe.embellishments),
+            size_floor=recipe.size_floor,
         )
 
     def _back_context(self, ring: RingPlan, front_context: MotifContext) -> MotifContext:
