@@ -9,12 +9,14 @@ topology validator checks the result; this module turns that ink into SVG.
 import svgwrite
 import random
 import math
+from copy import deepcopy
 from typing import Any, List, Tuple
 
-from assembler import Assembler, AssembledDesign, LayeredRingFailed
+from assembler import Assembler, AssembledDesign, AssemblyError, LayeredRingFailed
 from composer import Composer, ComposerSettings, DesignPlan
 from motifs.geometry import cell_rotation_deg
 from placement import PlacedPath
+from region_repair import FaceSet, RegionRepair, Trial, classify_faces, face_sets
 from topology_validator import (
     MIN_REGION_AREA_PX2, PEN_RADIUS_PX, TopologyReport, TopologyValidator, max_region_px2,
 )
@@ -95,6 +97,8 @@ class DesignGenerator:
         # Set by generate()
         self.composer: Composer | None = None
         self.plan: DesignPlan | None = None
+        # The plan as it stood before its final assembly (repairs included): generate_from_plan replays it.
+        self.source_plan: DesignPlan | None = None
         self.assembled: AssembledDesign | None = None
         self.last_validation_result: TopologyReport | None = None
         self.last_validation_polylines = None
@@ -208,13 +212,72 @@ class DesignGenerator:
 
     def generate(self, validate: bool = True) -> str:
         """
-        Plan, assemble and (optionally) validate the design.
+        Plan, assemble and (optionally) validate the design. With `max_region_cap` on, a valid design with
+        oversized faces climbs the repair ladder (`region_repair.RegionRepair`) whether or not `validate` is
+        set; `source_plan` keeps the plan of the final assembly, repairs included, for `generate_from_plan`.
 
         Returns the SVG document: one explicit path per placed piece of ink,
         grouped by ring. Raises `AssemblyError` (a `ValueError`) when a cell
         cannot be assembled.
         """
         print("\n=== GENERATING MANDALA ===")
+        self.composer = self._new_composer()
+        self.plan = self.composer.plan()
+        self.source_plan = deepcopy(self.plan)
+        self.assembled = self._assemble()
+        self._log_assembly()
+
+        self.last_validation_result = None
+        self.last_validation_polylines = None
+        if self.max_region_cap:
+            # The ladder runs whatever `validate` says, so the SVG never depends on it (max-region spec 5).
+            report, polylines = self._validation_report(self.assembled)
+            final = Trial(self.source_plan, self.plan, self.assembled, report, polylines,
+                          self._face_sets(self.assembled, report))
+            if report.is_valid and final.sets:
+                final = RegionRepair(self).run(final)
+                self.source_plan, self.plan, self.assembled = final.source_plan, final.plan, final.assembled
+                self.composer.adopt(self.plan)
+                print(f"  Region cap: kept {len(self.plan.repairs)} repair(s), "
+                      f"{len(final.sets)} oversized face set(s) left")
+            if validate:
+                self._record_validation(final.report, final.polylines)
+        elif validate:
+            self._validate()
+
+        svg = self._render_svg()
+        print("=== GENERATION COMPLETE ===\n")
+        return svg
+
+    def generate_from_plan(self, plan: DesignPlan, validate: bool = True) -> str:
+        """
+        Assemble and render a saved plan (a `source_plan`, repairs included) without planning or running
+        the repair ladder, so a repaired design replays exactly. `plan` itself is left unchanged.
+        """
+        print("\n=== GENERATING MANDALA FROM PLAN ===")
+        self.source_plan = deepcopy(plan)
+        self.plan = deepcopy(plan)
+        self.composer = self._new_composer()
+        self.composer.adopt(self.plan)
+        self.assembled = self._assemble()
+        self._log_assembly()
+
+        self.last_validation_result = None
+        self.last_validation_polylines = None
+        if validate:
+            self._validate()
+        svg = self._render_svg()
+        print("=== GENERATION COMPLETE ===\n")
+        return svg
+
+    def _log_assembly(self) -> None:
+        print(f"  Ring divisions: {[ring.divisions for ring in self.plan.rings]}")
+        print(f"  Placed {len(self.assembled.paths)} paths, {len(self.assembled.reaches)} reaches, "
+              f"{self.assembled.dropped_children} dropped children, "
+              f"{self.assembled.dropped_embellishments} dropped embellishments")
+
+    def _new_composer(self) -> Composer:
+        """A fresh composer with this generator's seed, rings and settings."""
         settings = ComposerSettings(
             num_divisions=self.num_divisions,
             vary_divisions=self.vary_divisions,
@@ -228,43 +291,50 @@ class DesignGenerator:
             force_embellishments=self.force_embellishments,
             max_region_cap=self.max_region_cap,
         )
-        self.composer = Composer(self.seed, self.rings, settings)
-        self.plan = self.composer.plan()
-        self.assembled = self._assemble()
-        print(f"  Ring divisions: {[ring.divisions for ring in self.plan.rings]}")
-        print(f"  Placed {len(self.assembled.paths)} paths, {len(self.assembled.reaches)} reaches, "
-              f"{self.assembled.dropped_children} dropped children, "
-              f"{self.assembled.dropped_embellishments} dropped embellishments")
+        return Composer(self.seed, self.rings, settings)
 
-        svg = self._render_svg()
+    def _face_sets(self, assembled: AssembledDesign, report: TopologyReport) -> List[FaceSet]:
+        """The report's oversized faces, classified and grouped by the plan entry behind them."""
+        return face_sets(classify_faces(report.oversized_regions, assembled.paths, self.rings, self.center))
 
-        self.last_validation_result = None
-        self.last_validation_polylines = None
-        if validate:
-            self._validate()
-
-        print("=== GENERATION COMPLETE ===\n")
-        return svg
-
-    def _assemble(self) -> AssembledDesign:
+    def _trial(self, plan: DesignPlan) -> Trial | None:
         """
-        Assemble the plan. A layered ring whose composite fails in pass two, or whose back a pass-two
-        replacement dropped, loses its back for the whole ring and the design is assembled again (spec 5.4),
-        at most once per ring.
+        One repair trial: `plan` deep-copied as the trial's `source_plan`, another copy assembled with a
+        fresh composer that adopts it, then validated and classified. None when assembly fails.
         """
+        source_plan = deepcopy(plan)
+        work = deepcopy(plan)
+        composer = self._new_composer()
+        composer.adopt(work)
+        try:
+            assembled = self._assemble(work, composer)
+        except AssemblyError as error:
+            print(f"  Repair trial failed to assemble: {error}")
+            return None
+        report, polylines = self._validation_report(assembled)
+        return Trial(source_plan, work, assembled, report, polylines, self._face_sets(assembled, report))
+
+    def _assemble(self, plan: DesignPlan | None = None, composer: Composer | None = None) -> AssembledDesign:
+        """
+        Assemble `plan` (default `self.plan`) with `composer` (default `self.composer`). A layered ring whose
+        composite fails in pass two, or whose back a pass-two replacement dropped, loses its back for the
+        whole ring and the design is assembled again (spec 5.4), at most once per ring.
+        """
+        plan = self.plan if plan is None else plan
+        composer = self.composer if composer is None else composer
         dropped: set[int] = set()
         while True:
             try:
                 return Assembler(
-                    self.plan, self.rings, self.center, self.complexity, self.min_pattern_size, self.composer
+                    plan, self.rings, self.center, self.complexity, self.min_pattern_size, composer
                 ).assemble()
             except LayeredRingFailed as failure:
-                ring = next((r for r in self.plan.rings if r.ring_index == failure.ring_index), None)
+                ring = next((r for r in plan.rings if r.ring_index == failure.ring_index), None)
                 if failure.ring_index in dropped or ring is None:
                     raise
                 dropped.add(failure.ring_index)
                 print(f"  {failure}; dropping its back layer and assembling again")
-                self.composer.drop_back(ring)
+                composer.drop_back(ring)
 
     def generate_ring_fragment(self, ring_index: int, ring_seed: int, validate: bool = True) -> dict[str, Any]:
         """
@@ -342,8 +412,12 @@ class DesignGenerator:
         return result, polylines
 
     def _validate(self) -> None:
-        print("\n=== VALIDATING DESIGN ===")
         result, polylines = self._validation_report(self.assembled)
+        self._record_validation(result, polylines)
+
+    def _record_validation(self, result: TopologyReport, polylines: List[List[Tuple[float, float]]]) -> None:
+        """Keep `result` as the last validation and print its summary."""
+        print("\n=== VALIDATING DESIGN ===")
         self.last_validation_result = result
         self.last_validation_polylines = polylines
 

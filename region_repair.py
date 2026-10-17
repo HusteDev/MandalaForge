@@ -4,20 +4,31 @@ Oversized faces and the plan entries behind them (max-region-size spec 4.3).
 Each face over the print-size cap is classified as a host interior, the open centre or background, and
 matched to the plan through the ring, cell, position and node path every `PlacedPath` records. Symmetric
 copies of a face share a key, so one plan change repairs the whole set.
+
+`RegionRepair` then climbs the repair ladder (spec 5): each step edits a deep copy of the plan, re-assembles
+and re-validates it, and is kept only when the design stays valid with no more oversized area.
 """
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 import math
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
+from assembler import AssembledDesign
+from composer import DesignPlan, RingPlan, node_rng, recipe_at
+from motifs import find_motif, safe_motif
+from motifs.embellish import INTERIOR_FILLS
 from motifs.geometry import PointTuple
 from placement import PlacedPath
-from topology_validator import RegionInfo
+from topology_validator import RegionInfo, TopologyReport
+
+if TYPE_CHECKING:
+    from coloring_generator import DesignGenerator
 
 FACE_KINDS = ("host", "background", "centre")
 # Roles of closed outlines that can host a face: base and back outlines, slot children and detail echoes.
@@ -167,3 +178,116 @@ def face_sets(faces: Sequence[OversizedFace]) -> List[FaceSet]:
             grouped[key] = FaceSet(key, face.kind, face.ring_index, [])
         grouped[key].faces.append(face)
     return sorted(grouped.values(), key=lambda s: (s.ring_index, FACE_KINDS.index(s.kind), s.key))
+
+
+# ------------------------------------------------------------------ the repair ladder (max-region spec 5)
+
+# At most this many face sets are handled per design.
+MAX_LADDER_SETS = 8
+
+
+@dataclass
+class Trial:
+    """
+    One assembled candidate design: `source_plan` is the plan as it stood before assembly (what a replay
+    assembles), `plan` the plan after it (with any fallbacks the assembly applied).
+    """
+    source_plan: DesignPlan
+    plan: DesignPlan
+    assembled: AssembledDesign
+    report: TopologyReport
+    polylines: List
+    sets: List[FaceSet]
+
+    @property
+    def oversized_area(self) -> float:
+        return sum(face_set.area for face_set in self.sets)
+
+
+class RegionRepair:
+    """
+    Climbs the repair ladder for a valid design with oversized faces. Every step edits a deep copy of the
+    current trial's plan, records the change in its `repairs`, and re-assembles and re-validates it through
+    the generator; the step's trial is kept only when it is valid and leaves no more oversized area.
+    """
+
+    def __init__(self, generator: "DesignGenerator"):
+        self.generator = generator
+
+    def run(self, first: Trial) -> Trial:
+        """Handle the current trial's face sets in order, each once, at most `MAX_LADDER_SETS` of them."""
+        current = first
+        handled: set = set()
+        while len(handled) < MAX_LADDER_SETS:
+            face_set = next((s for s in current.sets if s.key not in handled), None)
+            if face_set is None:
+                break
+            handled.add(face_set.key)
+            if face_set.kind == "host":
+                current = self.step_host(current, face_set)
+        return current
+
+    def step_host(self, trial: Trial, face_set: FaceSet) -> Trial:
+        """
+        Step 1, detail inside the host: echo, then the interior fill the host accepts, then a slot child (when
+        the placed host declares a slot), then a dot, each kept or undone in turn, until the set is gone.
+        """
+        face = face_set.first
+        ring_index, position, node_path, on_back = face.ring_index, face.position, face.node_path, face.on_back
+        current = trial
+        for candidate in ("echo", "fill", "slot", "dot"):
+            if all(s.key != face_set.key for s in current.sets):
+                break
+            plan = deepcopy(current.plan)
+            ring = _ring_of(plan, ring_index)
+            if ring is None:
+                break
+            composer = self.generator._new_composer()
+            composer.adopt(plan)
+            change = None
+            if candidate == "slot":
+                if not on_back and self._declares_slot(current, ring_index, position, node_path):
+                    rng = node_rng(ring.ring_seed, ring_index, node_path[0], len(node_path) - 1, position, "repair:1")
+                    if composer.add_slot_child(ring, position, node_path, rng):
+                        change = f"slot_child:{recipe_at(ring, position, node_path).slot_child.motif}"
+            else:
+                name = candidate if candidate != "fill" else self._interior_fill(ring, position, node_path, on_back)
+                if name is not None and composer.add_embellishment(ring, position, node_path, on_back, name):
+                    change = f"embellishment:{name}"
+            if change is None:
+                continue
+            plan.repairs.append({"step": 1, "kind": face_set.kind, "ring": ring_index, "change": change})
+            current = self._keep_better(current, self.generator._trial(plan))
+        return current
+
+    @staticmethod
+    def _keep_better(current: Trial, trial: Optional[Trial]) -> Trial:
+        """`trial` when it assembled, is valid and leaves no more oversized area than `current`, else `current`."""
+        if trial is not None and trial.report.is_valid and trial.oversized_area <= current.oversized_area:
+            return trial
+        return current
+
+    @staticmethod
+    def _interior_fill(ring: RingPlan, position: str, node_path: Tuple[int, ...], on_back: bool) -> Optional[str]:
+        """The interior fill the host accepts; when it accepts both, one drawn from the node's repair stream."""
+        host = recipe_at(ring, position, node_path, on_back)
+        if host is None:
+            return None
+        entry = find_motif(host.motif) or safe_motif(host.category)
+        accepted = [name for name in INTERIOR_FILLS if name in entry.get("embellishments", ())]
+        if len(accepted) < 2:
+            return accepted[0] if accepted else None
+        rng = node_rng(ring.ring_seed, ring.ring_index, node_path[0], len(node_path) - 1, position, "repair:1")
+        return rng.choice(accepted)
+
+    @staticmethod
+    def _declares_slot(trial: Trial, ring_index: int, position: str, node_path: Tuple[int, ...]) -> bool:
+        """Whether the placed host (its first cell) declares a non-empty slot."""
+        for node in trial.assembled.nodes:
+            if node.ring_index == ring_index and node.position == position and tuple(node.node_path) == node_path:
+                return node.instance is not None and bool(node.instance.declaration.slot)
+        return False
+
+
+def _ring_of(plan: DesignPlan, ring_index: int) -> Optional[RingPlan]:
+    return next((ring for ring in plan.rings if ring.ring_index == ring_index), None)

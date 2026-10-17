@@ -149,6 +149,8 @@ class DesignPlan:
     style: Dict[str, Any]
     rings: List[RingPlan]
     base_symmetry: int = 1
+    # Region-cap repairs kept by the ladder, in order: {"step", "kind", "ring", "change"} (max-region spec 5).
+    repairs: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -156,6 +158,7 @@ class DesignPlan:
             "style": self.style,
             "rings": [ring.to_dict() for ring in self.rings],
             "base_symmetry": self.base_symmetry,
+            "repairs": [dict(repair) for repair in self.repairs],
         }
 
     @classmethod
@@ -165,6 +168,7 @@ class DesignPlan:
             style=d["style"],
             rings=[RingPlan.from_dict(r) for r in d["rings"]],
             base_symmetry=d.get("base_symmetry", 1),
+            repairs=[dict(repair) for repair in d.get("repairs", [])],
         )
 
     def to_json(self) -> str:
@@ -553,6 +557,81 @@ class Composer:
         ring.back = None
         ring.back_dropped = True
         ring.position_mode = "centre"
+
+    # ---------------------------------------------------------- plan repairs
+
+    def adopt(self, plan: DesignPlan) -> None:
+        """
+        Take `plan` as this composer's live plan, as `plan()` would have left it: a substitute reads its
+        neighbours' current bases from its rings, and picks with its style and base symmetry.
+        """
+        self._live_rings = {ring.ring_index: ring for ring in plan.rings}
+        self.style = {**plan.style, "categories": list(plan.style["categories"])}
+        self._symmetry = plan.base_symmetry
+
+    @staticmethod
+    def _fill_allowed(node: CellRecipe, name: str) -> bool:
+        """Whether `node` may take `name`: it accepts and lacks it, keeps one interior fill and no fill beside a slot child."""
+        if name not in Composer._registry_entry(node).get("embellishments", ()) or name in node.embellishments:
+            return False
+        if name in INTERIOR_FILLS:
+            return node.slot_child is None and not set(node.embellishments) & set(INTERIOR_FILLS)
+        return True
+
+    def add_embellishment(self, ring: RingPlan, position: str, node_path: Tuple[int, ...], on_back: bool,
+                          name: str) -> bool:
+        """
+        Add embellishment `name` to the host behind a face (max-region spec 5, step 1); False when the host's
+        registry entry does not accept it, the host has it, or it would give the host a second interior fill
+        or a fill beside its slot child. A seam host owns its whole position, so every entry there gets it.
+        """
+        host = recipe_at(ring, position, node_path, on_back)
+        if host is None or not self._fill_allowed(host, name):
+            return False
+        targets = [host]
+        if not on_back and len(node_path) == 1 and self._is_seam(host):
+            targets += [
+                node for node in (getattr(entry, position) for entry in ring.sequence)
+                if node is not None and node is not host and node.motif == host.motif
+                and self._fill_allowed(node, name)
+            ]
+        for node in targets:
+            names = set(node.embellishments) | {name}
+            node.embellishments = [n for n in EMBELLISHMENT_ORDER if n in names]
+        return True
+
+    def add_slot_child(self, ring: RingPlan, position: str, node_path: Tuple[int, ...],
+                       rng: random.Random) -> bool:
+        """
+        Give the host behind a face a slot child (max-region spec 5, step 1), picked with `rng` from the
+        slot-role motifs that pass their gates at the host's `slot_estimate`, as planning nests one. False
+        when the host has a slot child or an interior fill, offers no slot at its depth, or nothing fits.
+        """
+        host = recipe_at(ring, position, node_path)
+        if host is None or host.slot_child is not None or set(host.embellishments) & set(INTERIOR_FILLS):
+            return False
+        depth = len(node_path) - 1
+        if depth + 1 >= MAX_NODE_DEPTH:
+            return False
+        width_fraction = depth_fraction = 1.0
+        for level in range(len(node_path)):
+            estimate = self._registry_entry(recipe_at(ring, position, node_path[:level + 1]))["slot_estimate"]
+            if estimate is None:
+                return False
+            width_fraction *= estimate[0]
+            depth_fraction *= estimate[1]
+        cell_width, ring_depth = self._ring_metrics(ring.ring_index, ring.divisions)
+        mode = "both" if ring.centre_share < 1.0 else position
+        cell_width *= self._budget(mode, ring.centre_share, position)
+        candidates = [
+            m for m in motifs_for_categories(self.settings.categories)
+            if "slot" in m["roles"] and self._passes(m, cell_width * width_fraction, ring_depth * depth_fraction)
+        ]
+        if not candidates:
+            return False
+        chosen = self._pick(candidates, rng)
+        host.slot_child = CellRecipe(chosen["name"], chosen["category"])
+        return True
 
     def _substitute(self, ring: RingPlan, seq_pos: int, position: str, side_only: bool) -> bool:
         """
