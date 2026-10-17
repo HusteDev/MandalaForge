@@ -227,6 +227,13 @@ def test_rosette_lobe_is_mirror_symmetric_with_a_stem_to_the_touch_point(cell_kw
         k = lobe.points.index(CellPoint(1.0, 0.0))
         assert lobe.points[k - 1] == lobe.points[k + 1] == CellPoint(pytest.approx(body_tip), 0.0)
         assert max(p.radial for p in lobe.points if p.angular != 0.0) < body_tip
+        assert neighbour_gap_px(ctx, lobe, 0.0, ctx.wedge_angle) >= ctx.clearance_px("detail", "detail")
+
+
+def neighbour_gap_px(ctx, lobe, rotation, next_rotation):
+    """The page distance between a lobe traced at `rotation` and the same lobe at `next_rotation`."""
+    from shapely.geometry import LineString
+    return LineString(ctx.polyline(lobe, rotation)).distance(LineString(ctx.polyline(lobe, next_rotation)))
 
 
 def test_rosette_tip_stops_at_the_radial_limit(cell_kwargs):
@@ -307,3 +314,20 @@ def test_fit_rosette_refuses_a_centre_too_small(cell_kwargs):
     ctx = fit_ctx(cell_kwargs, 12)
     with pytest.raises(MotifError):
         fit_rosette(ctx, ring_zero_ink(ctx.center, 20.0, 12))
+
+
+@pytest.mark.parametrize("divisions", [6, 8, 12])
+def test_fitted_rosette_lobes_keep_a_clearance_from_their_neighbours(cell_kwargs, divisions):
+    # Free radii across the 29px to 67px the corpus's oversized centres measure, including the review case
+    # (8 divisions, a 35px circle, ring seed 17).
+    from motifs.geometric import fit_rosette
+    for radius in (30.0, 35.0, 42.0, 50.0, 58.0, 67.0):
+        for ring_seed in (17, 3, 29, 41):
+            ctx = fit_ctx(cell_kwargs, divisions, ring_stream_seed=ring_seed)
+            try:
+                fit = fit_rosette(ctx, ring_zero_ink(ctx.center, radius, divisions))
+            except MotifError:
+                continue
+            lobe = fit.instance.vectors[1]
+            gap = neighbour_gap_px(fit.context, lobe, fit.rotations[0], fit.rotations[1])
+            assert gap >= ctx.clearance_px("detail", "detail"), (divisions, radius, ring_seed, gap)

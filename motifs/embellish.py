@@ -139,6 +139,11 @@ def _face_holds_pen(polygon: Polygon) -> bool:
             and not polygon.buffer(-PEN_RADIUS_PX).is_empty)
 
 
+def polygon_holds_pen(polygon: Polygon) -> bool:
+    """Whether a face already on the page (pixel coordinates) is one the validator accepts, as `holds_pen`."""
+    return _face_holds_pen(polygon)
+
+
 def _faces_hold_pen(context: MotifContext, vectors: Sequence[SmartVector], clearance_px: float = 0.0) -> bool:
     """
     Whether every face the ink of `vectors` makes holds a pen by the validator's rule (`holds_pen`), the ink

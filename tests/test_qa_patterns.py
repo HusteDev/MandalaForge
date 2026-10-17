@@ -207,7 +207,6 @@ def test_seam_check_fails_a_motif_whose_open_end_is_off_the_edge():
     assert not _seam(entry)
 
 
-
 def test_seam_check_accepts_an_open_end_on_another_vectors_vertex_only():
     from qa_patterns import _seam
     from motifs.geometry import CellPoint
@@ -224,6 +223,25 @@ def test_seam_check_accepts_an_open_end_on_another_vectors_vertex_only():
     assert _seam(entry)
     entry["generator"] = lobe_off_the_arc
     assert not _seam(entry)
+
+
+def test_seam_check_rejects_an_open_end_resting_on_a_vector_that_misses_the_edge():
+    from qa_patterns import _seam
+    entry = dict(find_motif("band"))
+    good = entry["generator"]
+
+    def arc_end_on_the_lens(context):
+        instance = good(context)
+        arc = next(vector for vector in instance.vectors if not vector.closed)
+        lens = next(vector for vector in instance.vectors if vector.closed)
+        # The arc's end now rests on a lens vertex, but the lens never reaches the cell edge.
+        arc.points[0] = lens.points[1]
+        return instance
+
+    assert _seam(entry)
+    entry["generator"] = arc_end_on_the_lens
+    assert not _seam(entry)
+
 
 def test_tangent_check_fails_a_motif_with_a_kinked_touch_vertex():
     from qa_patterns import _tangent

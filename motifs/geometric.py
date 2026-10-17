@@ -10,7 +10,7 @@ from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from motifs.contract import Anatomy, MotifError, MotifInstance, build_instance, require_full_budget
-from motifs.embellish import _face_holds_pen, apply_embellishments, holds_pen as _holds_pen
+from motifs.embellish import apply_embellishments, holds_pen as _holds_pen, polygon_holds_pen
 from motifs.geometry import (
     CellPoint, MotifContext, PointTuple, SmartVector, cubic_points, insert_vertex_on_outline, mirror_points,
     quad_points, size_draw,
@@ -333,6 +333,9 @@ ROSETTE_NECK = 0.6
 # up to this share of the body's radial, then narrows the neck, down to this angular; past both it is refused.
 ROSETTE_MAX_DOT = 0.4
 ROSETTE_MIN_NECK = 0.2
+# Each narrowing step of a lobe whose flank comes closer than a clearance to its neighbour keeps this share of
+# its neck and belly half-widths.
+ROSETTE_NARROWING = 0.9
 # Fewer lobes than this read as a propeller, not a rosette.
 ROSETTE_MIN_LOBES = 3
 # The stem is the detail-to-outline clearance plus this share of it, so the body clears ring 0's ink with room.
@@ -417,7 +420,7 @@ def _draw_rosette(context: MotifContext, body_px: float, adapt: bool = True) -> 
         raise MotifError("rosette does not fit its radial limits")
     # The dot is one face, the disc inside the dot arc: a clearance across, and a face the validator accepts.
     dot_px = context.radius_at(dot)
-    if 2.0 * dot_px < clearance or not _face_holds_pen(Point(0.0, 0.0).buffer(dot_px)):
+    if 2.0 * dot_px < clearance or not polygon_holds_pen(Point(0.0, 0.0).buffer(dot_px)):
         raise MotifError("rosette dot is too small to colour")
     belly = dot + belly_share * (body_tip - dot)
     # The bellies keep a clearance apart too; the belly narrows to its neck at most.
@@ -425,7 +428,15 @@ def _draw_rosette(context: MotifContext, body_px: float, adapt: bool = True) -> 
     if gap_px(belly, half_width) < clearance:
         raise MotifError("rosette lobes are too crowded at their bellies")
 
+    # The arc-length gaps above are measured on two radials only; a flank between them can still lean closer to
+    # the neighbouring lobe. The true page distance between this lobe's side and its neighbour's decides: an
+    # adapting rosette narrows its neck and belly together, keeping the lobe's shape, until it is a clearance.
     right = _rosette_body(dot, neck, half_width, belly, body_tip)
+    while _neighbour_gap_px(context, right) < clearance:
+        neck, half_width = neck * ROSETTE_NARROWING, half_width * ROSETTE_NARROWING
+        if not adapt or neck < ROSETTE_MIN_NECK:
+            raise MotifError("rosette lobes are too crowded along their flanks")
+        right = _rosette_body(dot, neck, half_width, belly, body_tip)
     body = mirror_points(right)[:-1] + right[::-1]
     # The body's interior, closed by the dot arc between its ends, must hold the pen and be a clearance wide.
     interior = Polygon(context.polyline(SmartVector(body, closed=True)))
@@ -440,6 +451,16 @@ def _draw_rosette(context: MotifContext, body_px: float, adapt: bool = True) -> 
         arc = insert_vertex_on_outline(arc, False, end)
     vectors = [SmartVector(arc, weight="detail"), SmartVector(lobe, weight="detail")]
     return build_instance(context, vectors, seams=True)
+
+
+def _neighbour_gap_px(context: MotifContext, right: List[CellPoint]) -> float:
+    """
+    The least page distance between a lobe side `right` (the right half of a body, at rotation 0) and the
+    facing side of the next lobe, its mirror turned by one lobe wedge.
+    """
+    own = LineString(context.polyline(SmartVector(right)))
+    neighbour = LineString(context.polyline(SmartVector(mirror_points(right)), context.wedge_angle))
+    return own.distance(neighbour)
 
 
 def generate_rosette(context: MotifContext) -> MotifInstance:
