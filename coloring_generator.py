@@ -215,6 +215,7 @@ class DesignGenerator:
         Plan, assemble and (optionally) validate the design. With `max_region_cap` on, a valid design with
         oversized faces climbs the repair ladder (`region_repair.RegionRepair`) whether or not `validate` is
         set; `source_plan` keeps the plan of the final assembly, repairs included, for `generate_from_plan`.
+        With the cap on, `validate=False` still validates internally, so the SVG does not depend on it.
 
         Returns the SVG document: one explicit path per placed piece of ink,
         grouped by ring. Raises `AssemblyError` (a `ValueError`) when a cell
@@ -252,7 +253,8 @@ class DesignGenerator:
     def generate_from_plan(self, plan: DesignPlan, validate: bool = True) -> str:
         """
         Assemble and render a saved plan (a `source_plan`, repairs included) without planning or running
-        the repair ladder, so a repaired design replays exactly. `plan` itself is left unchanged.
+        the repair ladder, so a repaired design replays exactly. `plan` itself is left unchanged. Replay
+        requires this generator's seed and ring_seeds (its ring geometry) to match the plan's.
         """
         print("\n=== GENERATING MANDALA FROM PLAN ===")
         self.source_plan = deepcopy(plan)

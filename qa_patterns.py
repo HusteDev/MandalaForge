@@ -360,6 +360,7 @@ def _run_variant(entry, category, ring_divisions, complexity, min_white, positio
                     complexity=complexity, min_pattern_size=min_white, categories=[category],
                     ring_divisions=list(ring_divisions),
                     force_motif={'name': name, 'position': position, 'role': 'base'},
+                    max_region_cap=False,  # motif contracts are tested in isolation, without region repairs
                 )
                 if not probe:
                     reason = _gate_skip(entry, generator, position, 'base')
@@ -372,6 +373,7 @@ def _run_variant(entry, category, ring_divisions, complexity, min_white, positio
                     seed=seed, num_rings=len(ring_divisions), num_divisions=ring_divisions[0],
                     complexity=complexity, min_pattern_size=min_white, categories=categories,
                     ring_divisions=list(ring_divisions), force_position_mode='layered',
+                    max_region_cap=False,
                 )
                 edited = _assemble_edited(generator, _force_layered_pair(name, other))
     except MotifError as exc:
@@ -447,6 +449,7 @@ def run_case(job):
                 complexity=complexity, min_pattern_size=min_white, categories=[category],
                 ring_divisions=list(ring_divisions),
                 force_motif={'name': name, 'position': position, 'role': role},
+                max_region_cap=False,  # motif contracts are tested in isolation, without region repairs
             )
             if not probe:
                 reason = _gate_skip(entry, generator, position, role)
