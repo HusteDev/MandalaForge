@@ -100,6 +100,9 @@ class RingPlan:
     back_dropped: bool = False
     # "centre", "divider", "both" or "layered"; plans saved before it was stored derive it from their entries.
     position_mode: str = ""
+    # The innermost ring only: a rosette the repair ladder adds to fill an oversized open centre (max-region
+    # spec 5, step 3). The assembler fits it against the placed ink after pass two.
+    rosette: Optional[CellRecipe] = None
 
     def __post_init__(self) -> None:
         if not self.position_mode:
@@ -118,6 +121,7 @@ class RingPlan:
             "back": None if self.back is None else self.back.to_dict(),
             "back_dropped": self.back_dropped,
             "position_mode": self.position_mode,
+            "rosette": None if self.rosette is None else self.rosette.to_dict(),
         }
 
     @classmethod
@@ -134,6 +138,7 @@ class RingPlan:
             back=None if d.get("back") is None else CellRecipe.from_dict(d["back"]),
             back_dropped=d.get("back_dropped", False),
             position_mode=d.get("position_mode", ""),
+            rosette=None if d.get("rosette") is None else CellRecipe.from_dict(d["rosette"]),
         )
 
 

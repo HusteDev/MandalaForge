@@ -21,7 +21,7 @@ from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from assembler import AssembledDesign
-from composer import DesignPlan, RingPlan, node_rng, recipe_at, ring_stream_seed
+from composer import CellRecipe, DesignPlan, RingPlan, node_rng, recipe_at, ring_stream_seed
 from motifs import find_motif, safe_motif
 from motifs.embellish import INTERIOR_FILLS
 from motifs.geometry import PointTuple
@@ -228,6 +228,8 @@ class RegionRepair:
                 current = self.step_host(current, face_set)
             elif face_set.kind == "background":
                 current = self.step_background(current, face_set)
+            elif face_set.kind == "centre":
+                current = self.step_centre(current, face_set)
         return current
 
     def step_host(self, trial: Trial, face_set: FaceSet) -> Trial:
@@ -287,6 +289,24 @@ class RegionRepair:
             return trial
         plan.repairs.append({"step": 2, "kind": face_set.kind, "ring": ring_index, "change": change})
         return self._keep_better(trial, self.generator._trial(plan))
+
+    def step_centre(self, trial: Trial, face_set: FaceSet) -> Trial:
+        """
+        Step 3, fill the centre: the innermost ring gets a rosette, which the assembler fits against the
+        placed ink after pass two (`Assembler.place_rosette`). A trial whose rosette fitted nowhere is not kept.
+        """
+        plan = deepcopy(trial.plan)
+        if not plan.rings:
+            return trial
+        ring = min(plan.rings, key=lambda r: r.ring_index)
+        if ring.rosette is not None:
+            return trial
+        ring.rosette = CellRecipe("rosette", "geometric")
+        plan.repairs.append({"step": 3, "kind": face_set.kind, "ring": ring.ring_index, "change": "rosette"})
+        candidate = self.generator._trial(plan)
+        if candidate is None or candidate.assembled.rosette_dropped:
+            return trial
+        return self._keep_better(trial, candidate)
 
     @staticmethod
     def _keep_better(current: Trial, trial: Optional[Trial]) -> Trial:

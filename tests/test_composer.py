@@ -973,3 +973,11 @@ def test_old_recipe_json_loads_with_floor_zero():
     node = next(n for e in plan_for(seed=3).rings[1].sequence for n in (e.centre, e.divider) if n is not None)
     d = node.to_dict(); d.pop("size_floor")
     assert CellRecipe.from_dict(d).size_floor == 0.0
+
+
+def test_rosette_round_trips():
+    from composer import DesignPlan
+    plan = plan_for(seed=3); plan.rings[0].rosette = CellRecipe("rosette", "geometric")
+    assert DesignPlan.from_json(plan.to_json()) == plan
+    d = plan.rings[0].to_dict(); d.pop("rosette")
+    assert RingPlan.from_dict(d).rosette is None

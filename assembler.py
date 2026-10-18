@@ -18,12 +18,14 @@ import random
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Point
+from shapely.ops import unary_union
 
 from composer import CellRecipe, Composer, DesignPlan, RingPlan, node_seed, ring_stream_seed
 from motifs import find_motif, safe_motif
 from motifs.contract import MotifError, MotifInstance, ReachEnd
-from motifs.geometry import MotifContext, PointTuple, SmartVector, cell_rotation_deg
+from motifs.geometric import fit_rosette
+from motifs.geometry import CellPoint, MotifContext, PointTuple, SmartVector, cell_rotation_deg
 import motifs.layering as layering
 from motifs.layering import LayeringError
 from placement import InkIndex, PlacedPath, path_geometry, path_overflow, trace
@@ -42,6 +44,9 @@ ATTACHMENT_DEPTH = 10
 # symmetry of 1 or 2 never joins a ring to the one inside it at a single point (the band between would be one
 # face running all the way round the centre).
 MIN_RING_CONTACTS = 3
+
+# The node path of every rosette path: the rosette is no node of the plan's sequence (max-region spec 5, step 3).
+ROSETTE_NODE = -1
 
 PendingReach = Tuple["PlacedNode", ReachEnd, PointTuple, float]
 
@@ -108,6 +113,8 @@ class AssembledDesign:
     center: PointTuple
     # Embellishments asked for but not drawn, summed over the placed instances.
     dropped_embellishments: int = 0
+    # True when the innermost ring asked for a rosette and none fitted, so nothing was placed.
+    rosette_dropped: bool = False
 
     def polylines(self) -> List[List[PointTuple]]:
         return [path.coords for path in self.paths]
@@ -206,10 +213,67 @@ class Assembler:
     def assemble(self) -> AssembledDesign:
         self.pass_one()
         self.pass_two()
+        rosette_dropped = False
+        innermost = self.ring_plan(self._innermost()) if self.plan.rings else None
+        if innermost is not None and innermost.rosette is not None:
+            rosette_dropped = not self.place_rosette()
         return AssembledDesign(
             self.plan, list(self.paths), list(self.nodes), list(self.reaches), self.dropped_children, self.center,
             dropped_embellishments=sum(node.instance.dropped_embellishments for node in self.nodes),
+            rosette_dropped=rosette_dropped,
         )
+
+    # ----------------------------------------------------------- the rosette
+
+    def place_rosette(self) -> bool:
+        """
+        Fit the innermost ring's rosette against every placed line (`motifs.geometric.fit_rosette`, with the
+        context of the ring's cell 0 and its "repair:3" ring stream), trace each lobe as detail ink of ring 0
+        with node path `(ROSETTE_NODE,)`, and make each lobe's tip a vertex of the ink it touches. The fit is
+        not stored: it depends only on the plan and the ink, so a replay fits it again exactly. False, with
+        nothing placed, when no rosette fits.
+        """
+        ring = self.ring_plan(self._innermost())
+        seed = ring_stream_seed(ring.ring_seed, ring.ring_index, "repair:3")
+        context = MotifContext(
+            inner_radius=0.0,
+            outer_radius=self.ring_geometry[ring.ring_index]["outer_radius"],
+            wedge_angle=360.0 / ring.divisions,
+            center=self.center,
+            stroke_width=self.stroke_width,
+            complexity=self.complexity,
+            min_white_space=self.min_white_space,
+            rng=random.Random(seed),
+            position="centre",
+            ring_stream_seed=seed,
+            node_seed=seed,
+        )
+        ink = unary_union([path_geometry(path) for path in self.paths])
+        try:
+            fit = fit_rosette(context, ink)
+        except MotifError:
+            return False
+        cell_wedge = 360.0 / ring.divisions
+        # A lobe on a divider is drawn in the cell before it.
+        offset = 0.0 if fit.axis == "cell" else cell_wedge / 2.0
+        placed: List[PlacedPath] = []
+        for rotation in fit.rotations:
+            tip = fit.context.to_cartesian(CellPoint(1.0, 0.0), rotation)
+            touched = min(
+                (path for path in self.index.candidates(Point(tip).buffer(resolver.SAME_VERTEX_PX))),
+                key=lambda path: path_geometry(path).distance(Point(tip)),
+            )
+            resolver.insert_vertex(touched, tip)
+            self.reindex(touched)
+            cell_index = round((rotation - offset) / cell_wedge) % ring.divisions
+            placed.extend(self._trace_node(ring.ring_index, cell_index, "centre", (ROSETTE_NODE,), "detail",
+                                           fit.context, fit.instance, rotation))
+        for path in placed:
+            self.paths.append(path)
+            self.index.add(path)
+        for path in placed:
+            self.snap_to_ink(path)
+        return True
 
     # ----------------------------------------------------------- pass two
 

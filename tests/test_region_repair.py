@@ -1,7 +1,10 @@
 """The region-cap repair ladder (max-region-size spec 5): the engine, plan replay and each step."""
 
+import copy
+
 import pytest
 
+from assembler import ROSETTE_NODE
 from coloring_generator import DesignGenerator
 from composer import CellEntry, CellRecipe, Composer, ComposerSettings, DesignPlan, RingPlan
 from region_repair import classify_faces, face_sets, has_seam_base
@@ -140,3 +143,60 @@ def test_background_repaired_plan_round_trips_and_replays():
     plan = DesignPlan.from_json(g.source_plan.to_json())
     assert plan.to_json() == g.source_plan.to_json()
     assert gen(BACKGROUND_CENTRE_MODE_SEED).generate_from_plan(plan) == svg
+
+
+# ------------------------------------------------------------------ step 3, fill the centre
+
+def set_keys(g):
+    return {s.key for s in sets_of(g)}
+
+
+def rosette_paths(g):
+    return [p for p in g.assembled.paths if p.node_path == (ROSETTE_NODE,)]
+
+
+def test_centre_step_adds_a_rosette():
+    g = gen(CENTRE_SEED); g.generate()
+    report = g.last_validation_result
+    assert report.is_valid and not report.encircling_regions
+    assert g.plan.rings[0].rosette is not None and any(r["change"] == "rosette" for r in g.plan.repairs)
+    assert ("centre", 0) not in set_keys(g) or g.plan.repairs[-1]["step"] == 4
+    rosette = rosette_paths(g)
+    # One lobe and one dot arc per lobe, never one per cell of ring 0.
+    assert rosette and len(rosette) % 2 == 0 and all(p.role == "detail" and p.ring_index == 0 for p in rosette)
+    assert report.stats["num_floating_base"] == 0
+    assert not g.assembled.rosette_dropped
+
+
+def test_rosette_that_does_not_fit_is_dropped_and_the_design_stays_valid():
+    g = gen(CENTRE_SEED, complexity=1.0, min_pattern_size=25, max_region_cap=False); g.generate()
+    plan = copy.deepcopy(g.source_plan); plan.rings[0].rosette = CellRecipe("rosette", "geometric")
+    h = gen(CENTRE_SEED, complexity=1.0, min_pattern_size=25, max_region_cap=False)
+    h.generate_from_plan(plan)
+    assert h.assembled.rosette_dropped and rosette_paths(h) == []
+    assert h.last_validation_result.is_valid
+
+
+def test_a_kept_design_never_has_a_dropped_rosette():
+    g = gen(CENTRE_SEED, ring_divisions=[24, 24, 24, 24]); g.generate()
+    assert g.last_validation_result.is_valid and not g.assembled.rosette_dropped
+
+
+def test_rosette_plan_replays_without_the_ladder():
+    g = gen(CENTRE_SEED); svg = g.generate()
+    plan = DesignPlan.from_json(g.source_plan.to_json())
+    assert plan.rings[0].rosette is not None
+    assert gen(CENTRE_SEED).generate_from_plan(plan) == svg
+
+
+def test_centre_step_is_skipped_when_no_rosette_fits(monkeypatch):
+    import assembler
+    from motifs.contract import MotifError
+
+    def refuse(context, ink):
+        raise MotifError("rosette fits nowhere")
+    monkeypatch.setattr(assembler, "fit_rosette", refuse)
+    g = gen(CENTRE_SEED); svg = g.generate()
+    assert g.last_validation_result.is_valid and not g.assembled.rosette_dropped
+    assert all(r["step"] != 3 for r in g.plan.repairs) and g.plan.rings[0].rosette is None
+    assert svg == gen(CENTRE_SEED, max_region_cap=False).generate()
