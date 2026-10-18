@@ -80,3 +80,17 @@ def test_corpus_forces_embellishments_only_on_its_chosen_jobs():
     forced = [job for job in jobs if job[9]]
     assert forced and all((job[4][0], job[3], job[0], job[5]) in CORPUS_EMBELLISHMENT_JOBS for job in forced)
     assert len(jobs) == 180
+
+
+def test_run_one_reports_oversized_regions(tmp_path):
+    row = run_one((42, 4, 12, 0.5, ["botanical"], False, str(tmp_path), "never"))
+    assert row["oversized"] >= 0 and row["largest_in2"] > 0.0
+
+
+def test_oversized_ceiling_is_a_quota():
+    from qa_report import corpus_quota_failures, OVERSIZED_DESIGN_CEILING
+    counts = {name: 10 for name in ("echo", "veins", "fan", "dot", "beads")}
+    rows = [{"categories": ["celtic"], "layered_rings": 0, "rings": 4, "embellishments": counts, "oversized": 1}
+            for _ in range(OVERSIZED_DESIGN_CEILING + 1)]
+    assert corpus_quota_failures(rows) == [
+        f"oversized regions in {OVERSIZED_DESIGN_CEILING + 1} designs (> {OVERSIZED_DESIGN_CEILING})"]

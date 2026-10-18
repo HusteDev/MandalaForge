@@ -16,8 +16,9 @@ Usage:
 
 Exits non-zero if any design fails validation, so it can gate CI. A corpus run
 also exits non-zero when it misses a quota (spec 11): at least a quarter of the
-rings of its botanical and geometric designs layered (kept their back), and
-every embellishment drawn in at least ten rings.
+rings of its botanical and geometric designs layered (kept their back),
+every embellishment drawn in at least ten rings, and no more designs keeping an
+oversized region than OVERSIZED_DESIGN_CEILING.
 """
 
 import argparse
@@ -55,12 +56,16 @@ CORPUS_LAYERED_SEEDS = CORPUS_SEEDS[:5]
 # vary). Beads draw only on a band past the innermost ring (the innermost ring is too narrow for a bead row),
 # and forcing layered turns every eligible geometric ring past the innermost into a layered ring, so no band
 # is left to carry beads. These are the fewest jobs whose natural plans draw enough beaded bands to meet the
-# beads quota (spec 11); the layered quota keeps a wide margin without them.
+# beads quota (spec 11); the layered quota keeps a wide margin without them. The region-cap repair ladder re-rolls
+# some beaded band rings away (their background faces are oversized), so two more jobs keep their natural modes
+# (complexity 0.5 on seed 12345 and 0.85 on seed 254302, uniform divisions), each drawing a beaded band that stays.
 CORPUS_UNLAYERED_JOBS = {
     ('geometric', 0.5, 777, False),
     ('geometric', 0.5, 777, True),
     ('geometric', 0.5, 254302, False),
+    ('geometric', 0.5, 12345, False),
     ('geometric', 0.85, 777, False),
+    ('geometric', 0.85, 254302, False),
     ('geometric', 0.85, 254302, True),
 }
 
@@ -68,11 +73,13 @@ CORPUS_UNLAYERED_JOBS = {
 # picks draw too few fans and dots (spec 11): a fan is accepted by petals only and seldom picked, and at
 # complexity 0.6 and above two echoes leave no room for a dot. Forcing adds the names to the picks of every
 # host that accepts them (`ComposerSettings.force_embellishments`); these are the fewest jobs found that meet
-# the quota.
+# the quota. Beads are forced on one natural geometric job, whose band then keeps its beads through the region-cap
+# repair ladder.
 CORPUS_EMBELLISHMENT_JOBS = {
     ('botanical', 0.15, 42, False): ('dot',),
     ('botanical', 0.15, 42, True): ('dot',),
     ('botanical', 0.15, 777, False): ('fan', 'dot'),
+    ('geometric', 0.15, 984322, False): ('beads',),
 }
 
 # Corpus quotas (spec 11): the share of the rings of botanical and geometric designs that are layered (and
@@ -80,6 +87,11 @@ CORPUS_EMBELLISHMENT_JOBS = {
 LAYERED_CATEGORIES = ('botanical', 'geometric')
 LAYERED_SHARE = 0.25
 EMBELLISHMENT_MIN = 10
+# The most corpus designs that may keep an oversized region after the repair ladder (max-region-size spec 8):
+# the count measured when the cap landed, pinned so that a regression which leaves more designs oversized fails.
+# 93 of the 103 are celtic, art_deco and abstract designs, drawn only from safe bands, which take no embellishments
+# and leave the ladder little to add; botanical keeps 7 and geometric 3.
+OVERSIZED_DESIGN_CEILING = 103
 
 
 def corpus_jobs(out_dir, overlay_mode, num_rings=CORPUS_RINGS, num_divisions=CORPUS_DIVISIONS,
@@ -107,7 +119,8 @@ def corpus_quota_failures(rows):
     """
     Each corpus quota the result `rows` miss, as a sentence (empty when both hold): fewer than
     `LAYERED_SHARE` of the rings of the botanical and geometric designs layered, and each embellishment
-    drawn in fewer than `EMBELLISHMENT_MIN` rings. A ring counts as layered only if it kept its back.
+    drawn in fewer than `EMBELLISHMENT_MIN` rings, and more than `OVERSIZED_DESIGN_CEILING` designs keeping an
+    oversized region. A ring counts as layered only if it kept its back.
     """
     failures = []
     layered_rows = [row for row in rows if set(row['categories']) & set(LAYERED_CATEGORIES)]
@@ -119,6 +132,9 @@ def corpus_quota_failures(rows):
         count = sum(row['embellishments'].get(name, 0) for row in rows)
         if count < EMBELLISHMENT_MIN:
             failures.append(f"embellishment {name} appears {count} times (< {EMBELLISHMENT_MIN})")
+    oversized = sum(1 for row in rows if row.get('oversized', 0) > 0)
+    if oversized > OVERSIZED_DESIGN_CEILING:
+        failures.append(f"oversized regions in {oversized} designs (> {OVERSIZED_DESIGN_CEILING})")
     return failures
 
 
@@ -248,7 +264,7 @@ def run_one(job):
             'error': f"{type(exc).__name__}: {exc}"[:300],
             'stats': {}, 'issues': [], 'fallbacks': 0, 'patterns': [], 'reaches': 0,
             'base_symmetry': None, 'side_touch_rings': 0, 'layered_rings': 0, 'back_dropped_rings': 0,
-            'rings': num_rings, 'embellishments': {},
+            'rings': num_rings, 'embellishments': {}, 'oversized': 0, 'largest_in2': 0.0,
         }
 
     report = generator.last_validation_result
@@ -283,6 +299,8 @@ def run_one(job):
         'back_dropped_rings': sum(1 for ring in generator.plan.rings if ring.back_dropped),
         'rings': len(generator.plan.rings),
         'embellishments': drawn_embellishments(generator),
+        'oversized': report.stats.get('num_oversized_regions', 0),
+        'largest_in2': report.stats.get('largest_region_in2', 0.0),
     }
 
 
@@ -371,6 +389,9 @@ def main():
         print("embellishments: " + " ".join(
             f"{name}={sum(r['embellishments'].get(name, 0) for r in results)}" for name in EMBELLISHMENT_ORDER)
             + f" (rings drawn in, each >= {EMBELLISHMENT_MIN})")
+        oversized = sum(1 for r in results if r.get('oversized', 0) > 0)
+        largest = max((r.get('largest_in2', 0.0) for r in results), default=0.0)
+        print(f"oversized regions: {oversized} of {len(results)} designs; largest region {largest:.2f} in²")
         quota_failures = corpus_quota_failures(results)
         for failure in quota_failures:
             print(f"QUOTA MISSED: {failure}")
