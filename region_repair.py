@@ -301,7 +301,8 @@ class RegionRepair:
     def step_centre(self, trial: Trial, face_set: FaceSet) -> Trial:
         """
         Step 3, fill the centre: the innermost ring gets a rosette, which the assembler fits against the
-        placed ink after pass two (`Assembler.place_rosette`). A trial whose rosette fitted nowhere is not kept.
+        placed ink after pass two (`Assembler.place_rosette`). A trial whose rosette fitted nowhere is not kept
+        (`_keep_better`).
         """
         plan = deepcopy(trial.plan)
         if not plan.rings:
@@ -311,10 +312,7 @@ class RegionRepair:
             return trial
         ring.rosette = CellRecipe("rosette", "geometric")
         plan.repairs.append({"step": 3, "kind": face_set.kind, "ring": ring.ring_index, "change": "rosette"})
-        candidate = self.generator._trial(plan)
-        if candidate is None or candidate.assembled.rosette_dropped:
-            return trial
-        return self._keep_better(trial, candidate)
+        return self._keep_better(trial, self.generator._trial(plan))
 
     def step_reroll(self, trial: Trial, face_set: FaceSet) -> Trial:
         """
@@ -336,7 +334,7 @@ class RegionRepair:
             composer.reroll_ring(plan, ring_index, ring_seed).rosette = old.rosette
             plan.repairs.append({"step": 4, "kind": face_set.kind, "ring": ring_index, "change": f"ring_seed:{ring_seed}"})
             candidate = self.generator._trial(plan)
-            if candidate is None or not candidate.report.is_valid or candidate.assembled.rosette_dropped:
+            if not self._acceptable(candidate):
                 continue
             if best is None or candidate.oversized_area < best.oversized_area:
                 best = candidate
@@ -345,9 +343,18 @@ class RegionRepair:
         return trial
 
     @staticmethod
-    def _keep_better(current: Trial, trial: Optional[Trial]) -> Trial:
-        """`trial` when it assembled, is valid and leaves no more oversized area than `current`, else `current`."""
-        if trial is not None and trial.report.is_valid and trial.oversized_area <= current.oversized_area:
+    def _acceptable(trial: Optional[Trial]) -> bool:
+        """
+        Whether a trial may be kept: it assembled, is valid, and drew any rosette its plan asks for. A plan keeps
+        its rosette once step 3 is kept, so every later trial fits it again and may fail to, which would record
+        a rosette that is not drawn.
+        """
+        return trial is not None and trial.report.is_valid and not trial.assembled.rosette_dropped
+
+    @classmethod
+    def _keep_better(cls, current: Trial, trial: Optional[Trial]) -> Trial:
+        """`trial` when it is acceptable and leaves no more oversized area than `current`, else `current`."""
+        if cls._acceptable(trial) and trial.oversized_area <= current.oversized_area:
             return trial
         return current
 

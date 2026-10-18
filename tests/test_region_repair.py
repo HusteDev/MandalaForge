@@ -161,7 +161,7 @@ def test_centre_step_adds_a_rosette():
     report = g.last_validation_result
     assert report.is_valid and not report.encircling_regions
     assert g.plan.rings[0].rosette is not None and any(r["change"] == "rosette" for r in g.plan.repairs)
-    assert ("centre", 0) not in set_keys(g) or g.plan.repairs[-1]["step"] == 4
+    assert ("centre", 0) not in set_keys(g)
     rosette = rosette_paths(g)
     # One lobe and one dot arc per lobe, never one per cell of ring 0.
     assert rosette and len(rosette) % 2 == 0 and all(p.role == "detail" and p.ring_index == 0 for p in rosette)
@@ -256,3 +256,40 @@ def test_regenerated_repaired_design_replays_from_ring_seeds():
     frag = g.generate_ring_fragment(1, 4242)
     replay = gen(CENTRE_SEED, ring_seeds=frag["ring_seeds"])
     assert replay.generate() == frag["svg"] and replay.plan.repairs == g.plan.repairs
+
+
+def fake_trial(area, valid=True, rosette_dropped=False):
+    from types import SimpleNamespace
+    return SimpleNamespace(oversized_area=area, report=SimpleNamespace(is_valid=valid),
+                           assembled=SimpleNamespace(rosette_dropped=rosette_dropped))
+
+
+def test_a_trial_whose_rosette_dropped_is_never_kept():
+    current = fake_trial(10.0)
+    assert RegionRepair._keep_better(current, fake_trial(5.0, rosette_dropped=True)) is current
+    assert RegionRepair._keep_better(current, fake_trial(5.0, valid=False)) is current
+    assert RegionRepair._keep_better(current, None) is current
+    better = fake_trial(5.0)
+    assert RegionRepair._keep_better(current, better) is better
+
+
+def test_a_reroll_whose_rosette_drops_is_not_kept(monkeypatch):
+    # The rosette fits until step 3 is kept; every later trial (step 2, then the ring 2 re-rolls) fails to fit it,
+    # so none is kept and the design keeps its drawn rosette.
+    import assembler
+    from motifs.contract import MotifError
+    real_fit, real_trial = assembler.fit_rosette, DesignGenerator._trial
+    steps = []
+    def fit(context, ink):
+        if steps and set(steps[-1]) - {3}:
+            raise MotifError("no fit in a later trial")
+        return real_fit(context, ink)
+    def trial(self, plan):
+        steps.append([r["step"] for r in plan.repairs])
+        return real_trial(self, plan)
+    monkeypatch.setattr(assembler, "fit_rosette", fit)
+    monkeypatch.setattr(DesignGenerator, "_trial", trial)
+    g = gen(BACKGROUND_CENTRE_MODE_SEED); g.generate()
+    assert any(4 in s for s in steps)                        # a re-roll was tried after the rosette
+    assert [r["change"] for r in g.plan.repairs] == ["rosette"]
+    assert not g.assembled.rosette_dropped and rosette_paths(g)

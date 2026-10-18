@@ -254,17 +254,24 @@ class Assembler:
         except MotifError:
             return False
         cell_wedge = 360.0 / ring.divisions
-        # A lobe on a divider is drawn in the cell before it.
+        # The lobe on divider i is assigned to cell i, the cell whose end it sits on.
         offset = 0.0 if fit.axis == "cell" else cell_wedge / 2.0
-        placed: List[PlacedPath] = []
+        # Every path through a lobe's tip, in index (insertion) order; the fit fails when a tip touches none.
+        tips = []
         for rotation in fit.rotations:
             tip = fit.context.to_cartesian(CellPoint(1.0, 0.0), rotation)
-            touched = min(
-                (path for path in self.index.candidates(Point(tip).buffer(resolver.SAME_VERTEX_PX))),
-                key=lambda path: path_geometry(path).distance(Point(tip)),
-            )
-            resolver.insert_vertex(touched, tip)
-            self.reindex(touched)
+            touched = [
+                path for path in self.index.candidates(Point(tip).buffer(resolver.SAME_VERTEX_PX))
+                if path_geometry(path).distance(Point(tip)) <= resolver.SAME_VERTEX_PX
+            ]
+            if not touched:
+                return False
+            tips.append((rotation, tip, touched))
+        placed: List[PlacedPath] = []
+        for rotation, tip, touched in tips:
+            for path in touched:
+                resolver.insert_vertex(path, tip)
+                self.reindex(path)
             cell_index = round((rotation - offset) / cell_wedge) % ring.divisions
             placed.extend(self._trace_node(ring.ring_index, cell_index, "centre", (ROSETTE_NODE,), "detail",
                                            fit.context, fit.instance, rotation))
