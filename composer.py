@@ -468,16 +468,26 @@ class Composer:
         style = {**self.style, "categories": list(self.style["categories"])}
         return DesignPlan(self.seed, style, rings, symmetry)
 
-    def plan_ring(self, ring_index: int, ring_seed: int) -> RingPlan:
+    def plan_ring(self, ring_index: int, ring_seed: int, live_neighbours: bool = False) -> RingPlan:
+        """
+        Plan one ring. It avoids its canonical (design-seed) neighbours' bases, or with `live_neighbours` (a
+        repair re-roll only) the current bases of the live rings either side, which an earlier re-roll, a user
+        regeneration or an assembly substitution may have changed.
+        """
         rng = node_rng(ring_seed, ring_index, 0, -1, "centre")
         divisions = self._division_count(ring_index, rng)
         seq_len = self._sequence_length(divisions, rng)
         mode, centre_share = self._position_mode(ring_index, divisions, rng)
         cell_width, ring_depth = self._ring_metrics(ring_index, divisions)
-        avoid = set(self._inward_base_names(ring_index))
-        # A regenerated ring also looks outward: the canonical ring there planned against the canonical ring
-        # here, not this regeneration, so only this ring can keep the two from stacking seam rings.
-        outward_seam = ring_seed != self.seed and self._outward_has_seam(ring_index)
+        if live_neighbours:
+            # Both live neighbours: a seam base either side keeps seam motifs out (`_avoiding`).
+            avoid = set(self._neighbour_base_names(ring_index))
+            outward_seam = self._live_has_seam(ring_index + 1)
+        else:
+            avoid = set(self._inward_base_names(ring_index))
+            # A regenerated ring also looks outward: the canonical ring there planned against the canonical ring
+            # here, not this regeneration, so only this ring can keep the two from stacking seam rings.
+            outward_seam = ring_seed != self.seed and self._outward_has_seam(ring_index)
         force = self.settings.force_motif if ring_index > 0 else None
         # A layered ring's fronts fill the centre position with the whole angular budget (spec 5.1).
         layered = mode == "layered"
@@ -684,15 +694,16 @@ class Composer:
         """
         Re-plan ring `ring_index` of `plan` with `ring_seed` (max-region spec 5, step 4) and put it in `plan.rings`
         and the live rings. The ring geometry and the settings' `ring_seeds` are untouched, so the ring keeps
-        its width; forced motifs and position modes apply as in `plan`.
+        its width. Forced motifs and position modes come from this composer's settings, as in planning. The
+        new ring avoids the bases of `plan`'s rings either side (the composer must have adopted `plan`), so
+        it never stacks a seam ring on a seam neighbour, and it keeps the old ring's rosette.
         """
-        ring = self.plan_ring(ring_index, ring_seed)
-        for i, old in enumerate(plan.rings):
-            if old.ring_index == ring_index:
-                plan.rings[i] = ring
-                break
-        else:
+        index = next((i for i, old in enumerate(plan.rings) if old.ring_index == ring_index), None)
+        if index is None:
             raise ValueError(f"plan has no ring {ring_index}")
+        ring = self.plan_ring(ring_index, ring_seed, live_neighbours=True)
+        ring.rosette = plan.rings[index].rosette
+        plan.rings[index] = ring
         self._live_rings[ring_index] = ring
         return ring
 
@@ -897,6 +908,11 @@ class Composer:
         if outer not in self._canonical_names:
             self.plan_ring(outer, self.seed)  # records the canonical names as it plans
         return any((find_motif(name) or {}).get("seams", False) for name in self._canonical_names[outer])
+
+    def _live_has_seam(self, ring_index: int) -> bool:
+        """Whether the live ring `ring_index` has a seam base (False when there is none)."""
+        ring = self._live_rings.get(ring_index)
+        return ring is not None and any(self._is_seam(node) for node in _base_nodes(ring.sequence))
 
     def _neighbour_base_names(self, ring_index: int) -> Tuple[str, ...]:
         """

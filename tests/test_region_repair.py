@@ -109,9 +109,10 @@ def background_area(g, ring_index):
 def test_background_step(case):
     g = gen(case); g.generate()
     assert g.last_validation_result.is_valid
-    step2 = [r for r in g.plan.repairs if r["step"] == 2]
-    assert step2 and step2[0]["change"] in ("position_mode:both", "size_floor")
-    assert background_area(g, step2[0]["ring"]) < background_area(gen_done(case, max_region_cap=False), step2[0]["ring"])
+    # A kept re-roll of the ring (step 4) replaces its step 2 record: the new ring no longer has that ink.
+    kept = [r for r in g.plan.repairs if r["kind"] == "background" and r["step"] in (2, 4)]
+    assert kept and (kept[0]["step"] == 4 or kept[0]["change"] in ("position_mode:both", "size_floor"))
+    assert background_area(g, kept[0]["ring"]) < background_area(gen_done(case, max_region_cap=False), kept[0]["ring"])
 
 
 def test_background_step_switches_a_centre_ring_to_both():
@@ -348,3 +349,46 @@ def test_step_one_reaches_the_slot_child(monkeypatch):
     step_one_calls(monkeypatch, {"echo", "fill"})
     g = gen(STEP_ONE_SEED); g.generate()
     assert [r["change"] for r in g.plan.repairs if r["step"] == 1] == ["slot_child:petal"]
+
+
+# ------------------------------------------------------------------ step 4 review fixes
+
+def test_a_reroll_never_stacks_a_seam_ring_on_a_live_seam_neighbour():
+    c = composer_for(seed=3); plan = c.plan()
+    assert not has_seam_base(plan.rings[1]) and not has_seam_base(plan.rings[3])
+    # Ring 3 was re-rolled into a seam ring first (seed 20 gives it a seam base).
+    c.reroll_ring(plan, 3, 20)
+    assert has_seam_base(plan.rings[3])
+    # Planned against the canonical neighbours, ring 2 takes a seam base with these seeds; re-rolled, it never does.
+    seeds = [40, 53, 57, 63, 70]
+    assert all(has_seam_base(c.plan_ring(2, seed)) for seed in seeds)
+    assert not any(has_seam_base(c.reroll_ring(plan, 2, seed)) for seed in seeds)
+
+
+@pytest.mark.parametrize("seed", range(0, 12))
+def test_no_kept_reroll_leaves_two_adjacent_seam_rings(seed):
+    g = gen({"seed": seed, "complexity": 0.5, "categories": ["botanical", "geometric"]}); g.generate()
+    rerolled = {r["ring"] for r in g.plan.repairs if r["step"] == 4}
+    seams = [has_seam_base(ring) for ring in g.source_plan.rings]
+    for k in rerolled:
+        assert not (seams[k] and ((k > 0 and seams[k - 1]) or (k + 1 < len(seams) and seams[k + 1])))
+
+
+# Seed 20's ring 2, regenerated with ring seed 13, keeps an oversized set past its own step.
+REGENERATED = {"seed": 20, "num_rings": 3, "num_divisions": 8, "complexity": 0.5, "min_pattern_size": 10,
+               "categories": ["botanical", "geometric"]}
+
+
+def test_a_user_regenerated_ring_is_never_rerolled():
+    g = gen(REGENERATED)
+    frag = g.generate_ring_fragment(2, 13)
+    assert frag["plan"].rings[2].ring_seed == 13 and frag["ring_seeds"] == {2: 13}
+    assert not any(r["step"] == 4 and r["ring"] == 2 for r in g.plan.repairs)
+    assert any(s.ring_index == 2 for s in sets_of(g))      # the set survived to step 5
+
+
+def test_a_kept_reroll_drops_the_rings_earlier_repairs():
+    g = gen(BACKGROUND_BOTH_SEED); g.generate()
+    rerolled = {r["ring"] for r in g.plan.repairs if r["step"] == 4}
+    assert rerolled
+    assert not any(r["ring"] in rerolled and r["step"] in (1, 2) for r in g.plan.repairs)

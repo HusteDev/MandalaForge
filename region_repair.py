@@ -319,10 +319,14 @@ class RegionRepair:
         Step 4, re-roll the set's ring: attempts 1 to `MAX_REROLLS` each re-plan the ring of a copy of the
         trial's plan with its ring seed salted `"repair:4:<attempt>"`. The ring keeps its geometry, any
         forced motif or position mode, and its rosette. The valid attempt with the least oversized area is
-        kept when it leaves strictly less than the trial; an attempt whose rosette dropped is never kept.
+        kept when it leaves strictly less than the trial; an attempt whose rosette dropped is never kept. A
+        kept re-roll drops the ring's step 1 and 2 records, whose ink the new ring no longer has.
+
+        A ring whose seed the user picked (`/regenerate-ring`, the generator's `ring_seeds`) is never re-rolled:
+        its surviving sets go straight to step 5.
         """
         ring_index = face_set.ring_index
-        if _ring_of(trial.plan, ring_index) is None:
+        if _ring_of(trial.plan, ring_index) is None or ring_index in self.generator.ring_seeds:
             return trial
         best: Optional[Trial] = None
         for attempt in range(1, MAX_REROLLS + 1):
@@ -331,7 +335,8 @@ class RegionRepair:
             ring_seed = salted_seed(old.ring_seed, f"repair:4:{attempt}")
             composer = self.generator._new_composer()
             composer.adopt(plan)
-            composer.reroll_ring(plan, ring_index, ring_seed).rosette = old.rosette
+            composer.reroll_ring(plan, ring_index, ring_seed)
+            plan.repairs = [r for r in plan.repairs if not (r["ring"] == ring_index and r["step"] in (1, 2))]
             plan.repairs.append({"step": 4, "kind": face_set.kind, "ring": ring_index, "change": f"ring_seed:{ring_seed}"})
             candidate = self.generator._trial(plan)
             if not self._acceptable(candidate):
