@@ -392,3 +392,15 @@ def test_a_kept_reroll_drops_the_rings_earlier_repairs():
     rerolled = {r["ring"] for r in g.plan.repairs if r["step"] == 4}
     assert rerolled
     assert not any(r["ring"] in rerolled and r["step"] in (1, 2) for r in g.plan.repairs)
+
+
+def test_background_step_keeps_a_size_floor_repair(monkeypatch):
+    # BACKGROUND_BOTH_SEED's ring 2 is a `both` ring: step 2 raises its size floor and the ladder keeps it. With step
+    # 4 off, no re-roll replaces the record.
+    monkeypatch.setattr(RegionRepair, "step_reroll", lambda self, trial, face_set: trial)
+    g = gen(BACKGROUND_BOTH_SEED); g.generate()
+    step2 = [r for r in g.plan.repairs if r["step"] == 2]
+    assert step2 == [{"step": 2, "kind": "background", "ring": 2, "change": "size_floor"}]
+    assert g.plan.rings[2].position_mode == "both" and any(
+        n.size_floor > 0.0 for e in g.plan.rings[2].sequence for n in (e.centre, e.divider) if n is not None)
+    assert background_area(g, 2) < background_area(gen_done(BACKGROUND_BOTH_SEED, max_region_cap=False), 2)
