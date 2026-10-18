@@ -700,9 +700,11 @@ class Composer:
     def raise_size_floor(ring: RingPlan) -> bool:
         """
         Redraw the ring's bases from the upper end of their size ranges (max-region spec 5, step 2): every base
-        node's `size_floor` becomes `REPAIR_SIZE_FLOOR`. False when all of them already have it.
+        node whose motif draws its size (`size_draws` in the registry) gets `size_floor` `REPAIR_SIZE_FLOOR`.
+        False, changing nothing, when no base draws its size (a floor could not change the ink) or all of
+        them already have it.
         """
-        nodes = _base_nodes(ring.sequence)
+        nodes = [node for node in _base_nodes(ring.sequence) if Composer._registry_entry(node).get("size_draws", False)]
         if all(node.size_floor == REPAIR_SIZE_FLOOR for node in nodes):
             return False
         for node in nodes:

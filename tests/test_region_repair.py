@@ -293,3 +293,58 @@ def test_a_reroll_whose_rosette_drops_is_not_kept(monkeypatch):
     assert any(4 in s for s in steps)                        # a re-roll was tried after the rosette
     assert [r["change"] for r in g.plan.repairs] == ["rosette"]
     assert not g.assembled.rosette_dropped and rosette_paths(g)
+
+
+# ------------------------------------------------------------------ deferred review items
+
+def test_a_back_never_inherits_its_fronts_size_floor(cell_kwargs):
+    import random
+    from assembler import Assembler
+    from motifs.geometry import MotifContext
+    g = gen(CENTRE_SEED, force_position_mode="layered", max_region_cap=False); g.generate()
+    ring = next(r for r in g.plan.rings if r.back is not None)
+    front = MotifContext(**{**cell_kwargs, "rng": random.Random(1)}, size_floor=0.7)
+    assembler = Assembler(g.plan, g.rings, g.center, g.complexity, g.min_pattern_size, g.composer)
+    assert assembler._back_context(ring, front).size_floor == ring.back.size_floor == 0.0
+    ring.back.size_floor = 0.4
+    assert assembler._back_context(ring, front).size_floor == 0.4
+
+
+def step_one_calls(monkeypatch, refused):
+    """Patch step 1's plan edits to record every attempt, refusing the kinds in `refused` ("echo", "fill", ...)."""
+    from motifs.embellish import INTERIOR_FILLS
+    calls = []
+    real_add, real_slot = Composer.add_embellishment, Composer.add_slot_child
+    def add(self, ring, position, node_path, on_back, name):
+        kind = "fill" if name in INTERIOR_FILLS else name
+        calls.append(kind)
+        return False if kind in refused else real_add(self, ring, position, node_path, on_back, name)
+    def slot(self, ring, position, node_path, rng):
+        calls.append("slot")
+        return False if "slot" in refused else real_slot(self, ring, position, node_path, rng)
+    monkeypatch.setattr(Composer, "add_embellishment", add)
+    monkeypatch.setattr(Composer, "add_slot_child", slot)
+    monkeypatch.setattr(RegionRepair, "step_reroll", lambda self, trial, face_set: trial)
+    return calls
+
+
+# Seed 14's host is a petal, which accepts echo, veins or fan, and dot, and declares a slot.
+STEP_ONE_SEED = {"seed": 14, "complexity": 0.5, "categories": ["botanical"]}
+
+
+def test_step_one_tries_echo_then_fill_then_slot_child_then_dot(monkeypatch):
+    calls = step_one_calls(monkeypatch, {"echo", "fill", "slot", "dot"})
+    g = gen(STEP_ONE_SEED); g.generate()
+    assert calls == ["echo", "fill", "slot", "dot"] and all(r["step"] != 1 for r in g.plan.repairs)
+
+
+def test_step_one_reaches_the_interior_fill(monkeypatch):
+    step_one_calls(monkeypatch, {"echo"})
+    g = gen(STEP_ONE_SEED); g.generate()
+    assert [r["change"] for r in g.plan.repairs if r["step"] == 1] == ["embellishment:veins"]
+
+
+def test_step_one_reaches_the_slot_child(monkeypatch):
+    step_one_calls(monkeypatch, {"echo", "fill"})
+    g = gen(STEP_ONE_SEED); g.generate()
+    assert [r["change"] for r in g.plan.repairs if r["step"] == 1] == ["slot_child:petal"]

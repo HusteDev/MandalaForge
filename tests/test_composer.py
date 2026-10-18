@@ -964,9 +964,20 @@ def test_switch_to_both_puts_a_divider_in_every_entry():
     assert ring.position_mode == "both" and 0.45 <= ring.centre_share <= 0.75
     assert all(e.divider is not None and not e.divider.is_fallback for e in ring.sequence)
     assert not c.switch_to_both(ring, random.Random(1))          # no longer a centre ring
-    assert c.raise_size_floor(ring)
-    assert all(n.size_floor == REPAIR_SIZE_FLOOR for e in ring.sequence for n in (e.centre, e.divider))
+    drawing = [n for e in ring.sequence for n in (e.centre, e.divider) if c._registry_entry(n).get("size_draws")]
+    assert c.raise_size_floor(ring) == bool(drawing)
+    assert all(n.size_floor == REPAIR_SIZE_FLOOR for n in drawing)
     assert not c.raise_size_floor(ring)                          # already raised
+
+
+def test_raise_size_floor_skips_bases_that_draw_no_size():
+    from composer import CellEntry, REPAIR_SIZE_FLOOR, RingPlan
+    c = composer_for(seed=3)
+    ring = RingPlan(1, 8, 0.6, [CellEntry(CellRecipe("curl", "botanical"), CellRecipe("petal", "botanical"))], 0)
+    assert c.raise_size_floor(ring)
+    assert ring.sequence[0].divider.size_floor == REPAIR_SIZE_FLOOR and ring.sequence[0].centre.size_floor == 0.0
+    plain = RingPlan(1, 8, 1.0, [CellEntry(CellRecipe("curl", "botanical"), None)], 0)
+    assert not c.raise_size_floor(plain) and plain.sequence[0].centre.size_floor == 0.0
 
 
 def test_old_recipe_json_loads_with_floor_zero():

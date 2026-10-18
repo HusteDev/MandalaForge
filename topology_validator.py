@@ -203,7 +203,8 @@ class TopologyValidator:
                 issues=["No valid linework to analyze"],
                 unconnected_shapes=[],
                 tiny_regions=[],
-                stats={'num_floating_base': 0, 'num_overflow_crossings': 0},
+                stats={'num_floating_base': 0, 'num_overflow_crossings': 0,
+                       'num_oversized_regions': 0, 'largest_region_in2': 0.0},
             )
 
         # unary_union nodes the arrangement: every crossing (including

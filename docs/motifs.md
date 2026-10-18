@@ -363,6 +363,7 @@ What each key does:
 - `min_cell_width_px` and `min_ring_depth_px` are the size gates. Set them from measurement: `qa_patterns.py --probe` ignores them so you can see where the motif really breaks.
 - `max_overflow_inward` and `max_overflow_outward` set the base's starting radial limits, as fractions of ring depth. The drop never goes below radial 0.0 and runs at most 0.1 past the outer boundary. With less than 0.1 of inward overflow, no `spans_cell` and no side-touch height, a ring with a drop base is a `stem` ring, and the composer gives every drop base a stem for contact.
 - `slot_estimate` is the `(width, depth)` fraction of the cell that the motif's slot is expected to offer, which the composer uses to gate slot children without drawing anything; `None` means the motif declares no slot. It is only an estimate: the assembler fits each child to the slot the parent really declares in that cell, and drops the child where it does not fit. A known limitation follows: the petal's (0.5, 0.5) is optimistic at high division counts, where real slots are much smaller, so designs there drop many slot children and come out valid but sparser.
+- `size_draws` (optional, default false) is true when the generator draws its size with `motifs.geometry.size_draw`, so a base's `size_floor` changes its ink. The region-cap repair raises the floor only on such bases, and `tests/test_motifs.py` checks the flag against the generator. The drop draws no size, so it leaves the key out.
 
 The three commands, run from the repository root:
 

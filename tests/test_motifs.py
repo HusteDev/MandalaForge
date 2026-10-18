@@ -625,3 +625,17 @@ def test_slot_child_that_cannot_hold_a_pen_raises(name, cell_kwargs, monkeypatch
     ctx = make_ctx(cell_kwargs, slot=slot_for(cell_kwargs))
     with pytest.raises(MotifError):
         find_motif(name)["generator"](ctx)
+
+
+@pytest.mark.parametrize("entry", all_entries(), ids=lambda e: e["name"])
+def test_size_draws_flag_matches_the_generator(entry, cell_kwargs):
+    """`size_draws` is set exactly on the motifs whose ink a size floor changes (max-region spec 5, step 2)."""
+    def draw(floor):
+        try:
+            return [v.points for v in generate(entry, make_ctx(cell_kwargs, 11, size_floor=floor), cell_kwargs).vectors]
+        except MotifError:
+            return None
+    low, high = draw(0.0), draw(0.99)
+    if low is None or high is None:
+        pytest.skip(f"{entry['name']} does not draw in the standard cell")
+    assert (low != high) == entry.get("size_draws", False)

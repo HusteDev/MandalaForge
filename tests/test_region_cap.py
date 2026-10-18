@@ -53,6 +53,12 @@ def test_face_under_the_cap_is_not_oversized():
     assert report.oversized_regions == []
 
 
+def test_empty_linework_still_reports_the_cap_stats():
+    report = TopologyValidator(max_region_px2=max_region_px2(0.5)).analyze([])
+    assert not report.is_valid and report.oversized_regions == []
+    assert report.stats["num_oversized_regions"] == 0 and report.stats["largest_region_in2"] == 0.0
+
+
 def test_generator_reports_largest_region():
     g = DesignGenerator(seed=42, num_rings=4, ring_divisions=[8, 8, 8, 12], max_region_cap=False)
     g.generate()

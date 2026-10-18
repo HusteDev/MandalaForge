@@ -438,7 +438,7 @@ class Assembler:
         return replace(
             front_context, rng=random.Random(seed), node_seed=seed, ring_stream_seed=seed, position="divider",
             angular_limits=1.0, radial_limits=(0.0, 1.0), slot=None, side_touch_radial=None,
-            embellishments=tuple(ring.back.embellishments),
+            embellishments=tuple(ring.back.embellishments), size_floor=ring.back.size_floor,
         )
 
     def _generate(self, ring: RingPlan, recipe: CellRecipe, context: MotifContext,
