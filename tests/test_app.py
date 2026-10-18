@@ -28,7 +28,10 @@ def test_regenerate_ring_round_trips_prior_seeds(client):
     second = client.post("/regenerate-ring", json={**BASE, "ring_index": 2, "ring_seed": 9,
                                                    "ring_seeds": first["ring_seeds"]}).get_json()
     assert second["ring_seeds"] == {"1": 5, "2": 9}
-    assert second["plan"]["rings"][1] == first["plan"]["rings"][1]
+    # The region-cap ladder repairs (and may re-roll) any ring of the whole design, so ring 1's final plan is not
+    # the first response's; the prior seeds round-trip instead: generating with them gives the same design.
+    replay = client.post("/generate", json={**BASE, "ring_seeds": second["ring_seeds"]}).get_json()
+    assert replay["plan"] == second["plan"]
 
 def test_regenerate_ring_index_out_of_range_is_400(client):
     r = client.post("/regenerate-ring", json={**BASE, "ring_index": 7})
@@ -98,7 +101,8 @@ def _has_seam_motif(ring):
 
 
 # The seam case regenerates ring 2: ring 1 sits on ring 0, always a seam ring, so it never takes a seam motif.
-@pytest.mark.parametrize("seed, ring_index, ring_seed, kind", [(22, 2, 9, "layered"), (20, 2, 13, "seam")])
+# Re-baselined from ring seed 13 to 35 when the region-cap ladder gained its re-roll step, which re-rolls 13's ring.
+@pytest.mark.parametrize("seed, ring_index, ring_seed, kind", [(22, 2, 9, "layered"), (20, 2, 35, "seam")])
 def test_regenerate_ring_with_a_new_ring_seed_keeps_seams_meeting(client, seed, ring_index, ring_seed, kind):
     # Every cell of the regenerated ring takes the new ring stream together: a back layer's halves and a seam
     # motif's ends still meet across every divider, so nothing dangles and the design validates.

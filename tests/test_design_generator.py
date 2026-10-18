@@ -384,10 +384,11 @@ def test_inward_stem_never_lands_on_an_outer_rings_overflow():
     # Since beaded bands widened (Task 11), ring 1 keeps its petal, whose tip reaches into ring 2: the stem may
     # land there, on ink of an inner ring, but never on ring 3's. Re-baselined to seed 37 when the layered mode
     # joined the mode draw (Task 12): ring 2 is all scallop again under ring-3 petals. Re-baselined to seed 289
-    # when the Phase 3 motifs joined the registry, for the same scenario.
+    # when the Phase 3 motifs joined the registry, for the same scenario. Run without the region cap, whose
+    # re-roll step replans ring 2: the scenario is the resolver's, before any repair.
     from shapely.geometry import LineString, Point
     g = DesignGenerator(seed=289, num_rings=4, num_divisions=12, vary_divisions=True, complexity=0.5,
-                        min_pattern_size=10, categories=["botanical", "geometric"])
+                        min_pattern_size=10, categories=["botanical", "geometric"], max_region_cap=False)
     g.generate()
     assert {n.motif for n in _base_nodes_of(g.plan.rings[2])} == {"scallop"}
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]

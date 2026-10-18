@@ -24,7 +24,7 @@ from assembler import AssembledDesign
 from composer import CellRecipe, DesignPlan, RingPlan, node_rng, recipe_at, ring_stream_seed
 from motifs import find_motif, safe_motif
 from motifs.embellish import INTERIOR_FILLS
-from motifs.geometry import PointTuple
+from motifs.geometry import PointTuple, salted_seed
 from placement import PlacedPath
 from topology_validator import RegionInfo, TopologyReport
 
@@ -185,6 +185,8 @@ def face_sets(faces: Sequence[OversizedFace]) -> List[FaceSet]:
 
 # At most this many face sets are handled per design.
 MAX_LADDER_SETS = 8
+# Re-roll attempts (step 4) per face set.
+MAX_REROLLS = 3
 
 
 @dataclass
@@ -216,7 +218,11 @@ class RegionRepair:
         self.generator = generator
 
     def run(self, first: Trial) -> Trial:
-        """Handle the current trial's face sets in order, each once, at most `MAX_LADDER_SETS` of them."""
+        """
+        Handle the current trial's face sets in order, each once, at most `MAX_LADDER_SETS` of them: the set's
+        own step, then a re-roll of its ring (step 4) when the set is still there. Step 5 is what is left:
+        the trial held when the sets run out is the result, and its remaining oversized faces stay reported.
+        """
         current = first
         handled: set = set()
         while len(handled) < MAX_LADDER_SETS:
@@ -230,6 +236,8 @@ class RegionRepair:
                 current = self.step_background(current, face_set)
             elif face_set.kind == "centre":
                 current = self.step_centre(current, face_set)
+            if any(s.key == face_set.key for s in current.sets):
+                current = self.step_reroll(current, face_set)
         return current
 
     def step_host(self, trial: Trial, face_set: FaceSet) -> Trial:
@@ -307,6 +315,34 @@ class RegionRepair:
         if candidate is None or candidate.assembled.rosette_dropped:
             return trial
         return self._keep_better(trial, candidate)
+
+    def step_reroll(self, trial: Trial, face_set: FaceSet) -> Trial:
+        """
+        Step 4, re-roll the set's ring: attempts 1 to `MAX_REROLLS` each re-plan the ring of a copy of the
+        trial's plan with its ring seed salted `"repair:4:<attempt>"`. The ring keeps its geometry, any
+        forced motif or position mode, and its rosette. The valid attempt with the least oversized area is
+        kept when it leaves strictly less than the trial; an attempt whose rosette dropped is never kept.
+        """
+        ring_index = face_set.ring_index
+        if _ring_of(trial.plan, ring_index) is None:
+            return trial
+        best: Optional[Trial] = None
+        for attempt in range(1, MAX_REROLLS + 1):
+            plan = deepcopy(trial.plan)
+            old = _ring_of(plan, ring_index)
+            ring_seed = salted_seed(old.ring_seed, f"repair:4:{attempt}")
+            composer = self.generator._new_composer()
+            composer.adopt(plan)
+            composer.reroll_ring(plan, ring_index, ring_seed).rosette = old.rosette
+            plan.repairs.append({"step": 4, "kind": face_set.kind, "ring": ring_index, "change": f"ring_seed:{ring_seed}"})
+            candidate = self.generator._trial(plan)
+            if candidate is None or not candidate.report.is_valid or candidate.assembled.rosette_dropped:
+                continue
+            if best is None or candidate.oversized_area < best.oversized_area:
+                best = candidate
+        if best is not None and best.oversized_area < trial.oversized_area:
+            return best
+        return trial
 
     @staticmethod
     def _keep_better(current: Trial, trial: Optional[Trial]) -> Trial:

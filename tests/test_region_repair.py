@@ -7,7 +7,8 @@ import pytest
 from assembler import ROSETTE_NODE
 from coloring_generator import DesignGenerator
 from composer import CellEntry, CellRecipe, Composer, ComposerSettings, DesignPlan, RingPlan
-from region_repair import classify_faces, face_sets, has_seam_base
+from motifs.geometry import salted_seed
+from region_repair import RegionRepair, classify_faces, face_sets, has_seam_base
 
 # Seeds whose pre-cap design (max_region_cap=False, ring_divisions unset) has an oversized face set of each
 # kind, found by scanning seeds 0 to 199 at complexity 0.5 and 0.85, botanical and geometric. Each is the
@@ -196,7 +197,62 @@ def test_centre_step_is_skipped_when_no_rosette_fits(monkeypatch):
     def refuse(context, ink):
         raise MotifError("rosette fits nowhere")
     monkeypatch.setattr(assembler, "fit_rosette", refuse)
+    monkeypatch.setattr(RegionRepair, "step_reroll", lambda self, trial, face_set: trial)
     g = gen(CENTRE_SEED); svg = g.generate()
     assert g.last_validation_result.is_valid and not g.assembled.rosette_dropped
     assert all(r["step"] != 3 for r in g.plan.repairs) and g.plan.rings[0].rosette is None
     assert svg == gen(CENTRE_SEED, max_region_cap=False).generate()
+
+
+# ------------------------------------------------------------------ step 4 re-roll, step 5 give up
+
+def test_reroll_keeps_ring_geometry_and_forced_mode():
+    c = composer_for(seed=3, force_position_mode="layered"); plan = c.plan()
+    old = plan.rings[2]
+    new = c.reroll_ring(plan, 2, salted_seed(old.ring_seed, "repair:4:1"))
+    assert plan.rings[2] is new and new.ring_seed != old.ring_seed
+    assert new.position_mode == old.position_mode == "layered"
+    assert c._live_rings[2] is new and c.ring_geometry == DesignGenerator(seed=3).rings
+
+
+def test_reroll_attempts_are_salted_and_recorded(monkeypatch):
+    # With step 1 off, the ring 3 host set goes straight to step 4: three attempts on copies of the same plan.
+    monkeypatch.setattr(RegionRepair, "step_host", lambda self, trial, face_set: trial)
+    seen = []
+    real = DesignGenerator._trial
+    def recording(self, plan):
+        seen.append([r["change"] for r in plan.repairs])
+        return real(self, plan)
+    monkeypatch.setattr(DesignGenerator, "_trial", recording)
+    g = gen(HOST_SEED); g.generate()
+    expected = [f"ring_seed:{salted_seed(HOST_SEED['seed'], f'repair:4:{k}')}" for k in (1, 2, 3)]
+    assert seen[:3] == [[e] for e in expected]
+    assert all(r["step"] == 4 and r["ring"] == 3 and r["change"] in expected for r in g.plan.repairs)
+    assert len(g.plan.repairs) <= 1
+
+
+def test_give_up_keeps_the_best_valid_design(monkeypatch):
+    monkeypatch.setattr(RegionRepair, "step_host", lambda self, trial, face_set: trial)
+    monkeypatch.setattr(RegionRepair, "step_reroll", lambda self, trial, face_set: trial)
+    g = gen(HOST_SEED); g.generate()
+    assert g.last_validation_result.is_valid and g.last_validation_result.oversized_regions
+
+
+@pytest.mark.parametrize("case", [HOST_SEED, BACKGROUND_BOTH_SEED, CENTRE_SEED])
+def test_repaired_design_is_deterministic(case):
+    a, b = gen(case), gen(case)
+    assert a.generate() == b.generate() and a.plan.to_json() == b.plan.to_json()
+    assert gen(case).generate_from_plan(DesignPlan.from_json(a.source_plan.to_json())) == a.generate()
+
+
+@pytest.mark.parametrize("case", [HOST_SEED, CENTRE_SEED])
+def test_cap_off_repairs_nothing(case):
+    off = gen(case, max_region_cap=False); off.generate()
+    assert off.plan.repairs == [] and off.source_plan.rings[0].rosette is None
+
+
+def test_regenerated_repaired_design_replays_from_ring_seeds():
+    g = gen(CENTRE_SEED); g.generate()
+    frag = g.generate_ring_fragment(1, 4242)
+    replay = gen(CENTRE_SEED, ring_seeds=frag["ring_seeds"])
+    assert replay.generate() == frag["svg"] and replay.plan.repairs == g.plan.repairs

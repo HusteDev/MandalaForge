@@ -680,6 +680,22 @@ class Composer:
         self._refresh_contact(ring)
         return True
 
+    def reroll_ring(self, plan: DesignPlan, ring_index: int, ring_seed: int) -> RingPlan:
+        """
+        Re-plan ring `ring_index` of `plan` with `ring_seed` (max-region spec 5, step 4) and put it in `plan.rings`
+        and the live rings. The ring geometry and the settings' `ring_seeds` are untouched, so the ring keeps
+        its width; forced motifs and position modes apply as in `plan`.
+        """
+        ring = self.plan_ring(ring_index, ring_seed)
+        for i, old in enumerate(plan.rings):
+            if old.ring_index == ring_index:
+                plan.rings[i] = ring
+                break
+        else:
+            raise ValueError(f"plan has no ring {ring_index}")
+        self._live_rings[ring_index] = ring
+        return ring
+
     @staticmethod
     def raise_size_floor(ring: RingPlan) -> bool:
         """
