@@ -1,3 +1,5 @@
+import pytest
+
 from qa_report import run_one, corpus_jobs
 
 def test_corpus_has_both_division_modes():
@@ -83,8 +85,11 @@ def test_corpus_forces_embellishments_only_on_its_chosen_jobs():
 
 
 def test_run_one_reports_oversized_regions(tmp_path):
+    from topology_validator import max_region_in2
     row = run_one((42, 4, 12, 0.5, ["botanical"], False, str(tmp_path), "never"))
-    assert row["oversized"] >= 0 and row["largest_in2"] > 0.0
+    # Seed 42 keeps no oversized face: its largest face (0.835 in2) is under the 0.925 in2 cap at complexity 0.5.
+    assert isinstance(row["oversized"], int) and row["oversized"] == 0
+    assert 0.0 < row["largest_in2"] <= max_region_in2(0.5) and row["largest_in2"] == pytest.approx(0.835, abs=0.001)
 
 
 def test_oversized_ceiling_is_a_quota():

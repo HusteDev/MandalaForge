@@ -212,9 +212,12 @@ def regenerate_ring():
     """
     Regenerate one ring from an existing mandala parameter set.
 
-    The main seed preserves the design. ring_seed changes only the selected
-    ring's plan; ring_seeds carries the seeds of rings regenerated earlier so
-    the design is rebuilt exactly.
+    The main seed preserves the design. ring_seed re-plans the selected ring;
+    ring_seeds carries the seeds of rings regenerated earlier so the design is
+    rebuilt exactly. The selected ring's new width also moves its neighbours,
+    and with the region cap on the repair ladder runs again over the whole
+    design, so other rings' repairs (embellishments, size floors, re-rolls)
+    can change too. A ring in ring_seeds is never re-rolled by the ladder.
 
     Expected JSON body: the /generate keys (seed is required) plus
     {
