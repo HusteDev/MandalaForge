@@ -20,7 +20,9 @@ def with_drop(cell_kwargs, name, seed, embellishments=("drop",), **over):
 
 
 def test_drop_sits_after_dot_and_before_beads():
-    assert EMBELLISHMENT_ORDER == ("echo", "veins", "fan", "dot", "drop", "beads")
+    assert EMBELLISHMENT_ORDER == (
+        "echo", "cap", "veins", "fan", "hatch", "dotted_echo", "dot", "drop", "beads",
+    )
 
 
 @pytest.mark.parametrize("name", HOSTS)

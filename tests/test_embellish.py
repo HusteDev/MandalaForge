@@ -120,8 +120,10 @@ def test_embellishment_streams_are_salted_per_name(cell_kwargs):
 
 
 def test_order_and_fills():
-    assert EMBELLISHMENT_ORDER == ("echo", "veins", "fan", "dot", "drop", "beads")
-    assert INTERIOR_FILLS == ("veins", "fan")
+    assert EMBELLISHMENT_ORDER == (
+        "echo", "cap", "veins", "fan", "hatch", "dotted_echo", "dot", "drop", "beads",
+    )
+    assert INTERIOR_FILLS == ("veins", "fan", "hatch")
     assert Anatomy.__dataclass_params__.frozen
 
 

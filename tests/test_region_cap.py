@@ -10,18 +10,18 @@ from region_repair import classify_faces, face_sets
 from topology_validator import PX_PER_INCH, TopologyValidator, max_region_in2, max_region_px2
 
 PRE_CAP_SVG_SHA = {
-    (42, 0.5, "botanical"): "55a9ce0f8425ac958c69eac82ed0141359b8265221a56503d95596f7338a0e11",
-    (42, 0.5, "geometric"): "063e031a20e787326a4b65bfd02bb7a6fdb1b91cd19a0e0902344f60c39cc9b6",
-    (42, 0.85, "botanical"): "6a02bd39683fd68b1377e5efc255690327048fdd09d50e876ae993b4efd45108",
-    (42, 0.85, "geometric"): "9f3f0e83ac58d3ec6fab1f6a9799acada2ae258271cb111ecd0ee8f6dbcb31b0",
+    (42, 0.5, "botanical"): "cdd07fcb18c54e4a736e709825aabf9768ddf589484e4a4fb5f40251813ab2eb",
+    (42, 0.5, "geometric"): "711b5e1e6612caa23f100df0e94179136e466bdada98fb0e73c375d0d0b2c9b7",
+    (42, 0.85, "botanical"): "da084f1302c5d8317588b70c427f15e8077cc8e2c75cb73132658809cdcce3a6",
+    (42, 0.85, "geometric"): "781031dddbb90c43b736e2e439d1a7788055bed2fbb20acdbd55424821589429",
     (777, 0.5, "botanical"): "fe84cd4b8a696c28b3cf9d8fe00771a662ceb82bc42b2c9c1d9c0f959cbb75d6",
-    (777, 0.5, "geometric"): "f7a225a066752850c97039ad182087948ce1b1cbb27b55cc1a9ffc280de83efb",
-    (777, 0.85, "botanical"): "574913f932717863b9fe5f759438cc3039f9b71ca448ff9b72d9834c52cacb6f",
-    (777, 0.85, "geometric"): "e40f8a80b8266ea965fd429676939b18fb7d699861e04e402d574c4a8ca5e9d8",
-    (12345, 0.5, "botanical"): "c978a536e6553f0ae4a99d8d9a806ddaeb3a57c9c3a22e84163068bb71a15c9e",
-    (12345, 0.5, "geometric"): "e9b1e98245f1fbc6486abcc6c185b75215de0b178576658945c0d26db1320a16",
-    (12345, 0.85, "botanical"): "805941795d11fa3e395bad5c991a34f56160eeb7aab767777cdd405bd2a89a4f",
-    (12345, 0.85, "geometric"): "1162401d3cbe43420504c2bf2e6882048d631586cb7a2194e3b12e89f5102607",
+    (777, 0.5, "geometric"): "9d410d41976045cb024d46b68f3df807d56845bad641e618d98ea7f3dcd27374",
+    (777, 0.85, "botanical"): "86bce39f7b371171d07e868c1436058e56fb9c6c5d0c94bc661c171d95122389",
+    (777, 0.85, "geometric"): "54a6edffb8d0d7450dd5d9c93780750a49ae323ee6e681f7ae0075ac116bb21d",
+    (12345, 0.5, "botanical"): "c6989092ae7a35ed126905189d05b62dbc6befc204191804691c6e95939a5cff",
+    (12345, 0.5, "geometric"): "323c4fad8bde122a759836f0f66d2a52bd727035fb4b4da3896bfec5b7dbafb1",
+    (12345, 0.85, "botanical"): "836aebdb43259b86cb148b0cafd3ec29750a0e999d8a5264809aa176286d0d7e",
+    (12345, 0.85, "geometric"): "a15cc34de566d570cdb6f6e29e11bc9f2d4155fae05139010472c05c45c4d012",
 }
 
 

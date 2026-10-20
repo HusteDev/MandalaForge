@@ -70,7 +70,9 @@ def test_declared_slot_is_present_at_default_size(entry, cell_kwargs):
 def test_registry_lookup():
     assert find_motif("petal")["category"] == "botanical"
     assert find_motif("nope") is None
-    assert {e["name"] for e in motifs_for_categories(["geometric"])} == {"diamond", "band", "bead", "spike", "rosette"}
+    assert {e["name"] for e in motifs_for_categories(["geometric"])} == {
+        "diamond", "band", "bead", "spike", "rosette", "kite", "star", "sawtooth", "arcade", "vesica_chain",
+    }
     assert safe_motif("celtic")["name"] == "celtic_safe_band"
 
 def test_diamond_requires_slot(cell_kwargs):
@@ -324,13 +326,19 @@ def test_registry_phase_one_touch_heights():
         "diamond": (), "band": (), "botanical_safe_band": ("mid",),
         "teardrop": ("base", "mid"), "rounded_petal": ("base", "mid"), "heart": ("mid",), "curl": ("mid",),
         "bead": ("base", "mid"), "spike": ("base",), "rosette": (),
+        "crescent": ("base", "mid"), "stamen": ("base",), "kite": ("mid",), "floret": (), "star": (),
+        "sawtooth": (), "arcade": (), "vesica_chain": (),
     }
-    assert {e["name"] for e in all_entries() if e["seams"]} == {"band", "scallop", "rosette"}
-    # Task 9 (spec 6.4) and Phase 3 (spec 7.3): the accepted embellishments; every other entry accepts none.
+    seams = {"band", "scallop", "rosette", "sawtooth", "arcade", "vesica_chain"}
+    assert {e["name"] for e in all_entries() if e["seams"]} == seams
+    # Task 9 (spec 6.4), Phase 3 (spec 7.3) and roadmap Phases A and B: the accepted embellishments;
+    # every other entry accepts none.
     accepted = {
-        "petal": ("echo", "veins", "fan", "dot"), "leaf": ("echo", "veins"), "band": ("beads",),
-        "teardrop": ("echo", "dot"), "rounded_petal": ("echo", "veins", "fan", "dot"), "heart": ("echo",),
-        "bead": ("echo",), "spike": ("echo", "fan"),
+        "petal": ("echo", "cap", "veins", "fan", "dotted_echo", "dot", "drop"),
+        "leaf": ("echo", "veins", "hatch"), "band": ("beads",),
+        "teardrop": ("echo", "cap", "hatch", "dotted_echo", "dot", "drop"),
+        "rounded_petal": ("echo", "cap", "veins", "fan", "dotted_echo", "dot"), "heart": ("echo",),
+        "bead": ("echo",), "spike": ("echo", "fan", "hatch", "drop"), "kite": ("echo", "hatch", "dot", "drop"),
     }
     assert all(e["embellishments"] == accepted.get(e["name"], ()) for e in all_entries())
 

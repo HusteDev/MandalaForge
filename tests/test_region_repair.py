@@ -334,8 +334,9 @@ def step_one_calls(monkeypatch, refused):
     return calls
 
 
-# Seed 14's host is a petal, which accepts echo, veins or fan, and dot, and declares a slot.
-STEP_ONE_SEED = {"seed": 14, "complexity": 0.5, "categories": ["botanical"]}
+# Seed 16's host is a teardrop, which accepts echo, hatch (its one interior fill) and dot, and declares a slot.
+# (Seed 14's petal was this case until the roadmap motifs joined the registry.)
+STEP_ONE_SEED = {"seed": 16, "complexity": 0.5, "categories": ["botanical"]}
 
 
 def test_step_one_tries_echo_then_fill_then_slot_child_then_dot(monkeypatch):
@@ -347,7 +348,7 @@ def test_step_one_tries_echo_then_fill_then_slot_child_then_dot(monkeypatch):
 def test_step_one_reaches_the_interior_fill(monkeypatch):
     step_one_calls(monkeypatch, {"echo"})
     g = gen(STEP_ONE_SEED); g.generate()
-    assert [r["change"] for r in g.plan.repairs if r["step"] == 1] == ["embellishment:veins"]
+    assert [r["change"] for r in g.plan.repairs if r["step"] == 1] == ["embellishment:hatch"]
 
 
 def test_step_one_reaches_the_slot_child(monkeypatch):
@@ -359,13 +360,14 @@ def test_step_one_reaches_the_slot_child(monkeypatch):
 # ------------------------------------------------------------------ step 4 review fixes
 
 def test_a_reroll_never_stacks_a_seam_ring_on_a_live_seam_neighbour():
-    c = composer_for(seed=3); plan = c.plan()
+    # (Re-pinned from seed 3 / ring seed 20 when the ring trims joined the registry.)
+    c = composer_for(seed=1); plan = c.plan()
     assert not has_seam_base(plan.rings[1]) and not has_seam_base(plan.rings[3])
-    # Ring 3 was re-rolled into a seam ring first (seed 20 gives it a seam base).
-    c.reroll_ring(plan, 3, 20)
+    # Ring 3 was re-rolled into a seam ring first (seed 8 gives it a seam base).
+    c.reroll_ring(plan, 3, 8)
     assert has_seam_base(plan.rings[3])
     # Planned against the canonical neighbours, ring 2 takes a seam base with these seeds; re-rolled, it never does.
-    seeds = [40, 53, 57, 63, 70]
+    seeds = [3, 7, 21, 38, 53]
     assert all(has_seam_base(c.plan_ring(2, seed)) for seed in seeds)
     assert not any(has_seam_base(c.reroll_ring(plan, 2, seed)) for seed in seeds)
 
@@ -390,16 +392,21 @@ def test_a_kept_reroll_drops_the_rings_earlier_repairs():
     assert not any(r["ring"] in rerolled and r["step"] in (1, 2) for r in g.plan.repairs)
 
 
+# Seed 15's ring 2 is a `both` ring whose background step raises its size floor. (BACKGROUND_BOTH_SEED was this case
+# until the roadmap motifs joined the registry.)
+SIZE_FLOOR_SEED = {"seed": 15, "complexity": 0.5, "categories": ["geometric"]}
+
+
 def test_background_step_keeps_a_size_floor_repair(monkeypatch):
-    # BACKGROUND_BOTH_SEED's ring 2 is a `both` ring: step 2 raises its size floor and the ladder keeps it. With step
+    # SIZE_FLOOR_SEED's ring 2 is a `both` ring: step 2 raises its size floor and the ladder keeps it. With step
     # 4 off, no re-roll replaces the record.
     monkeypatch.setattr(RegionRepair, "step_reroll", lambda self, trial, face_set: trial)
-    g = gen(BACKGROUND_BOTH_SEED); g.generate()
+    g = gen(SIZE_FLOOR_SEED); g.generate()
     step2 = [r for r in g.plan.repairs if r["step"] == 2]
     assert step2 == [{"step": 2, "kind": "background", "ring": 2, "change": "size_floor"}]
     assert g.plan.rings[2].position_mode == "both" and any(
         n.size_floor > 0.0 for e in g.plan.rings[2].sequence for n in (e.centre, e.divider) if n is not None)
-    assert background_area(g, 2) < background_area(gen_done(BACKGROUND_BOTH_SEED, max_region_cap=False), 2)
+    assert background_area(g, 2) < background_area(gen_done(SIZE_FLOOR_SEED, max_region_cap=False), 2)
 
 
 # ------------------------------------------------------------------ final review: unexpected errors in a repair

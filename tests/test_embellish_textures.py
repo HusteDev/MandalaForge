@@ -1,5 +1,4 @@
 """Roadmap Phase B embellishments: cap, hatch and dotted_echo."""
-import math
 import random
 
 import pytest
@@ -8,7 +7,7 @@ from shapely.geometry import LineString
 from composer import excludes, force_embellishment_picks, pick_embellishments
 from motifs import find_motif
 from motifs.embellish import EXCLUSIVE_GROUPS, MIN_HATCH_LINES, _faces_hold_pen, holds_pen
-from motifs.geometry import MotifContext, SmartVector
+from motifs.geometry import MotifContext
 
 
 def make_ctx(cell_kwargs, seed=1, **over):
