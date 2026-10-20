@@ -260,6 +260,10 @@ POSITION_MODES = ("centre", "divider", "both", "layered")
 # The modes a style may prefer: a layered ring is eligible only outside ring 0 and with a back motif that fits.
 STYLE_POSITION_MODES = POSITION_MODES[:3]
 FORCE_ROLES = ("base", "slot", "contact")
+# The registry roles that admit a motif to each forced role: `contact` forces an `attachment`, and a base may
+# also be a slot motif (a slot-only diamond forced as a base gives a stem-mode ring). Any other pairing,
+# such as the repair-only rosette (role `centre`) as a base, is refused.
+FORCE_REGISTRY_ROLES = {"base": ("base", "slot"), "slot": ("slot",), "contact": ("attachment",)}
 MIN_DIVISIONS = 4
 MAX_DIVISIONS = 24
 # Ring contact modes, strongest first (spec 13.2).
@@ -362,6 +366,8 @@ class Composer:
             if force["position"] == "both" and find_motif(force["name"]).get("seams", False):
                 # A seam motif needs its whole cell and position (spec 4.1), which `both` mode never gives.
                 raise ValueError(f"seam motif {force['name']} cannot be forced in both mode")
+            if not set(find_motif(force["name"]).get("roles", ())) & set(FORCE_REGISTRY_ROLES[force["role"]]):
+                raise ValueError(f"motif {force['name']} cannot be forced as {force['role']}")
         if settings.force_position_mode is not None and settings.force_position_mode not in POSITION_MODES:
             raise ValueError(f"unknown forced position mode: {settings.force_position_mode}")
         if settings.force_position_mode is not None and force:

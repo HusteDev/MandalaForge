@@ -992,3 +992,16 @@ def test_rosette_round_trips():
     assert DesignPlan.from_json(plan.to_json()) == plan
     d = plan.rings[0].to_dict(); d.pop("rosette")
     assert RingPlan.from_dict(d).rosette is None
+
+
+@pytest.mark.parametrize("name, role", [("rosette", "base"), ("rosette", "slot"), ("rosette", "contact"),
+                                        ("scallop", "slot"), ("petal", "contact")])
+def test_force_motif_rejects_a_motif_without_the_role(name, role):
+    with pytest.raises(ValueError, match="cannot be forced as"):
+        Composer(1, GEOM, ComposerSettings(force_motif={"name": name, "position": "centre", "role": role}))
+
+
+def test_force_motif_accepts_each_motif_in_its_own_roles():
+    for name, role in (("petal", "base"), ("petal", "slot"), ("stem", "contact"), ("diamond", "slot"),
+                       ("diamond", "base")):
+        Composer(1, GEOM, ComposerSettings(force_motif={"name": name, "position": "centre", "role": role}))
