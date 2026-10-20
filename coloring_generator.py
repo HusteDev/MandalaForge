@@ -7,6 +7,7 @@ topology validator checks the result; this module turns that ink into SVG.
 """
 
 import svgwrite
+import logging
 import random
 import math
 from copy import deepcopy
@@ -21,6 +22,7 @@ from topology_validator import (
     MIN_REGION_AREA_PX2, PEN_RADIUS_PX, TopologyReport, TopologyValidator, max_region_px2,
 )
 
+logger = logging.getLogger(__name__)
 
 # Width bounds for a regenerated ring, as fractions of the mean ring width.
 RING_WIDTH_MIN = 0.6
@@ -302,19 +304,27 @@ class DesignGenerator:
     def _trial(self, plan: DesignPlan) -> Trial | None:
         """
         One repair trial: `plan` deep-copied as the trial's `source_plan`, another copy assembled with a
-        fresh composer that adopts it, then validated and classified. None when assembly fails.
+        fresh composer that adopts it, then validated and classified. None (the trial is rejected) when
+        assembly fails, or when anything else in the trial raises: that is logged as a warning naming the
+        trial's step and ring, and the ladder keeps its current valid design. The repair pass is best-effort
+        (a design is never rejected for size), so only the first, unrepaired assembly in `generate` raises.
         """
         source_plan = deepcopy(plan)
         work = deepcopy(plan)
-        composer = self._new_composer()
-        composer.adopt(work)
         try:
+            composer = self._new_composer()
+            composer.adopt(work)
             assembled = self._assemble(work, composer)
+            report, polylines = self._validation_report(assembled)
+            return Trial(source_plan, work, assembled, report, polylines, self._face_sets(assembled, report))
         except AssemblyError as error:
             print(f"  Repair trial failed to assemble: {error}")
             return None
-        report, polylines = self._validation_report(assembled)
-        return Trial(source_plan, work, assembled, report, polylines, self._face_sets(assembled, report))
+        except Exception:
+            last = plan.repairs[-1] if plan.repairs else {}
+            logger.warning("Repair trial (step %s, ring %s) raised; rejecting it", last.get("step"), last.get("ring"),
+                           exc_info=True)
+            return None
 
     def _assemble(self, plan: DesignPlan | None = None, composer: Composer | None = None) -> AssembledDesign:
         """

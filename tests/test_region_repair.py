@@ -225,6 +225,11 @@ def test_reroll_attempts_are_salted_and_recorded(monkeypatch):
         seen.append([r["change"] for r in plan.repairs])
         return real(self, plan)
     monkeypatch.setattr(DesignGenerator, "_trial", recording)
+    # Attempt 1 leaves no oversized area, which stops the attempts early; shifting every area by the same tiny
+    # amount keeps every comparison and runs all three.
+    import region_repair
+    real_area = region_repair.Trial.oversized_area.fget
+    monkeypatch.setattr(region_repair.Trial, "oversized_area", property(lambda self: real_area(self) + 1e-9))
     g = gen(HOST_SEED); g.generate()
     expected = [f"ring_seed:{salted_seed(HOST_SEED['seed'], f'repair:4:{k}')}" for k in (1, 2, 3)]
     assert seen[:3] == [[e] for e in expected]
@@ -365,15 +370,6 @@ def test_a_reroll_never_stacks_a_seam_ring_on_a_live_seam_neighbour():
     assert not any(has_seam_base(c.reroll_ring(plan, 2, seed)) for seed in seeds)
 
 
-@pytest.mark.parametrize("seed", range(0, 12))
-def test_no_kept_reroll_leaves_two_adjacent_seam_rings(seed):
-    g = gen({"seed": seed, "complexity": 0.5, "categories": ["botanical", "geometric"]}); g.generate()
-    rerolled = {r["ring"] for r in g.plan.repairs if r["step"] == 4}
-    seams = [has_seam_base(ring) for ring in g.source_plan.rings]
-    for k in rerolled:
-        assert not (seams[k] and ((k > 0 and seams[k - 1]) or (k + 1 < len(seams) and seams[k + 1])))
-
-
 # Seed 20's ring 2, regenerated with ring seed 13, keeps an oversized set past its own step.
 REGENERATED = {"seed": 20, "num_rings": 3, "num_divisions": 8, "complexity": 0.5, "min_pattern_size": 10,
                "categories": ["botanical", "geometric"]}
@@ -404,3 +400,115 @@ def test_background_step_keeps_a_size_floor_repair(monkeypatch):
     assert g.plan.rings[2].position_mode == "both" and any(
         n.size_floor > 0.0 for e in g.plan.rings[2].sequence for n in (e.centre, e.divider) if n is not None)
     assert background_area(g, 2) < background_area(gen_done(BACKGROUND_BOTH_SEED, max_region_cap=False), 2)
+
+
+# ------------------------------------------------------------------ final review: unexpected errors in a repair
+
+def test_an_unexpected_error_in_a_repair_trial_is_logged_and_rejected(monkeypatch, caplog):
+    import assembler
+    def broken(self):
+        raise ValueError("bug in the rosette")
+    monkeypatch.setattr(assembler.Assembler, "place_rosette", broken)   # runs only in a repair trial
+    g = gen(CENTRE_SEED)
+    with caplog.at_level("WARNING", logger="coloring_generator"):
+        g.generate()
+    assert g.last_validation_result.is_valid and "rosette" not in [r["change"] for r in g.plan.repairs]
+    assert any("step 3, ring 0" in record.getMessage() for record in caplog.records)
+
+
+def test_an_unexpected_error_in_a_repair_step_is_logged_and_rejected(monkeypatch, caplog):
+    def broken(self, *args, **kwargs):
+        raise ValueError("bug in a repair method")
+    monkeypatch.setattr(Composer, "add_embellishment", broken)
+    monkeypatch.setattr(RegionRepair, "step_reroll", lambda self, trial, face_set: trial)
+    g = gen(HOST_SEED)
+    with caplog.at_level("WARNING", logger="region_repair"):
+        svg = g.generate()
+    assert g.last_validation_result.is_valid and not any(r["step"] == 1 for r in g.plan.repairs)
+    assert any("step_host on ring 3" in record.getMessage() for record in caplog.records)
+    assert svg == gen(HOST_SEED, max_region_cap=False).generate()
+
+
+def test_an_error_in_the_first_assembly_still_propagates(monkeypatch):
+    import assembler
+    def broken(self):
+        raise ValueError("bug in assembly")
+    monkeypatch.setattr(assembler.Assembler, "assemble", broken)
+    with pytest.raises(ValueError, match="bug in assembly"):
+        gen(HOST_SEED).generate()
+
+
+# ------------------------------------------------------------------ final review: the trial budget
+
+# Seed 7's six-ring design needs 8 repair trials uncapped (rosette, then re-rolls of rings 4 and 3).
+SIX_RING_SEED = {"seed": 7, "num_rings": 6, "complexity": 0.85, "categories": ["botanical", "geometric"],
+                 "vary_divisions": True}
+
+
+def count_trials(monkeypatch):
+    calls = []
+    real = DesignGenerator._trial
+    def counting(self, plan):
+        calls.append([r["change"] for r in plan.repairs])
+        return real(self, plan)
+    monkeypatch.setattr(DesignGenerator, "_trial", counting)
+    return calls
+
+
+def test_the_trial_budget_caps_the_ladder(monkeypatch):
+    import region_repair
+    calls = count_trials(monkeypatch)
+    assert region_repair.MAX_LADDER_TRIALS == 12
+    monkeypatch.setattr(region_repair, "MAX_LADDER_TRIALS", 4)
+    a = gen(SIX_RING_SEED); svg = a.generate()
+    assert len(calls) == 4                                    # 8 uncapped: the ladder stopped at the budget
+    assert a.last_validation_result.is_valid and not a.assembled.rosette_dropped
+    assert gen(SIX_RING_SEED).generate() == svg and len(calls) == 8      # deterministic: 4 more trials, same SVG
+    assert gen(SIX_RING_SEED).generate_from_plan(DesignPlan.from_json(a.source_plan.to_json())) == svg
+
+
+def test_the_ladder_counts_every_trial_within_the_budget(monkeypatch):
+    import region_repair
+    calls = count_trials(monkeypatch)
+    real_run = RegionRepair.run
+    seen = []
+    def run(self, first):
+        result = real_run(self, first)
+        seen.append(self.trials)
+        return result
+    monkeypatch.setattr(RegionRepair, "run", run)
+    g = gen(SIX_RING_SEED); g.generate()
+    assert seen == [len(calls)] and 0 < len(calls) <= region_repair.MAX_LADDER_TRIALS
+
+
+# Default seed 7: its ring 3 re-roll's first attempt leaves no oversized area, so attempts 2 and 3 are skipped.
+EARLY_BREAK_SEED = {"seed": 7}
+
+
+def test_a_reroll_stops_at_zero_oversized_area(monkeypatch):
+    calls = count_trials(monkeypatch)
+    g = gen(EARLY_BREAK_SEED); svg = g.generate()
+    first = salted_seed(EARLY_BREAK_SEED["seed"], "repair:4:1")
+    assert sum(1 for c in calls if any(x.startswith("ring_seed:") for x in c)) == 1
+    assert [(r["step"], r["ring"], r["change"]) for r in g.plan.repairs if r["step"] == 4] == [(4, 3, f"ring_seed:{first}")]
+    assert g.plan.rings[3].ring_seed == first and not sets_of(g)
+    # Without the early stop (every trial's area shifted by the same tiny amount, so no attempt reaches 0.0 and
+    # every comparison is unchanged) all three attempts run and the same attempt is kept.
+    import region_repair
+    real_area = region_repair.Trial.oversized_area.fget
+    monkeypatch.setattr(region_repair.Trial, "oversized_area", property(lambda self: real_area(self) + 1e-9))
+    calls.clear()
+    assert gen(EARLY_BREAK_SEED).generate() == svg
+    assert sum(1 for c in calls if any(x.startswith("ring_seed:") for x in c)) == 3
+
+
+# Designs that keep re-rolls: rings 3 and 4 of the six-ring design, ring 2 of BACKGROUND_BOTH_SEED, ring 3 of
+# default seed 7 and ring 2 of default seed 10.
+@pytest.mark.parametrize("case", [SIX_RING_SEED, BACKGROUND_BOTH_SEED, EARLY_BREAK_SEED, {"seed": 10}])
+def test_no_kept_reroll_leaves_two_adjacent_seam_rings(case):
+    g = gen(case); g.generate()
+    rerolled = {r["ring"] for r in g.plan.repairs if r["step"] == 4}
+    assert rerolled
+    seams = [has_seam_base(ring) for ring in g.source_plan.rings]
+    for k in rerolled:
+        assert not (seams[k] and ((k > 0 and seams[k - 1]) or (k + 1 < len(seams) and seams[k + 1])))

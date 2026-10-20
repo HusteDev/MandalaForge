@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
+import logging
 import math
 import random
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
@@ -30,6 +31,8 @@ from topology_validator import RegionInfo, TopologyReport
 
 if TYPE_CHECKING:
     from coloring_generator import DesignGenerator
+
+logger = logging.getLogger(__name__)
 
 FACE_KINDS = ("host", "background", "centre")
 # Roles of closed outlines that can host a face: base and back outlines, slot children and detail echoes.
@@ -187,6 +190,9 @@ def face_sets(faces: Sequence[OversizedFace]) -> List[FaceSet]:
 MAX_LADDER_SETS = 8
 # Re-roll attempts (step 4) per face set.
 MAX_REROLLS = 3
+# Repair trials (re-assemblies) per design, counted, never timed: once spent, the ladder stops and keeps the
+# current trial (step 5). It bounds a design's latency to about this many extra assemblies.
+MAX_LADDER_TRIALS = 12
 
 
 @dataclass
@@ -212,32 +218,56 @@ class RegionRepair:
     Climbs the repair ladder for a valid design with oversized faces. Every step edits a deep copy of the
     current trial's plan, records the change in its `repairs`, and re-assembles and re-validates it through
     the generator; the step's trial is kept only when it is valid and leaves no more oversized area.
+
+    Every trial counts against `MAX_LADDER_TRIALS`; `trials` is the number made so far.
     """
 
     def __init__(self, generator: "DesignGenerator"):
         self.generator = generator
+        self.trials = 0
+
+    @property
+    def spent(self) -> bool:
+        """Whether the design's trial budget is used up."""
+        return self.trials >= MAX_LADDER_TRIALS
+
+    def _try(self, plan: DesignPlan) -> Optional[Trial]:
+        """One counted trial of `plan`, or None (rejected) once the budget is spent."""
+        if self.spent:
+            return None
+        self.trials += 1
+        return self.generator._trial(plan)
+
+    def _step(self, step, current: Trial, face_set: FaceSet) -> Trial:
+        """
+        Run one step; an unexpected exception in it (outside a trial's assembly, which `_trial` handles) is
+        logged and the step treated as rejected, so the ladder keeps the current valid design.
+        """
+        try:
+            return step(current, face_set)
+        except Exception:
+            logger.warning("Region repair %s on ring %s raised; keeping the current design",
+                           step.__name__, face_set.ring_index, exc_info=True)
+            return current
 
     def run(self, first: Trial) -> Trial:
         """
         Handle the current trial's face sets in order, each once, at most `MAX_LADDER_SETS` of them: the set's
         own step, then a re-roll of its ring (step 4) when the set is still there. Step 5 is what is left:
-        the trial held when the sets run out is the result, and its remaining oversized faces stay reported.
+        the trial held when the sets or the trial budget (`MAX_LADDER_TRIALS`) run out is the result, and its
+        remaining oversized faces stay reported.
         """
         current = first
         handled: set = set()
-        while len(handled) < MAX_LADDER_SETS:
+        steps = {"host": self.step_host, "background": self.step_background, "centre": self.step_centre}
+        while len(handled) < MAX_LADDER_SETS and not self.spent:
             face_set = next((s for s in current.sets if s.key not in handled), None)
             if face_set is None:
                 break
             handled.add(face_set.key)
-            if face_set.kind == "host":
-                current = self.step_host(current, face_set)
-            elif face_set.kind == "background":
-                current = self.step_background(current, face_set)
-            elif face_set.kind == "centre":
-                current = self.step_centre(current, face_set)
-            if any(s.key == face_set.key for s in current.sets):
-                current = self.step_reroll(current, face_set)
+            current = self._step(steps[face_set.kind], current, face_set)
+            if not self.spent and any(s.key == face_set.key for s in current.sets):
+                current = self._step(self.step_reroll, current, face_set)
         return current
 
     def step_host(self, trial: Trial, face_set: FaceSet) -> Trial:
@@ -249,7 +279,7 @@ class RegionRepair:
         ring_index, position, node_path, on_back = face.ring_index, face.position, face.node_path, face.on_back
         current = trial
         for candidate in ("echo", "fill", "slot", "dot"):
-            if all(s.key != face_set.key for s in current.sets):
+            if self.spent or all(s.key != face_set.key for s in current.sets):
                 break
             plan = deepcopy(current.plan)
             ring = _ring_of(plan, ring_index)
@@ -270,7 +300,7 @@ class RegionRepair:
             if change is None:
                 continue
             plan.repairs.append({"step": 1, "kind": face_set.kind, "ring": ring_index, "change": change})
-            current = self._keep_better(current, self.generator._trial(plan))
+            current = self._keep_better(current, self._try(plan))
         return current
 
     def step_background(self, trial: Trial, face_set: FaceSet) -> Trial:
@@ -296,7 +326,7 @@ class RegionRepair:
         if change is None:
             return trial
         plan.repairs.append({"step": 2, "kind": face_set.kind, "ring": ring_index, "change": change})
-        return self._keep_better(trial, self.generator._trial(plan))
+        return self._keep_better(trial, self._try(plan))
 
     def step_centre(self, trial: Trial, face_set: FaceSet) -> Trial:
         """
@@ -312,7 +342,7 @@ class RegionRepair:
             return trial
         ring.rosette = CellRecipe("rosette", "geometric")
         plan.repairs.append({"step": 3, "kind": face_set.kind, "ring": ring.ring_index, "change": "rosette"})
-        return self._keep_better(trial, self.generator._trial(plan))
+        return self._keep_better(trial, self._try(plan))
 
     def step_reroll(self, trial: Trial, face_set: FaceSet) -> Trial:
         """
@@ -320,7 +350,9 @@ class RegionRepair:
         trial's plan with its ring seed salted `"repair:4:<attempt>"`. The ring keeps its geometry, any
         forced motif or position mode, and its rosette. The valid attempt with the least oversized area is
         kept when it leaves strictly less than the trial; an attempt whose rosette dropped is never kept. A
-        kept re-roll drops the ring's step 1 and 2 records, whose ink the new ring no longer has.
+        kept re-roll drops the ring's step 1 and 2 records, whose ink the new ring no longer has. The attempts
+        stop early once one leaves no oversized area (no later one could be kept over it) or the trial budget
+        is spent.
 
         A ring whose seed the user picked (`/regenerate-ring`, the generator's `ring_seeds`) is never re-rolled:
         its surviving sets go straight to step 5.
@@ -330,6 +362,8 @@ class RegionRepair:
             return trial
         best: Optional[Trial] = None
         for attempt in range(1, MAX_REROLLS + 1):
+            if self.spent:
+                break
             plan = deepcopy(trial.plan)
             old = _ring_of(plan, ring_index)
             ring_seed = salted_seed(old.ring_seed, f"repair:4:{attempt}")
@@ -338,11 +372,13 @@ class RegionRepair:
             composer.reroll_ring(plan, ring_index, ring_seed)
             plan.repairs = [r for r in plan.repairs if not (r["ring"] == ring_index and r["step"] in (1, 2))]
             plan.repairs.append({"step": 4, "kind": face_set.kind, "ring": ring_index, "change": f"ring_seed:{ring_seed}"})
-            candidate = self.generator._trial(plan)
+            candidate = self._try(plan)
             if not self._acceptable(candidate):
                 continue
             if best is None or candidate.oversized_area < best.oversized_area:
                 best = candidate
+            if best.oversized_area == 0.0:
+                break
         if best is not None and best.oversized_area < trial.oversized_area:
             return best
         return trial
