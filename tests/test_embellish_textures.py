@@ -137,3 +137,17 @@ def test_exclusive_groups_keep_one_of_each():
             assert len(set(group) & set(picked)) <= 1
     assert force_embellishment_picks(entry, ["echo", "fan", "dot"], ["dotted_echo"]) == ["dotted_echo", "dot"]
     assert force_embellishment_picks(entry, ["cap", "veins"], ["fan"]) == ["fan"]
+
+
+
+def test_dotted_echo_keeps_the_slot_inside_a_cap():
+    # QA full tier: the dotted row replaced the slot with its own inset and dropped the cap's cut, so the slot
+    # child of this case's cap and dotted-echo petal came 2.5 px from the cap arcs.
+    from coloring_generator import DesignGenerator
+    g = DesignGenerator(seed=20260821, num_rings=2, num_divisions=7, complexity=0.9, min_pattern_size=5,
+                        categories=["botanical"], ring_divisions=[7, 12], max_region_cap=False,
+                        force_motif={"name": "petal", "position": "divider", "role": "base"})
+    g.generate()
+    assert any(e.divider.embellishments == ["cap", "dotted_echo"] and e.divider.slot_child
+               for e in g.plan.rings[1].sequence)
+    assert g.last_validation_result.is_valid

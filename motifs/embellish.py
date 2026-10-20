@@ -15,7 +15,7 @@ import random
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import shapely
-from shapely.geometry import LineString, MultiPoint, Point, Polygon, box
+from shapely.geometry import LineString, MultiPoint, MultiPolygon, Point, Polygon, box
 from shapely.ops import linemerge, polygonize_full, unary_union
 
 from motifs.contract import Anatomy, MotifError, inset_outline
@@ -939,7 +939,10 @@ def _dotted_echo(context: MotifContext, state: _State, anatomy: Anatomy, rng: ra
     state.vectors.extend(SmartVector(c, closed=True, weight="detail") for c in kept)
     state.vectors.extend(SmartVector(mirror_points(c), closed=True, weight="detail") for c in kept)
     if state.slot_outline is not None:
-        inner = path.buffer(-radius)
+        # Inside the row, and still inside whatever an earlier embellishment (a cap) left of the slot.
+        inner = path.buffer(-radius).intersection(Polygon([context.to_cartesian(p) for p in state.slot_outline]))
+        if isinstance(inner, MultiPolygon):
+            inner = max(inner.geoms, key=lambda g: g.area)
         if inner.is_empty or not isinstance(inner, Polygon):
             state.slot_outline = None
         else:
