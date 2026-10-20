@@ -80,7 +80,7 @@ def test_dense_layered_ring_drops_its_back_and_still_validates(monkeypatch):
             super().__init__(*args, **kwargs)
 
     monkeypatch.setattr(coloring_generator, "Assembler", Counting)
-    g = layered_design(seed=1, ring_divisions=[24, 24, 24, 24], complexity=0.9); g.generate()
+    g = layered_design(seed=1, ring_divisions=[24, 24, 24, 24], complexity=0.9, max_region_cap=False); g.generate()
     assert g.last_validation_result.is_valid, g.last_validation_result.issues[:5]
     dropped = [r for r in g.plan.rings if r.back_dropped]
     assert dropped, "the scenario needs a back too thin to survive the cut"
