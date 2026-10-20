@@ -470,7 +470,7 @@ FILLER_MOTIFS: List[Dict] = [
         "touch": True,
         "side_touch_heights": ("mid",),
         "seams": False,
-        "embellishments": ("echo", "dot", "drop"),
+        "embellishments": ("echo", "hatch", "dot", "drop"),
         "spans_cell": False,
         "min_cell_width_px": 12.0,
         "min_ring_depth_px": 16.0,
