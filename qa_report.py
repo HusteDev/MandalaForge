@@ -81,6 +81,13 @@ CORPUS_EMBELLISHMENT_JOBS = {
     ('botanical', 0.15, 42, True): ('dot',),
     ('botanical', 0.15, 777, False): ('fan', 'dot'),
     ('geometric', 0.15, 984322, False): ('beads',),
+    # dotted_echo needs a large petal-like host and gives way to echo and the fills; these keep it on quota.
+    ('botanical', 0.15, 254302, False): ('dotted_echo',),
+    ('botanical', 0.15, 984322, False): ('dotted_echo',),
+    ('botanical', 0.5, 777, True): ('dotted_echo',),
+    ('botanical', 0.5, 955789, False): ('dotted_echo',),
+    ('botanical', 0.5, 955789, True): ('dotted_echo',),
+    ('botanical', 0.5, 984322, False): ('dotted_echo',),
 }
 
 # Corpus quotas (spec 11): the share of the rings of botanical and geometric designs that are layered (and
