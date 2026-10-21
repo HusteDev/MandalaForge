@@ -58,7 +58,7 @@ class DesignGenerator:
         force_motif: dict[str, str] | None = None,
         force_position_mode: str | None = None,
         force_embellishments: tuple[str, ...] | None = None,
-        max_region_cap: bool = True,
+        max_region_cap: bool = False,
         # Debug options
         draw_rings: bool = False,
         draw_divisions: bool = False,

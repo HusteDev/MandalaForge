@@ -22,8 +22,8 @@ CENTRE_SEED = {"seed": 3, "complexity": 0.5, "categories": ["botanical"]}
 
 
 def gen(case, **over):
-    """The pinned case's generator, with `over` applied."""
-    return DesignGenerator(**{**case, **over})
+    """The pinned case's generator with the region cap on (it is opt-in), with `over` applied."""
+    return DesignGenerator(**{**case, "max_region_cap": True, **over})
 
 
 def composer_for(seed, **settings):

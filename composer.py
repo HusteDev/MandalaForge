@@ -331,8 +331,9 @@ class ComposerSettings:
     # Embellishments added to the picks of every base and back that accepts them (QA forcing, as
     # force_position_mode is). A forced interior fill replaces a picked one, and takes the slot.
     force_embellishments: Optional[Tuple[str, ...]] = None
-    # Measure every face against the print-size cap and repair the oversized ones. Off reproduces the pre-cap engine.
-    max_region_cap: bool = True
+    # Measure every face against the print-size cap and repair the oversized ones (opt-in: the repair ladder makes
+    # generation several times slower). Off, the default, reproduces the pre-cap engine.
+    max_region_cap: bool = False
 
 
 def force_embellishment_picks(entry: Dict, picked: List[str], forced: Sequence[str]) -> List[str]:

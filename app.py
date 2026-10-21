@@ -117,6 +117,7 @@ def _generator_kwargs(params, seed):
         'min_pattern_size': float(params.get('min_pattern_size', 8)),
         'categories': categories,
         'vary_divisions': _parse_bool(params.get('vary_divisions'), 'vary_divisions'),
+        'max_region_cap': _parse_bool(params.get('max_region_cap'), 'max_region_cap'),
         'ring_divisions': _parse_ring_divisions(params.get('ring_divisions'), num_rings),
         'ring_seeds': _parse_ring_seeds(params.get('ring_seeds'), num_rings),
         'force_motif': _parse_force_motif(params.get('force_motif')),
@@ -144,6 +145,10 @@ def generate():
         "categories": list of strings,
         "vary_divisions": bool (optional, default false; also 0/1 or the strings
                           "true", "1", "false", "0", ""),
+        "max_region_cap": bool (optional, default false, parsed as vary_divisions;
+                          limits large regions: oversized faces are repaired so
+                          each prints small enough to colour, at several times
+                          the generation time),
         "ring_divisions": list of num_rings ints from 4 to 24, or null (optional),
         "ring_seeds": {"<ring index>": int} or null (optional; applies earlier
                       per-ring regenerations, keys outside the ring range are ignored),
@@ -215,9 +220,9 @@ def regenerate_ring():
     The main seed preserves the design. ring_seed re-plans the selected ring;
     ring_seeds carries the seeds of rings regenerated earlier so the design is
     rebuilt exactly. The selected ring's new width also moves its neighbours,
-    and with the region cap on the repair ladder runs again over the whole
-    design, so other rings' repairs (embellishments, size floors, re-rolls)
-    can change too. A ring in ring_seeds is never re-rolled by the ladder.
+    and with the region cap on (max_region_cap, as in /generate) the repair
+    ladder runs again over the whole design, so other rings' repairs
+    (embellishments, size floors, re-rolls) can change too. A ring in ring_seeds is never re-rolled by the ladder.
 
     Expected JSON body: the /generate keys (seed is required) plus
     {

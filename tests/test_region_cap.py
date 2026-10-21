@@ -66,6 +66,16 @@ def test_generator_reports_largest_region():
     assert g.last_validation_result.stats["largest_region_in2"] > 0.0
 
 
+def test_cap_is_off_by_default():
+    """The repair ladder makes generation several times slower, so the cap is opt-in."""
+    from composer import ComposerSettings
+    g = DesignGenerator(seed=42)
+    assert g.max_region_cap is False and ComposerSettings().max_region_cap is False
+    assert g._new_composer().settings.max_region_cap is False
+    svg = DesignGenerator(seed=42, complexity=0.5, categories=["botanical"]).generate()
+    assert hashlib.sha256(svg.encode("utf-8")).hexdigest() == PRE_CAP_SVG_SHA[(42, 0.5, "botanical")]
+
+
 @pytest.mark.parametrize("case", sorted(PRE_CAP_SVG_SHA))
 def test_cap_off_reproduces_the_pre_cap_engine(case):
     seed, complexity, category = case

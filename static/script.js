@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const seedInput = document.getElementById('seed');
     const includeParamsCheck = document.getElementById('include-params-check');
     const varyDivisionsCheck = document.getElementById('vary-divisions');
+    const maxRegionCapCheck = document.getElementById('max-region-cap');
 
     // Category checkboxes
     const catBotanical = document.getElementById('cat-botanical');
@@ -113,7 +114,8 @@ document.addEventListener('DOMContentLoaded', () => {
         complexity: parseFloat(complexitySlider.value),
         min_pattern_size: parseFloat(minPatternSizeSlider.value),
         categories: getSelectedCategories(),
-        vary_divisions: varyDivisionsCheck.checked
+        vary_divisions: varyDivisionsCheck.checked,
+        max_region_cap: maxRegionCapCheck.checked
     });
 
     const getCleanCurrentSvgMarkup = () => {
@@ -207,6 +209,7 @@ document.addEventListener('DOMContentLoaded', () => {
             `categories=${(payload.categories || []).join('+')}`,
         ];
         if (payload.vary_divisions) parts.push('vary=true');
+        if (payload.max_region_cap) parts.push('cap=true');
         // Base symmetry: every ring's division count is a multiple of it.
         if (data.plan && data.plan.base_symmetry) parts.push(`B=${data.plan.base_symmetry}`);
         // Rings regenerated on their own: "<ring index>:<seed>", the keys /generate takes as ring_seeds.
@@ -566,6 +569,7 @@ document.addEventListener('DOMContentLoaded', () => {
         minPatternSizeSlider.value = Math.floor(Math.random() * 30) + 10; // 10-40
 
         varyDivisionsCheck.checked = Math.random() < 0.5;
+        // The region cap is a speed/quality choice, not a design parameter: Randomize leaves it as the user set it.
 
         // Update displays
         sliderControls.forEach(updateSliderDisplay);
@@ -687,7 +691,8 @@ document.addEventListener('DOMContentLoaded', () => {
         complexity: parseFloat(params.complexity),
         min_pattern_size: parseFloat(params.min_pattern_size),
         categories: availableCategories(params.categories),
-        vary_divisions: !!params.vary_divisions
+        vary_divisions: !!params.vary_divisions,
+        max_region_cap: !!params.max_region_cap
     });
 
     // Show a saved design's settings in the controls, so Generate and the pending
@@ -703,6 +708,7 @@ document.addEventListener('DOMContentLoaded', () => {
         catArtDeco.checked = params.categories.includes('art_deco');
         catAbstract.checked = params.categories.includes('abstract');
         varyDivisionsCheck.checked = params.vary_divisions;
+        maxRegionCapCheck.checked = params.max_region_cap;
         seedInput.value = params.seed;
         validateCategories();
         sliderControls.forEach(control => {
@@ -766,7 +772,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 complexity: complexitySlider.value,
                 min_pattern_size: minPatternSizeSlider.value,
                 categories: getSelectedCategories(),
-                vary_divisions: varyDivisionsCheck.checked
+                vary_divisions: varyDivisionsCheck.checked,
+                max_region_cap: maxRegionCapCheck.checked
             }, currentRingSeeds);
 
             // Visual feedback

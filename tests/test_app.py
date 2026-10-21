@@ -24,8 +24,9 @@ def test_ring_divisions_out_of_range_is_400(client):
     assert r.status_code == 400
 
 def test_regenerate_ring_round_trips_prior_seeds(client):
-    first = client.post("/regenerate-ring", json={**BASE, "ring_index": 1, "ring_seed": 5}).get_json()
-    second = client.post("/regenerate-ring", json={**BASE, "ring_index": 2, "ring_seed": 9,
+    capped = {**BASE, "max_region_cap": True}
+    first = client.post("/regenerate-ring", json={**capped, "ring_index": 1, "ring_seed": 5}).get_json()
+    second = client.post("/regenerate-ring", json={**capped, "ring_index": 2, "ring_seed": 9,
                                                    "ring_seeds": first["ring_seeds"]}).get_json()
     assert second["ring_seeds"] == {"1": 5, "2": 9}
     # A ring the user regenerated is never re-rolled by the region-cap ladder, so both keep their seeds.
@@ -33,7 +34,7 @@ def test_regenerate_ring_round_trips_prior_seeds(client):
     assert second["plan"]["rings"][1]["ring_seed"] == 5 and second["plan"]["rings"][2]["ring_seed"] == 9
     # The ladder's other repairs depend on the whole design, so ring 1's final plan need not be the first
     # response's; the prior seeds round-trip instead: generating with them gives the same design.
-    replay = client.post("/generate", json={**BASE, "ring_seeds": second["ring_seeds"]}).get_json()
+    replay = client.post("/generate", json={**capped, "ring_seeds": second["ring_seeds"]}).get_json()
     assert replay["plan"] == second["plan"]
 
 def test_regenerate_ring_index_out_of_range_is_400(client):
@@ -82,6 +83,29 @@ def test_vary_divisions_true_values_vary_the_rings(client, on):
 def test_malformed_vary_divisions_is_400(client, bad):
     r = client.post("/generate", json={**VARY_BASE, "vary_divisions": bad})
     assert r.status_code == 400 and "vary_divisions" in r.get_json()["error"]
+
+# Seed 16 at 0.5 (botanical, 4 rings of 12) keeps an oversized host face that the repair ladder fixes.
+CAP_BASE = {"seed": 16, "num_rings": 4, "num_divisions": 12, "complexity": 0.5, "categories": ["botanical"]}
+
+@pytest.mark.parametrize("off", [None, "false", "0", "", False, 0])
+def test_max_region_cap_is_off_unless_asked(client, off):
+    body = CAP_BASE if off is None else {**CAP_BASE, "max_region_cap": off}
+    r = client.post("/generate", json=body)
+    assert r.status_code == 200 and r.get_json()["plan"]["repairs"] == []
+
+@pytest.mark.parametrize("on", ["true", "1", True, 1])
+def test_max_region_cap_true_values_repair_regions(client, on):
+    r = client.post("/generate", json={**CAP_BASE, "max_region_cap": on})
+    assert r.status_code == 200 and r.get_json()["plan"]["repairs"]
+
+def test_regenerate_ring_takes_max_region_cap(client):
+    r = client.post("/regenerate-ring", json={**CAP_BASE, "max_region_cap": True, "ring_index": 1, "ring_seed": 5})
+    assert r.status_code == 200 and r.get_json()["plan"]["repairs"]
+
+@pytest.mark.parametrize("bad", ["maybe", 1.5, [], {}])
+def test_malformed_max_region_cap_is_400(client, bad):
+    r = client.post("/generate", json={**CAP_BASE, "max_region_cap": bad})
+    assert r.status_code == 400 and "max_region_cap" in r.get_json()["error"]
 
 def test_generate_accepts_force_motif_naming_ring_band(client):
     r = client.post("/generate", json={**BASE, "force_motif": {"name": "ring_band", "position": "centre", "role": "base"}})

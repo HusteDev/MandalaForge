@@ -18,7 +18,8 @@ Exits non-zero if any design fails validation, so it can gate CI. A corpus run
 also exits non-zero when it misses a quota (spec 11): at least a quarter of the
 rings of its botanical and geometric designs layered (kept their back),
 every embellishment drawn in at least ten rings, and no more designs keeping an
-oversized region than OVERSIZED_DESIGN_CEILING.
+oversized region than OVERSIZED_DESIGN_CEILING. Every design here is built with
+max_region_cap=True, so the repair ladder runs even though the app leaves it off.
 """
 
 import argparse
@@ -255,6 +256,7 @@ def run_one(job):
                 vary_divisions=vary,
                 force_position_mode=force_mode,
                 force_embellishments=force_embellishments,
+                max_region_cap=True,  # opt-in in the app; the corpus keeps exercising the repair ladder
             )
             svg = generator.generate()
     except Exception as exc:
