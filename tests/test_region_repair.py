@@ -488,8 +488,9 @@ def test_the_ladder_counts_every_trial_within_the_budget(monkeypatch):
     assert seen == [len(calls)] and 0 < len(calls) <= region_repair.MAX_LADDER_TRIALS
 
 
-# Default seed 7: its ring 3 re-roll's first attempt leaves no oversized area, so attempts 2 and 3 are skipped.
-EARLY_BREAK_SEED = {"seed": 7}
+# Default seed 55: its ring 3 re-roll's first attempt leaves no oversized area, so attempts 2 and 3 are skipped.
+# (Seed 7 until the roadmap motifs joined the registry: it no longer re-rolls.)
+EARLY_BREAK_SEED = {"seed": 55}
 
 
 def test_a_reroll_stops_at_zero_oversized_area(monkeypatch):
@@ -510,7 +511,7 @@ def test_a_reroll_stops_at_zero_oversized_area(monkeypatch):
 
 
 # Designs that keep re-rolls: rings 3 and 4 of the six-ring design, ring 2 of BACKGROUND_BOTH_SEED, ring 3 of
-# default seed 7 and ring 2 of default seed 10.
+# default seed 55 and ring 2 of default seed 10.
 @pytest.mark.parametrize("case", [SIX_RING_SEED, BACKGROUND_BOTH_SEED, EARLY_BREAK_SEED, {"seed": 10}])
 def test_no_kept_reroll_leaves_two_adjacent_seam_rings(case):
     g = gen(case); g.generate()
