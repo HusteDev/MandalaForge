@@ -472,6 +472,10 @@ Phase B adds three seam motifs in `motifs/trims.py` (appended to `MOTIFS` as `TR
 
 Exclusive groups (`EXCLUSIVE_GROUPS`) replace the single interior-fill rule: one of `veins`, `fan`, `hatch`; one of `echo`, `dotted_echo`; `cap` never with `fan` or `hatch`; `dotted_echo` never with an interior fill. `pick_embellishments` filters the pool by them, a forced pick drops the picks it excludes, two forced picks that exclude each other raise `ValueError`, and `qa_patterns.embellishment_sets` returns the maximal compatible sets.
 
+### Pick weights
+
+A registry entry may carry `pick_weight` (default 1), multiplied into the composer's base pick after the style bias (a slot child's pick ignores it). The three trims weigh 0.5 and the band 2, so the band still takes most seam rings and carries its beads; the crescent weighs 3, since the divider positions it needs are rare. Beads never fit the innermost ring's narrow cells, so even so the corpus draws them in 7 rings: `EMBELLISHMENT_MIN_OVERRIDES` holds beads to that measured floor, and `OVERSIZED_DESIGN_CEILING` is the measured 105 (two geometric designs whose bands moved outward keep an oversized face).
+
 ### Deviations from the Phase B plan
 
 - Sawtooth and arcade draw a row of teeth per cell, not one: a single tooth across a wide cell is too blunt to read as a trim or to hold a pen at its tip.

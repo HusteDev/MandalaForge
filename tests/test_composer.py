@@ -1,7 +1,7 @@
 import random
 
 import pytest
-from composer import CellRecipe, Composer, ComposerSettings, pick_embellishments
+from composer import CellRecipe, Composer, ComposerSettings, excludes, pick_embellishments
 from motifs import find_motif
 from motifs.embellish import EMBELLISHMENT_ORDER, INTERIOR_FILLS
 
@@ -809,9 +809,9 @@ def test_forced_embellishments_join_every_accepting_base(forced):
             assert len(fills) <= 1
             if fills:
                 assert node.slot_child is None
-            # Forcing only adds: picks that do not clash with a forced interior fill are kept, in order.
-            kept = [n for n in before.embellishments
-                    if not (n in INTERIOR_FILLS and any(f in INTERIOR_FILLS and f != n for f in forced))]
+            # Forcing only adds: picks that no forced name excludes (a second interior fill, a cap beside a forced
+            # fan) are kept, in order.
+            kept = [n for n in before.embellishments if not any(f != n and excludes(n, f) for f in forced)]
             assert set(kept) <= set(node.embellishments)
             assert node.embellishments == [n for n in EMBELLISHMENT_ORDER if n in node.embellishments]
 
@@ -922,9 +922,7 @@ def _stacked(plan):
 
 def test_regenerated_ring_never_takes_a_seam_base_under_a_canonical_seam_ring():
     # Reported case: seed 11 with ring 2 regenerated (ring seed 1001) planned a band under the canonical band.
-    # Re-pinned to seed 2, ring seed 1011 since the ring trims joined the registry: without the outward look
-    # that regeneration plans a seam base under the canonical seam ring 3.
-    p = plan_for(2, ring_seeds={2: 1011})
+    p = plan_for(11, ring_seeds={2: 1001})
     assert _has_seam_base(p.rings[3])
     assert not _has_seam_base(p.rings[2])
     assert _stacked(p) == []
