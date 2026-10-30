@@ -10,11 +10,13 @@ import svgwrite
 import logging
 import random
 import math
+from contextlib import contextmanager
 from copy import deepcopy
 from typing import Any, List, Tuple
 
 from assembler import Assembler, AssembledDesign, AssemblyError, LayeredRingFailed
 from composer import Composer, ComposerSettings, DesignPlan
+from motifs.cache import MotifCache
 from motifs.geometry import cell_rotation_deg
 from placement import PlacedPath
 from region_repair import FaceSet, RegionRepair, Trial, classify_faces, face_sets
@@ -42,6 +44,12 @@ class DesignGenerator:
     - Motifs are selected from enabled categories
     - Complexity controls detail level within motifs
     """
+
+    # Each `generate` / `generate_from_plan` memoises its motif generator calls (`motifs.cache`), and its repair
+    # trials share the memo. Off draws every motif again (tests compare the two); `motif_cache_verify` also
+    # checks that no generator changes its context.
+    use_motif_cache = True
+    motif_cache_verify = False
 
     def __init__(
         self,
@@ -104,6 +112,8 @@ class DesignGenerator:
         self.assembled: AssembledDesign | None = None
         self.last_validation_result: TopologyReport | None = None
         self.last_validation_polylines = None
+        # The motif memo of the design in progress (None between designs).
+        self._motif_cache: MotifCache | None = None
 
         print(f"[DesignGenerator] Initialized:")
         print(f"  Seed: {self.seed}")
@@ -223,6 +233,19 @@ class DesignGenerator:
         grouped by ring. Raises `AssemblyError` (a `ValueError`) when a cell
         cannot be assembled.
         """
+        with self._design_scope():
+            return self._generate(validate)
+
+    @contextmanager
+    def _design_scope(self):
+        """One design's scope: a fresh motif memo for all its assemblies, dropped when the design is done."""
+        self._motif_cache = MotifCache(verify=self.motif_cache_verify) if self.use_motif_cache else None
+        try:
+            yield
+        finally:
+            self._motif_cache = None
+
+    def _generate(self, validate: bool) -> str:
         print("\n=== GENERATING MANDALA ===")
         self.composer = self._new_composer()
         self.plan = self.composer.plan()
@@ -258,6 +281,10 @@ class DesignGenerator:
         the repair ladder, so a repaired design replays exactly. `plan` itself is left unchanged. Replay
         requires this generator's seed and ring_seeds (its ring geometry) to match the plan's.
         """
+        with self._design_scope():
+            return self._generate_from_plan(plan, validate)
+
+    def _generate_from_plan(self, plan: DesignPlan, validate: bool) -> str:
         print("\n=== GENERATING MANDALA FROM PLAN ===")
         self.source_plan = deepcopy(plan)
         self.plan = deepcopy(plan)
@@ -338,7 +365,8 @@ class DesignGenerator:
         while True:
             try:
                 return Assembler(
-                    plan, self.rings, self.center, self.complexity, self.min_pattern_size, composer
+                    plan, self.rings, self.center, self.complexity, self.min_pattern_size, composer,
+                    motif_cache=self._motif_cache,
                 ).assemble()
             except LayeredRingFailed as failure:
                 ring = next((r for r in plan.rings if r.ring_index == failure.ring_index), None)

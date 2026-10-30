@@ -23,6 +23,7 @@ from shapely.ops import unary_union
 
 from composer import CellRecipe, Composer, DesignPlan, RingPlan, node_seed, ring_stream_seed
 from motifs import find_motif, safe_motif
+from motifs.cache import MotifCache, call_generator
 from motifs.contract import MotifError, MotifInstance, ReachEnd
 from motifs.geometric import fit_rosette
 from motifs.geometry import CellPoint, MotifContext, PointTuple, SmartVector, cell_rotation_deg
@@ -188,6 +189,7 @@ class Assembler:
         complexity: float,
         min_white_space: float,
         composer: Composer,
+        motif_cache: Optional[MotifCache] = None,
     ) -> None:
         self.plan = plan
         self.ring_geometry = ring_geometry
@@ -195,8 +197,20 @@ class Assembler:
         self.complexity = complexity
         self.min_white_space = min_white_space
         self.composer = composer
+        # The design's memo of generator calls (`motifs.cache`); None calls every generator directly.
+        self.motif_cache = motif_cache
         self.stroke_width = stroke_width_for(complexity)
         self._reset()
+
+    def _call(self, entry: Dict, context: MotifContext) -> MotifInstance:
+        """`entry`'s generator on `context`, through the design's memo when it has one."""
+        if self.motif_cache is None:
+            return call_generator(entry, context)
+        return self.motif_cache.generate(entry, context)
+
+    def _through_memo(self, entry: Dict) -> Dict:
+        """`entry`, or with a memo a copy whose generator answers through it (what `compose_layered` calls)."""
+        return entry if self.motif_cache is None else self.motif_cache.wrap(entry)
 
     def _reset(self) -> None:
         self.nodes: List[PlacedNode] = []
@@ -450,9 +464,10 @@ class Assembler:
         entry = _registry_entry(recipe)
         if is_base and context.position == "centre" and ring.back is not None:
             back_context = self._back_context(ring, context)
-            instance = layering.compose_layered(context, entry, back_context, _registry_entry(ring.back))
+            instance = layering.compose_layered(context, self._through_memo(entry), back_context,
+                                                self._through_memo(_registry_entry(ring.back)))
             return instance, back_context.node_seed
-        return entry["generator"](context), None
+        return self._call(entry, context), None
 
     def _trace_node(self, ring_index: int, cell_index: int, position: str, node_path: Tuple[int, ...],
                     role: str, context: MotifContext, instance: MotifInstance,
@@ -517,7 +532,7 @@ class Assembler:
             node.attachment_seeds.append(seed)
             context = replace(node.context, radial_limits=(0.0, 1.0), rng=random.Random(seed), side_touch_radial=None)
             try:
-                declaration = _registry_entry(attachment)["generator"](context).declaration
+                declaration = self._call(_registry_entry(attachment), context).declaration
             except MotifError:
                 self.dropped_attachments += 1
                 continue
@@ -781,7 +796,7 @@ class Assembler:
             if slot:
                 child_context = replace(child.context, rng=random.Random(child.rng_seed), slot=slot)
                 try:
-                    child_instance = _registry_entry(child.recipe)["generator"](child_context)
+                    child_instance = self._call(_registry_entry(child.recipe), child_context)
                 except MotifError:
                     child_instance = None
             paths = [] if child_instance is None else self._retrace(child, child_context, child_instance, rotation)

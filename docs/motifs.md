@@ -350,6 +350,8 @@ These were found the hard way while building the engine. Each now has a test or 
 2. Add a registry entry to the module's list.
 3. Run the three commands below until all of them pass, and run the test suite.
 
+**A generator is a pure function of its context.** Its result (or the error it raises) and the states it leaves `context.rng` and `context.ring_rng` in may depend only on the context's fields and the two streams' states: read no globals, files, clocks or other random source, keep no state between calls, and never change a field of the context (draw from its streams, but never assign to it or mutate its `slot` list). The engine relies on this: each design memoises its generator calls (`motifs/cache.py`, `MotifCache`), because every cell of a ring that holds one sequence entry draws the same motif from the same context and every repair trial draws its unchanged rings again. A repeat call is answered from the memo with a deep copy of the first call's instance, or its error raised again with the same type and args, and with both streams set to the states the first call left them in. A generator that breaks the rule would make the memo change the design. `tests/test_motif_cache.py` generates designs with `DesignGenerator.motif_cache_verify` on, which raises `ContextMutated` when a generator changes its context, and checks that every design is byte-identical with the memo on and off (`DesignGenerator.use_motif_cache`).
+
 A worked example, a teardrop-shaped `drop` that can be a base or a slot child (it uses the imports `botanical.py` already has):
 
 ```python
