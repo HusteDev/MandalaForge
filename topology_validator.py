@@ -402,21 +402,28 @@ class TopologyValidator:
 
     @staticmethod
     def _overflow_crossings(polylines, overflow_parts, ring_ids) -> List[Tuple[int, Coord]]:
-        """(other_ring, point) for each overflow line crossing another ring's ink."""
+        """
+        (other_ring, point) for each overflow line crossing another ring's ink, part by part and, within a
+        part, in polyline order. One tree holds every polyline of two or more distinct points; each part's
+        query keeps the hits on other rings' ink.
+        """
         if overflow_parts is None or ring_ids is None:
             return []
+        lines = [
+            (i, LineString(pts)) for i, pts in enumerate(polylines)
+            if len(set(map(tuple, pts))) >= 2
+        ]
+        if not lines:
+            return []
+        tree = STRtree([g for _, g in lines])
         found = []
         for ring, line in overflow_parts:
-            others = [
-                (i, LineString(pts)) for i, pts in enumerate(polylines)
-                if ring_ids[i] != ring and len(set(map(tuple, pts))) >= 2
-            ]
-            if not others:
-                continue
-            tree = STRtree([g for _, g in others])
             ends = [ShPoint(line.coords[0]), ShPoint(line.coords[-1])]
+            # Tree indices follow polyline order, so sorting them keeps the polyline order.
             for k in sorted(tree.query(line, predicate='intersects')):
-                other_index, other = others[int(k)]
+                other_index, other = lines[int(k)]
+                if ring_ids[other_index] == ring:
+                    continue
                 hit = line.intersection(other)
                 if hit.is_empty:
                     continue
