@@ -7,6 +7,7 @@ topology validator checks the result; this module turns that ink into SVG.
 """
 
 import svgwrite
+import json
 import logging
 import random
 import math
@@ -34,6 +35,35 @@ RING_WIDTH_MIN_CHANGE = 0.15    # a re-picked width aims to differ by at least t
 RING_WIDTH_DRAWS = 4
 
 
+def _innermost(plan: DesignPlan):
+    return min(plan.rings, key=lambda ring: ring.ring_index)
+
+
+def _without(value: Any, key: str) -> Any:
+    """`value` (a plan's dict) with every `key` removed, at any depth."""
+    if isinstance(value, dict):
+        return {k: _without(v, key) for k, v in value.items() if k != key}
+    if isinstance(value, list):
+        return [_without(v, key) for v in value]
+    return value
+
+
+def _plan_shape(plan: DesignPlan) -> str:
+    """Everything an assembly of `plan` reads or changes, without the `dropped` flags it may set and the repairs."""
+    d = _without(plan.to_dict(), "dropped")
+    d.pop("repairs")
+    return json.dumps(d, sort_keys=True)
+
+
+def _pre_rosette_key(plan: DesignPlan) -> str:
+    """`plan` without its repairs and its innermost ring's rosette (its `dropped` flags kept)."""
+    d = plan.to_dict()
+    d.pop("repairs")
+    if d["rings"]:
+        min(d["rings"], key=lambda ring: ring["ring_index"])["rosette"] = None
+    return json.dumps(d, sort_keys=True)
+
+
 class DesignGenerator:
     """
     Generates mandala-style coloring page designs.
@@ -50,6 +80,9 @@ class DesignGenerator:
     # checks that no generator changes its context.
     use_motif_cache = True
     motif_cache_verify = False
+    # With the cap on, a repair trial that only adds a rosette reuses the stored pre-rosette assembly of the
+    # same plan (`_reuse_pre_rosette`). Off makes every trial assemble the whole design (tests compare the two).
+    use_rosette_shortcut = True
 
     def __init__(
         self,
@@ -114,6 +147,10 @@ class DesignGenerator:
         self.last_validation_polylines = None
         # The motif memo of the design in progress (None between designs).
         self._motif_cache: MotifCache | None = None
+        # With the cap on, the design in progress's assemblers after pass two, keyed by `_pre_rosette_key` of
+        # their plan: only those whose plan has no rosette and was not changed by assembling it (None between
+        # designs, and with the cap off).
+        self._pre_rosette: dict[str, Assembler] | None = None
 
         print(f"[DesignGenerator] Initialized:")
         print(f"  Seed: {self.seed}")
@@ -240,10 +277,12 @@ class DesignGenerator:
     def _design_scope(self):
         """One design's scope: a fresh motif memo for all its assemblies, dropped when the design is done."""
         self._motif_cache = MotifCache(verify=self.motif_cache_verify) if self.use_motif_cache else None
+        self._pre_rosette = {} if self.max_region_cap and self.use_rosette_shortcut else None
         try:
             yield
         finally:
             self._motif_cache = None
+            self._pre_rosette = None
 
     def _generate(self, validate: bool) -> str:
         print("\n=== GENERATING MANDALA ===")
@@ -361,13 +400,24 @@ class DesignGenerator:
         """
         plan = self.plan if plan is None else plan
         composer = self.composer if composer is None else composer
+        if self._pre_rosette is not None:
+            reused = self._reuse_pre_rosette(plan, composer)
+            if reused is not None:
+                return reused
+        # Keep this assembly's pass-two state for a later rosette trial when its plan has no rosette and the
+        # assembly does not change it (no fallback, no dropped back), `dropped` flags aside.
+        keep = self._pre_rosette is not None and bool(plan.rings) and _innermost(plan).rosette is None
+        shape = _plan_shape(plan) if keep else None
         dropped: set[int] = set()
         while True:
             try:
-                return Assembler(
+                assembler = Assembler(
                     plan, self.rings, self.center, self.complexity, self.min_pattern_size, composer,
                     motif_cache=self._motif_cache,
-                ).assemble()
+                )
+                if shape is not None:
+                    assembler.after_pass_two = lambda done: self._keep_pre_rosette(done, shape)
+                return assembler.assemble()
             except LayeredRingFailed as failure:
                 ring = next((r for r in plan.rings if r.ring_index == failure.ring_index), None)
                 if failure.ring_index in dropped or ring is None:
@@ -375,6 +425,27 @@ class DesignGenerator:
                 dropped.add(failure.ring_index)
                 print(f"  {failure}; dropping its back layer and assembling again")
                 composer.drop_back(ring)
+
+    def _keep_pre_rosette(self, assembler: Assembler, shape: str) -> None:
+        """Keep `assembler` after pass two when assembling did not change its plan's `shape` (`_plan_shape`)."""
+        if _plan_shape(assembler.plan) == shape:
+            self._pre_rosette[_pre_rosette_key(assembler.plan)] = assembler
+
+    def _reuse_pre_rosette(self, plan: DesignPlan, composer: Composer) -> AssembledDesign | None:
+        """
+        The design of `plan` when it differs from a stored pre-rosette assembly's plan only by the innermost
+        ring's rosette (and its `repairs`): a copy of that assembler's state, bound to `plan` and `composer`,
+        places the rosette (`Assembler.finish`). Pass one and pass two never read the rosette, the repairs or
+        the `dropped` flags, which assembling sets only on recipes the stored assembly already flagged, so this
+        is the design a full assembly would make. None when nothing stored matches.
+        """
+        if not plan.rings or _innermost(plan).rosette is None:
+            return None
+        key = _pre_rosette_key(plan)
+        stored = self._pre_rosette.get(key)
+        if stored is None or _pre_rosette_key(stored.plan) != key:
+            return None
+        return stored.copy_for(plan, composer).finish()
 
     def generate_ring_fragment(self, ring_index: int, ring_seed: int, validate: bool = True) -> dict[str, Any]:
         """

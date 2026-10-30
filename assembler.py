@@ -12,6 +12,7 @@ and its parent, so any node can be regenerated exactly with different limits.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 import math
 import random
@@ -173,6 +174,27 @@ def _splice(items: List, cell_of: Callable[[object], Optional[int]], replacement
     return result
 
 
+def _recipe_pairs(mine: Optional[CellRecipe], theirs: Optional[CellRecipe]):
+    if mine is None or theirs is None:
+        return
+    yield mine, theirs
+    yield from _recipe_pairs(mine.slot_child, theirs.slot_child)
+    for a, b in zip(mine.attachments, theirs.attachments):
+        yield from _recipe_pairs(a, b)
+
+
+def _plan_pairs(mine: DesignPlan, theirs: DesignPlan):
+    """(object of `mine`, object in the same place in `theirs`) for every ring, entry and recipe of two plans."""
+    for ring, other in zip(mine.rings, theirs.rings):
+        yield ring, other
+        for entry, other_entry in zip(ring.sequence, other.sequence):
+            yield entry, other_entry
+            yield from _recipe_pairs(entry.centre, other_entry.centre)
+            yield from _recipe_pairs(entry.divider, other_entry.divider)
+        yield from _recipe_pairs(ring.back, other.back)
+        yield from _recipe_pairs(ring.rosette, other.rosette)
+
+
 def _by_cell(items: List, cell_of: Callable[[object], int]) -> Dict[int, List]:
     grouped: Dict[int, List] = {}
     for item in items:
@@ -199,6 +221,8 @@ class Assembler:
         self.composer = composer
         # The design's memo of generator calls (`motifs.cache`); None calls every generator directly.
         self.motif_cache = motif_cache
+        # Called with this assembler between pass two and `finish` (the generator keeps pre-rosette states).
+        self.after_pass_two: Optional[Callable[["Assembler"], None]] = None
         self.stroke_width = stroke_width_for(complexity)
         self._reset()
 
@@ -227,6 +251,16 @@ class Assembler:
     def assemble(self) -> AssembledDesign:
         self.pass_one()
         self.pass_two()
+        if self.after_pass_two is not None:
+            self.after_pass_two(self)
+        return self.finish()
+
+    def finish(self) -> AssembledDesign:
+        """
+        After pass two: place the innermost ring's rosette when the plan asks for one, and return the design.
+        Pass one and pass two never read `RingPlan.rosette`, `DesignPlan.repairs` or a recipe's `dropped`, so
+        the state they leave is the same with or without them (`copy_for` relies on it).
+        """
         rosette_dropped = False
         innermost = self.ring_plan(self._innermost()) if self.plan.rings else None
         if innermost is not None and innermost.rosette is not None:
@@ -236,6 +270,24 @@ class Assembler:
             dropped_embellishments=sum(node.instance.dropped_embellishments for node in self.nodes),
             rosette_dropped=rosette_dropped,
         )
+
+    def copy_for(self, plan: DesignPlan, composer: Composer) -> "Assembler":
+        """
+        A deep copy of this assembler's state bound to `plan` and `composer`: `plan` has this plan's shape
+        (rings, entries and recipes in the same places), and each copied reference to a ring or recipe of this
+        plan becomes a reference to the one in the same place in `plan`, so every node's recipe is `plan`'s.
+        The ring geometry, the motif memo and the indexed geometries (immutable) are shared, not copied.
+        """
+        memo = {id(self.plan): plan, id(self.composer): composer, id(self.ring_geometry): self.ring_geometry,
+                id(self.motif_cache): self.motif_cache}
+        for mine, theirs in _plan_pairs(self.plan, plan):
+            memo[id(mine)] = theirs
+        for geometry in self.index._geometries:
+            memo[id(geometry)] = geometry
+        self.index._tree = None              # a cache only; the copy rebuilds it from the same geometries
+        copy = deepcopy(self, memo)
+        copy.after_pass_two = None
+        return copy
 
     # ----------------------------------------------------------- the rosette
 
