@@ -463,11 +463,16 @@ class Composer:
         self._style = value
         self._canonical_names.clear()
 
-    def _pick(self, candidates: List[Dict], rng: random.Random) -> Dict:
-        """Style biases the pick: motifs in a style category weigh 3, others 1."""
+    def _pick(self, candidates: List[Dict], rng: random.Random, weighted: bool = True) -> Dict:
+        """
+        Style biases the pick: motifs in a style category weigh 3, others 1. A base pick (`weighted`) also
+        multiplies in the entry's `pick_weight` (default 1), which keeps a busy trim from crowding the band out of
+        a seam ring and lifts a filler whose position is rare; a slot child's pick ignores it.
+        """
         ordered = sorted(candidates, key=lambda m: m["name"])
         favoured = self.style["categories"]
-        weights = [3 if m["category"] in favoured else 1 for m in ordered]
+        weights = [(3 if m["category"] in favoured else 1) * (m.get("pick_weight", 1) if weighted else 1)
+                   for m in ordered]
         return rng.choices(ordered, weights=weights)[0]
 
     def plan(self) -> DesignPlan:
@@ -1053,7 +1058,7 @@ class Composer:
         if not candidates:
             return
         child_rng = node_rng(ring_seed, ring_index, seq_pos, offset + depth + 1, position, "pick")
-        child_motif = self._pick(candidates, child_rng)
+        child_motif = self._pick(candidates, child_rng, weighted=False)
         node.slot_child = CellRecipe(child_motif["name"], child_motif["category"])
         self._nest(node.slot_child, child_motif, child_rng, ring_index, ring_seed, seq_pos,
                    position, cell_width, ring_depth, offset, depth + 1, width_fraction,

@@ -424,6 +424,8 @@ def generate_star(context: MotifContext) -> MotifInstance:
     raise MotifError("star does not fit slot: its interior is too small to colour")
 
 
+CRESCENT_PICK_WEIGHT = 3.0  # base picks only (divider positions); a slot pick ignores it
+
 FILLER_MOTIFS: List[Dict] = [
     {
         "name": "crescent",
@@ -431,6 +433,8 @@ FILLER_MOTIFS: List[Dict] = [
         "generator": generate_crescent,
         "positions": ["divider"],
         "roles": ["base", "slot"],
+        # Divider positions are rare in botanical and geometric designs, so the crescent's base pick weighs more.
+        "pick_weight": CRESCENT_PICK_WEIGHT,
         "touch": True,
         "side_touch_heights": ("base", "mid"),
         "seams": False,

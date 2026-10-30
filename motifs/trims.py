@@ -317,6 +317,9 @@ def _vesica_vectors(context: MotifContext, middle: float, radius: float, steps: 
     return vectors
 
 
+TRIM_PICK_WEIGHT = 0.5  # a trim's share of base picks against a weight-1 motif such as the band
+
+
 def _trim_entry(name: str, generator, min_depth: float, **extra) -> Dict:
     return {
         "name": name,
@@ -334,6 +337,8 @@ def _trim_entry(name: str, generator, min_depth: float, **extra) -> Dict:
         "max_overflow_inward": 0.0,
         "max_overflow_outward": 0.0,
         "slot_estimate": None,
+        # Three trims share a seam ring with the band: at half weight the band (and its beads) stays common.
+        "pick_weight": TRIM_PICK_WEIGHT,
         **extra,
     }
 

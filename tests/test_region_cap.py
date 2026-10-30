@@ -10,17 +10,17 @@ from region_repair import classify_faces, face_sets
 from topology_validator import PX_PER_INCH, TopologyValidator, max_region_in2, max_region_px2
 
 PRE_CAP_SVG_SHA = {
-    (42, 0.5, "botanical"): "cdd07fcb18c54e4a736e709825aabf9768ddf589484e4a4fb5f40251813ab2eb",
-    (42, 0.5, "geometric"): "711b5e1e6612caa23f100df0e94179136e466bdada98fb0e73c375d0d0b2c9b7",
-    (42, 0.85, "botanical"): "da084f1302c5d8317588b70c427f15e8077cc8e2c75cb73132658809cdcce3a6",
-    (42, 0.85, "geometric"): "781031dddbb90c43b736e2e439d1a7788055bed2fbb20acdbd55424821589429",
+    (42, 0.5, "botanical"): "f5647414865e908afe58afa2ebc2bf8b29c3d6b2f34fc5127064db33bc404706",
+    (42, 0.5, "geometric"): "b2efe41e9cbac64dc8a034016c352b60730e9ab678a07c0bbd923eb45cb87b36",
+    (42, 0.85, "botanical"): "9db6b8ecd5217ba1bcc8b8cb1734ddf045e7f104082529aa60ca4ce6d6bdf9f6",
+    (42, 0.85, "geometric"): "993620b0be5bfa38566167b281114507d7a5c29519bfaff3ceb3496bb76f1170",
     (777, 0.5, "botanical"): "fe84cd4b8a696c28b3cf9d8fe00771a662ceb82bc42b2c9c1d9c0f959cbb75d6",
     (777, 0.5, "geometric"): "9d410d41976045cb024d46b68f3df807d56845bad641e618d98ea7f3dcd27374",
     (777, 0.85, "botanical"): "86bce39f7b371171d07e868c1436058e56fb9c6c5d0c94bc661c171d95122389",
     (777, 0.85, "geometric"): "54a6edffb8d0d7450dd5d9c93780750a49ae323ee6e681f7ae0075ac116bb21d",
-    (12345, 0.5, "botanical"): "c6989092ae7a35ed126905189d05b62dbc6befc204191804691c6e95939a5cff",
+    (12345, 0.5, "botanical"): "61cdf264996d3046cdc613fc8222a956369621f97597d58535f782598dfa6243",
     (12345, 0.5, "geometric"): "323c4fad8bde122a759836f0f66d2a52bd727035fb4b4da3896bfec5b7dbafb1",
-    (12345, 0.85, "botanical"): "836aebdb43259b86cb148b0cafd3ec29750a0e999d8a5264809aa176286d0d7e",
+    (12345, 0.85, "botanical"): "81d4b8c39c37d95e476ff901477390188bed87b607df421d0dc43c5e234b4d11",
     (12345, 0.85, "geometric"): "a15cc34de566d570cdb6f6e29e11bc9f2d4155fae05139010472c05c45c4d012",
 }
 

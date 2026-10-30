@@ -48,6 +48,11 @@ def test_corpus_quotas_pass_when_both_are_met():
     assert corpus_quota_failures(rows) == []
     rows[0]["embellishments"] = dict(counts, dot=9)
     assert corpus_quota_failures(rows) == ["embellishment dot appears 9 times (< 10)"]
+    # Beads keep their own measured floor.
+    rows[0]["embellishments"] = dict(counts, beads=7)
+    assert corpus_quota_failures(rows) == []
+    rows[0]["embellishments"] = dict(counts, beads=6)
+    assert corpus_quota_failures(rows) == ["embellishment beads appears 6 times (< 7)"]
 
 
 def test_corpus_forces_layered_on_the_layered_seeds():

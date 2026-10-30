@@ -16,7 +16,8 @@ from region_repair import RegionRepair, classify_faces, face_sets, has_seam_base
 # centre. The ring 2 background in a centre-mode ring (seed 4, 0.85) also has a small open-centre set: at 0.5
 # every centre-mode background ring holds a curl, too wide for `both` mode, so step 2 cannot switch it.
 HOST_SEED = {"seed": 16, "complexity": 0.5, "categories": ["botanical"]}
-BACKGROUND_CENTRE_MODE_SEED = {"seed": 4, "complexity": 0.85, "categories": ["botanical"]}
+# (Seed 4 until the roadmap pick weights changed its picks.)
+BACKGROUND_CENTRE_MODE_SEED = {"seed": 14, "complexity": 0.85, "categories": ["botanical"]}
 BACKGROUND_BOTH_SEED = {"seed": 19, "complexity": 0.5, "categories": ["geometric"]}
 CENTRE_SEED = {"seed": 3, "complexity": 0.5, "categories": ["botanical"]}
 
@@ -363,8 +364,8 @@ def test_a_reroll_never_stacks_a_seam_ring_on_a_live_seam_neighbour():
     # (Re-pinned from seed 3 / ring seed 20 when the ring trims joined the registry.)
     c = composer_for(seed=1); plan = c.plan()
     assert not has_seam_base(plan.rings[1]) and not has_seam_base(plan.rings[3])
-    # Ring 3 was re-rolled into a seam ring first (seed 8 gives it a seam base).
-    c.reroll_ring(plan, 3, 8)
+    # Ring 3 was re-rolled into a seam ring first (seed 13 gives it a seam base).
+    c.reroll_ring(plan, 3, 13)
     assert has_seam_base(plan.rings[3])
     # Planned against the canonical neighbours, ring 2 takes a seam base with these seeds; re-rolled, it never does.
     seeds = [3, 7, 21, 38, 53]
