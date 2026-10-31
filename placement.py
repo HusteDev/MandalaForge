@@ -6,6 +6,7 @@ index over placed ink. Pure geometry and indexing: nothing here knows about plan
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 import math
 from typing import Callable, List, Optional, Tuple
@@ -157,6 +158,17 @@ class InkIndex:
 
     def __len__(self) -> int:
         return len(self._paths)
+
+    def __deepcopy__(self, memo) -> "InkIndex":
+        """
+        A copy whose paths are deep-copied (through `memo`, so they are the copier's paths) and whose geometries,
+        immutable, are shared; its tree is rebuilt from them on first use. The original is left untouched.
+        """
+        copy = InkIndex()
+        memo[id(self)] = copy
+        copy._paths = deepcopy(self._paths, memo)
+        copy._geometries = list(self._geometries)
+        return copy
 
     def add(self, path: PlacedPath) -> None:
         self._paths.append(path)

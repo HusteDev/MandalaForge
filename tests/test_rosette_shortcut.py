@@ -57,12 +57,21 @@ def test_pass_one_and_two_never_read_rosette_repairs_or_dropped(case):
     marked_plan = copy.deepcopy(plain_plan)
     min(marked_plan.rings, key=lambda r: r.ring_index).rosette = CellRecipe("rosette", "geometric")
     marked_plan.repairs.append({"step": 3, "kind": "centre", "ring": 0, "change": "rosette"})
+    def mark(recipe):
+        if recipe is None:
+            return
+        recipe.dropped = True
+        mark(recipe.slot_child)
+        for attachment in recipe.attachments:
+            mark(attachment)
+
     for ring in marked_plan.rings:
         for entry in ring.sequence:
-            for recipe in (entry.centre, entry.divider):
-                while recipe is not None:
-                    recipe.dropped = True
-                    recipe = recipe.slot_child
+            mark(entry.centre)
+            mark(entry.divider)
+        mark(ring.back)
+        mark(ring.rosette)
+    assert any(ring.back is not None for ring in marked_plan.rings) or case is not LAYERED
     states = []
     for plan in (plain_plan, marked_plan):
         composer = g._new_composer()

@@ -2,15 +2,16 @@
 
 import hashlib
 import random
-from dataclasses import replace
+from dataclasses import fields, replace
 
 import pytest
 
 from coloring_generator import DesignGenerator
 from composer import DesignPlan
 from motifs import find_motif
-from motifs.cache import ContextMutated, MotifCache, call_generator
+from motifs.cache import ContextMutated, MotifCache, _key_fields, call_generator
 from motifs.contract import MotifError
+from motifs.geometry import CellPoint, MotifContext
 from motifs.layering import compose_layered
 from tests.test_motifs import make_ctx
 
@@ -140,35 +141,84 @@ def test_a_hit_returns_a_private_copy_and_the_streams_of_a_real_call(cell_kwargs
     assert cache.generate(entry, make_ctx(cell_kwargs, 11)) == plain       # a caller's edits never reach the memo
 
 
+# A different valid value for every non-stream field of MotifContext (the cell_kwargs fixture's context).
+CHANGED_FIELDS = {
+    "inner_radius": 101.0,
+    "outer_radius": 161.0,
+    "wedge_angle": 31.0,
+    "center": (307.0, 306.0),
+    "stroke_width": 1.6,
+    "complexity": 0.5000000000000001,            # bit-exact floats
+    "min_white_space": 10.5,
+    "position": "divider",
+    "angular_limits": 0.9,
+    "radial_limits": (0.0, 0.9),
+    "slot": [CellPoint(0.2, -0.4), CellPoint(0.2, 0.4), CellPoint(0.8, 0.4), CellPoint(0.8, -0.4)],
+    "side_touch_radial": 0.3,
+    "ring_stream_seed": 5,
+    "node_seed": 6,
+    "embellishments": ("echo",),
+    "size_floor": 0.7,
+}
+
+
+def test_the_key_holds_every_field_but_the_streams():
+    names = {f.name for f in fields(MotifContext)} - {"rng", "ring_rng"}
+    assert set(_key_fields()) == names
+    assert set(CHANGED_FIELDS) == names            # a new context field must be added to CHANGED_FIELDS
+
+
 def test_every_context_field_and_both_streams_are_in_the_key(cell_kwargs):
-    petal = find_motif("petal")
-    generator, calls = counting(petal["generator"])
-    entry = {**petal, "generator": generator}
+    calls = []
+
+    def recording(context):
+        calls.append(context)
+        return "instance"
+
+    entry = {"name": "recording", "generator": recording}
     cache = MotifCache()
     base = make_ctx(cell_kwargs, 11)
-
-    def draw(e, context):
-        try:
-            cache.generate(e, context)
-        except MotifError:
-            pass
-
-    draw(entry, replace(base, rng=random.Random(11)))
-    variants = [
-        replace(base, rng=random.Random(12)),                                   # another rng state
-        replace(base, rng=random.Random(11), ring_stream_seed=5),               # another ring stream
-        replace(base, rng=random.Random(11), radial_limits=(0.0, 0.9)),
-        replace(base, rng=random.Random(11), complexity=0.5000000000000001),    # bit-exact floats
-        replace(base, rng=random.Random(11), embellishments=("echo",)),
-        replace(base, rng=random.Random(11), size_floor=0.7),
-    ]
+    cache.generate(entry, replace(base, rng=random.Random(11)))
+    for name in sorted({f.name for f in fields(MotifContext)} - {"rng", "ring_rng"}):
+        changed = replace(base, rng=random.Random(11), **{name: CHANGED_FIELDS[name]})
+        assert getattr(changed, name) != getattr(base, name), name
+        misses = cache.misses
+        cache.generate(entry, changed)
+        assert cache.misses == misses + 1 and cache.hits == 0, f"{name} is not in the key"
+    cache.generate(entry, replace(base, rng=random.Random(12)))              # another rng state
     advanced = replace(base, rng=random.Random(11))
-    advanced.ring_rng.random()                                                # same seed, advanced stream
-    for context in variants + [advanced]:
-        draw(entry, context)
-    assert len(calls) == 1 + len(variants) + 1 and cache.hits == 0
-    draw(find_motif("leaf"), replace(base, rng=random.Random(11)))                # another motif, same context
-    assert cache.hits == 0
+    advanced.ring_rng.random()                                               # same seed, advanced ring stream
+    cache.generate(entry, advanced)
+    cache.generate({"name": "other", "generator": recording}, replace(base, rng=random.Random(11)))
+    assert cache.hits == 0 and len(calls) == cache.misses
+    cache.generate(entry, replace(base, rng=random.Random(11)))              # the first context again: a hit
+    assert cache.hits == 1
+
+
+def test_transient_errors_are_never_stored(cell_kwargs):
+    calls = []
+
+    def flaky(context):
+        calls.append(context)
+        raise (RecursionError if len(calls) == 1 else MemoryError)("deep")
+
+    cache = MotifCache()
+    with pytest.raises(RecursionError):
+        cache.generate({"name": "flaky", "generator": flaky}, make_ctx(cell_kwargs, 4))
+    with pytest.raises(MemoryError):
+        cache.generate({"name": "flaky", "generator": flaky}, make_ctx(cell_kwargs, 4))
+    assert len(calls) == 2 and cache.hits == 0 and len(cache) == 0
+
+
+def test_verify_catches_a_generator_that_replaces_a_stream(cell_kwargs):
+    petal = find_motif("petal")
+
+    def swapping(context):
+        context.ring_rng = random.Random(1)
+        return petal["generator"](context)
+
+    with pytest.raises(ContextMutated, match="replaced a stream"):
+        MotifCache(verify=True).generate({"name": "swapping", "generator": swapping}, make_ctx(cell_kwargs, 4))
 
 
 def test_a_cached_error_is_raised_again_with_its_streams(cell_kwargs):

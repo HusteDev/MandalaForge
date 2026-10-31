@@ -276,15 +276,13 @@ class Assembler:
         A deep copy of this assembler's state bound to `plan` and `composer`: `plan` has this plan's shape
         (rings, entries and recipes in the same places), and each copied reference to a ring or recipe of this
         plan becomes a reference to the one in the same place in `plan`, so every node's recipe is `plan`'s.
-        The ring geometry, the motif memo and the indexed geometries (immutable) are shared, not copied.
+        The ring geometry and the motif memo are shared, not copied; the ink index shares its immutable
+        geometries (`InkIndex.__deepcopy__`). This assembler is left untouched.
         """
         memo = {id(self.plan): plan, id(self.composer): composer, id(self.ring_geometry): self.ring_geometry,
                 id(self.motif_cache): self.motif_cache}
         for mine, theirs in _plan_pairs(self.plan, plan):
             memo[id(mine)] = theirs
-        for geometry in self.index._geometries:
-            memo[id(geometry)] = geometry
-        self.index._tree = None              # a cache only; the copy rebuilds it from the same geometries
         copy = deepcopy(self, memo)
         copy.after_pass_two = None
         return copy

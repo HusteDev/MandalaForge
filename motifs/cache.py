@@ -26,6 +26,10 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from motifs.contract import MotifInstance
 from motifs.geometry import MotifContext
 
+# Errors that say nothing about the generator's inputs: raised again on every call, never stored. (A
+# BaseException that is not an Exception, such as KeyboardInterrupt, is never caught at all.)
+TRANSIENT_ERRORS = (RecursionError, MemoryError)
+
 # The context's two random streams: the key holds their states, not the stream objects.
 STREAM_FIELDS = ("rng", "ring_rng")
 _KEY_FIELDS: Optional[Tuple[str, ...]] = None
@@ -85,15 +89,16 @@ class MotifCache:
             return deepcopy(instance)
 
         self.misses += 1
+        streams = (context.rng, context.ring_rng)
         try:
             instance = generator(context)
         except Exception as raised:
-            self._check(context, fields_key, entry)
-            if self._rebuilds(raised):
+            self._check(context, fields_key, streams, entry)
+            if not isinstance(raised, TRANSIENT_ERRORS) and self._rebuilds(raised):
                 self._entries[key] = (None, (type(raised), raised.args),
                                       context.rng.getstate(), context.ring_rng.getstate())
             raise
-        self._check(context, fields_key, entry)
+        self._check(context, fields_key, streams, entry)
         self._entries[key] = (deepcopy(instance), None, context.rng.getstate(), context.ring_rng.getstate())
         return instance
 
@@ -101,9 +106,13 @@ class MotifCache:
         """A copy of registry `entry` whose generator answers through this memo (for `compose_layered`)."""
         return {**entry, "generator": lambda context: self.generate(entry, context)}
 
-    def _check(self, context: MotifContext, before: bytes, entry: Dict) -> None:
-        if self.verify and context_key(context) != before:
+    def _check(self, context: MotifContext, before: bytes, streams: Tuple[Any, Any], entry: Dict) -> None:
+        if not self.verify:
+            return
+        if context_key(context) != before:
             raise ContextMutated(f"generator of {entry['name']} changed its context")
+        if context.rng is not streams[0] or context.ring_rng is not streams[1]:
+            raise ContextMutated(f"generator of {entry['name']} replaced a stream of its context")
 
     @staticmethod
     def _rebuilds(error: Exception) -> bool:
