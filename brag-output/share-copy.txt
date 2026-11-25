@@ -1,1 +1,0 @@
-I built MandalaForge to turn a seed into a mandala coloring page. Choose the structure, regenerate a single ring, and print your design.
