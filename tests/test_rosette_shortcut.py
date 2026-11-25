@@ -8,9 +8,11 @@ from assembler import Assembler, ROSETTE_NODE
 from coloring_generator import DesignGenerator
 from composer import CellRecipe, DesignPlan
 
-CENTRE_SEED = {"seed": 3}                 # its only oversized set is the open centre: step 3 adds a rosette
+CENTRE_SEED = {"seed": 2}                 # its only oversized set is the open centre: step 3 adds a rosette
 LAYERED = {"seed": 42, "force_position_mode": "layered"}
 VARIED = {"seed": 23, "vary_divisions": True, "categories": ["botanical", "geometric"]}
+# A varied design whose first assembly leaves its plan unchanged, so it is kept for a rosette trial.
+VARIED_KEPT = {"seed": 22, "vary_divisions": True, "categories": ["botanical", "geometric"]}
 LAYERED_MIXED = {"seed": 11, "force_position_mode": "layered", "complexity": 0.85,
                  "categories": ["botanical", "geometric"]}
 # Designs whose step 3 trial is shortcut: the plan it adds the rosette to was assembled unchanged. (Seed 7's six
@@ -131,7 +133,7 @@ def test_shortcut_and_full_trial_give_identical_designs(case, monkeypatch):
     assert replay == fast_svg
 
 
-@pytest.mark.parametrize("case", [CENTRE_SEED, LAYERED_MIXED, VARIED])
+@pytest.mark.parametrize("case", [CENTRE_SEED, LAYERED_MIXED, VARIED_KEPT])
 def test_a_shortcut_trial_equals_the_full_trial(case):
     """Straight through `_trial`: the first design's plan with a rosette, with and without the stored state."""
     g = gen(case, max_region_cap=True)

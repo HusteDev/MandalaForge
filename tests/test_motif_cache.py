@@ -21,22 +21,23 @@ LAYERED = {"seed": 42, "force_position_mode": "layered"}
 LAYERED_MIXED = {"seed": 11, "force_position_mode": "layered", "complexity": 0.85,
                  "categories": ["botanical", "geometric"]}
 VARIED = {"seed": 23, "vary_divisions": True, "categories": ["botanical", "geometric"]}
-ROSETTE = {"seed": 3}          # its open centre is repaired with a rosette (step 3)
+ROSETTE = {"seed": 2}          # its open centre is repaired with a rosette (step 3)
 
 DESIGNS = {"six": SIX_RING, "layered": LAYERED, "layered_mixed": LAYERED_MIXED, "varied": VARIED, "rosette": ROSETTE}
 
-# (SVG sha256, source_plan JSON sha256) of designs from the engine before the memo (commit c2cd833).
+# (SVG sha256, source_plan JSON sha256) of designs drawn with the memo off, re-pinned after the motif roadmap B
+# merge changed the designs (the originals came from the engine before the memo, commit c2cd833).
 PINNED = {
-    ("six", True): ("ccba2be0368ed99eb2485d1996d6c4d7313d53551398e9b8279413ecc0de82a5",
-                    "bab3b1c6f91548c0153ee56f977d372d3ca47ada0c3e701a9a79d018d70f0a7e"),
-    ("rosette", True): ("cffe4dc40a6cfffe0a67b071fc7c4774c2c9e8407ead9dcfba7b84e839a50d1b",
-                        "3181da3b88d994ba05da9ef9967278cfbdce4929bb476a9f8c3ec61d2e8a3838"),
-    ("layered", True): ("c479704d49f62b27c534df6c4060bf378dcb9e0fe305a25078d413e59292eb92",
-                        "a1cebeb6fdc0dea761229010754253a71035d41563150e3ceacb53bbfc464498"),
-    ("varied", True): ("7ab5c10e9075097159b14f0ea1c7c8aa54aa9fafe448a9457443fdfb1c74a435",
-                       "c7e96f4851501e7fbe85cd1cbdf33271dbbe308a1e7169652437b0fb7c2f086c"),
-    ("varied", False): ("6ebb9f3f688cdcf710337e3aa17ab0a1e64e1bf6bf0d570672d2a639a0cb7787",
-                        "71886f7de0c00ef98d98ce9359e8c582c7d947a9cf207f90c3df4d37bc8095bd"),
+    ("six", True): ("fc6a74f8288c46f189c8b3920484b8f3fbcffec5b6396989354a735b880f706f",
+                    "c6523dfb5a94c7c1c65712ac9c6e77a44e4c0a3a4224750e16f938a9e3cebed8"),
+    ("rosette", True): ("11144a402797d5302660f7e7ad17c473040e770db61e75cd7a2b16147752d323",
+                        "9f97d5f6477744553f2537abb81b1237f08ca8404761552eb92423ca04c31a47"),
+    ("layered", True): ("f94df0046d49b77b414abc08461fb0f8ec23e37f3b938f9d0c7a0cc2ddd9b008",
+                        "b43c3a5d67156df970c7aa9fcc4d85e31343e6f551dc33d3796869adc22d577c"),
+    ("varied", True): ("046b61dc3c00cdbe77947b20d06a7798553a14b9af8d4a02db474c3dd53460e4",
+                       "57a233e7cd3df98e2b1b694f886659a61d27a737a82757fc9f8bd7c689574831"),
+    ("varied", False): ("25f282f57cfa5fbaa48a46c976c3ac8f75e80a0dea8ff90c61ef246b02d6e6c9",
+                        "d9a8d392050548ae79e7eebd045f1eac5711e19e015dd956615310f39706f0c3"),
 }
 
 
@@ -63,7 +64,7 @@ def outputs(g, svg):
 
 @pytest.mark.parametrize("key", sorted(PINNED), ids=lambda key: f"{key[0]}-cap-{'on' if key[1] else 'off'}")
 def test_designs_match_the_engine_before_the_memo(key):
-    """These pins were taken before the memo existed, so they pass with it and without it."""
+    """These pins were drawn with the memo off, so they pass with it and without it."""
     case, cap = DESIGNS[key[0]], key[1]
     g, svg = build(case, cap, cache=True)
     assert (sha(svg), sha(g.source_plan.to_json())) == PINNED[key]
