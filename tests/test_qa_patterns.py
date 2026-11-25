@@ -368,7 +368,9 @@ def test_embellished_check_fails_a_generator_whose_embellished_output_is_not_det
 
 def test_embellishment_sets_keep_at_most_one_interior_fill():
     from qa_patterns import embellishment_sets
-    assert embellishment_sets(find_motif("petal")) == [("echo", "veins", "dot"), ("echo", "fan", "dot")]
+    assert embellishment_sets(find_motif("petal")) == [
+        ("echo", "cap", "veins", "dot", "drop"), ("cap", "dotted_echo", "dot", "drop"), ("echo", "fan", "dot", "drop"),
+    ]
     assert embellishment_sets(find_motif("band")) == [("beads",)]
     assert embellishment_sets(find_motif("scallop")) == []
 
@@ -382,8 +384,9 @@ def test_matrix_covers_each_accepted_embellishment_and_each_front_back_pair():
         for name in entry["embellishments"]:
             assert (entry["name"], ("emb", name)) in variants
     assert ("petal", ("back", "leaf")) in variants and ("leaf", ("back", "petal")) in variants
-    # Every non-seam base that touches at base height is a front; every back-role motif is a back.
-    fronts = {"petal", "leaf", "teardrop", "rounded_petal", "bead", "spike"}
+    # Every non-seam base that touches at base height and takes the centre position is a front (the divider-only
+    # bead never stands in front); every back-role motif is a back.
+    fronts = {"petal", "leaf", "teardrop", "rounded_petal", "spike"}
     backs = {"petal", "leaf", "teardrop", "rounded_petal", "spike"}
     assert set(layered_pairs()) == {(front, back) for front in fronts for back in backs}
 

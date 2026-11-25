@@ -39,9 +39,8 @@ from typing import List, Set
 
 from assembler import stroke_width_for
 from coloring_generator import DesignGenerator
-from composer import (CellRecipe, Composer, ComposerSettings, node_rng, pick_embellishments, ring_stream_seed,
-                      size_gates,
-                      touch_heights_of)
+from composer import (CellRecipe, Composer, ComposerSettings, excludes, node_rng, pick_embellishments,
+                      ring_stream_seed, size_gates, touch_heights_of)
 from motifs import MOTIFS, find_motif, safe_motif
 from motifs.contract import MotifError
 from motifs.embellish import EMBELLISHMENT_ORDER, INTERIOR_FILLS
@@ -267,9 +266,14 @@ def _final_slot_refusals(entry, generator):
 # ------------------------------------------------------- pairing jobs (spec 11)
 
 def layered_fronts():
-    """The motifs a layered ring may draw in front: non-seam bases that touch at base height."""
+    """
+    The motifs a layered ring may draw in front, as the composer picks them (`_layered_front_candidates`):
+    non-seam bases that take the centre position and touch at base height. A divider-only base (a V-gap
+    filler such as the stamen, whose stem and balls are open linework) is never a front.
+    """
     return [entry for entry in MOTIFS
-            if 'base' in entry['roles'] and not entry.get('seams', False) and 'base' in touch_heights_of(entry)]
+            if 'base' in entry['roles'] and 'centre' in entry['positions'] and not entry.get('seams', False)
+            and 'base' in touch_heights_of(entry)]
 
 
 def layered_pairs():
@@ -744,13 +748,26 @@ def _cut(entry):
 def embellishment_sets(entry):
     """
     The largest embellishment sets the motif accepts together, in `EMBELLISHMENT_ORDER`: everything it
-    accepts, with one interior fill at a time (spec 6.4 keeps at most one).
+    accepts, with at most one name of each `EXCLUSIVE_GROUPS` group at a time (spec 6.4 keeps one interior
+    fill; one border; no fan or hatch beside a cap). Every maximal set, each in `EMBELLISHMENT_ORDER`.
     """
-    accepted = entry['embellishments']
-    fills = [name for name in accepted if name in INTERIOR_FILLS] or [None]
-    return [tuple(name for name in EMBELLISHMENT_ORDER
-                  if name in accepted and (name not in INTERIOR_FILLS or name == fill))
-            for fill in fills] if accepted else []
+    accepted = [name for name in EMBELLISHMENT_ORDER if name in entry['embellishments']]
+    sets = [()]
+    for name in accepted:
+        grown = []
+        for current in sets:
+            if not any(excludes(name, other) for other in current):
+                grown.append(current + (name,))
+            else:
+                # Either keep the set without `name`, or swap in `name` for what it excludes.
+                grown.append(current)
+                grown.append(tuple(other for other in current if not excludes(name, other)) + (name,))
+        sets = grown
+    maximal = []
+    for current in sets:
+        if not any(set(current) < set(other) for other in sets) and current not in maximal:
+            maximal.append(tuple(name for name in EMBELLISHMENT_ORDER if name in current))
+    return maximal if accepted else []
 
 
 def _embellished(entry):
@@ -765,9 +782,12 @@ def _embellished(entry):
         if not (_deterministic(entry, embellishments=names, **base)
                 and _monotone(entry, embellishments=names, **base)):
             return False
+    # The draw probe uses the radial limits the assembler gives a base, outward overflow included: a tip
+    # ornament (the drop) hangs past a tip that reaches the ring's outer edge, so it needs that room.
+    reach = (0.0, 1.0 + entry.get('max_overflow_outward', 0.0))
     for name in entry['embellishments']:
         drawn_at = [white for white in EMB_WHITE_SPACES
-                    if _generate(entry, 11, embellishments=(name,), min_white_space=white,
+                    if _generate(entry, 11, embellishments=(name,), min_white_space=white, radial_limits=reach,
                                  **base).dropped_embellishments == 0]
         if not drawn_at:
             return False

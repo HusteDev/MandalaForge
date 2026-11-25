@@ -593,6 +593,8 @@ GEOMETRIC_MOTIFS: List[Dict] = [
         "seams": True,
         "embellishments": ("beads",),
         "spans_cell": True,
+        # The roadmap trims share the seam rings at half weight; at double weight the band (and its beads) stays common.
+        "pick_weight": 2.0,
         "min_cell_width_px": 0.0,
         "min_ring_depth_px": 0.0,
         "max_overflow_inward": 0.0,
@@ -627,7 +629,7 @@ GEOMETRIC_MOTIFS: List[Dict] = [
         "touch": True,
         "side_touch_heights": ("base",),
         "seams": False,
-        "embellishments": ("echo", "fan"),
+        "embellishments": ("echo", "fan", "hatch", "drop"),
         "spans_cell": False,
         "min_cell_width_px": 14.0,
         "min_ring_depth_px": 18.0,

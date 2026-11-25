@@ -1,6 +1,7 @@
 import pytest
 
 from qa_report import run_one, corpus_jobs
+from motifs.embellish import EMBELLISHMENT_ORDER
 
 def test_corpus_has_both_division_modes():
     jobs = corpus_jobs(out_dir="test_output", overlay_mode="never")
@@ -39,7 +40,7 @@ def test_corpus_quotas_are_checked():
 
 def test_corpus_quotas_pass_when_both_are_met():
     from qa_report import corpus_quota_failures
-    counts = {name: 10 for name in ("echo", "veins", "fan", "dot", "beads")}
+    counts = {name: 10 for name in EMBELLISHMENT_ORDER}
     rows = [
         {"categories": ["botanical"], "layered_rings": 1, "rings": 4, "embellishments": counts},
         {"categories": ["celtic"], "layered_rings": 0, "rings": 4, "embellishments": {}},
@@ -47,6 +48,11 @@ def test_corpus_quotas_pass_when_both_are_met():
     assert corpus_quota_failures(rows) == []
     rows[0]["embellishments"] = dict(counts, dot=9)
     assert corpus_quota_failures(rows) == ["embellishment dot appears 9 times (< 10)"]
+    # Beads keep their own measured floor.
+    rows[0]["embellishments"] = dict(counts, beads=7)
+    assert corpus_quota_failures(rows) == []
+    rows[0]["embellishments"] = dict(counts, beads=6)
+    assert corpus_quota_failures(rows) == ["embellishment beads appears 6 times (< 7)"]
 
 
 def test_corpus_forces_layered_on_the_layered_seeds():
@@ -94,7 +100,7 @@ def test_run_one_reports_oversized_regions(tmp_path):
 
 def test_oversized_ceiling_is_a_quota():
     from qa_report import corpus_quota_failures, OVERSIZED_DESIGN_CEILING
-    counts = {name: 10 for name in ("echo", "veins", "fan", "dot", "beads")}
+    counts = {name: 10 for name in EMBELLISHMENT_ORDER}
     rows = [{"categories": ["celtic"], "layered_rings": 0, "rings": 4, "embellishments": counts, "oversized": 1}
             for _ in range(OVERSIZED_DESIGN_CEILING + 1)]
     assert corpus_quota_failures(rows) == [

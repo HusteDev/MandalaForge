@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from motifs import find_motif, motifs_for_categories, safe_motif
-from motifs.embellish import EMBELLISHMENT_ORDER, INTERIOR_FILLS
+from motifs.embellish import EMBELLISHMENT_ORDER, EXCLUSIVE_GROUPS, INTERIOR_FILLS
 from motifs.geometry import salted_seed
 
 
@@ -235,8 +235,9 @@ MAX_EMBELLISHMENTS = 3
 def pick_embellishments(entry: Dict, complexity: float, rng: random.Random) -> List[str]:
     """
     Embellishments for one node (spec 6.4): `n = clamp(floor(3 (complexity - 0.2) / 0.8 + u), 0, 3)` with
-    `u` from `rng`, names drawn without replacement from the entry's accepted list, at most one interior
-    fill, returned in `EMBELLISHMENT_ORDER`.
+    `u` from `rng`, names drawn without replacement from the entry's accepted list, at most one name from each
+    of `EXCLUSIVE_GROUPS` (one interior fill, one border, no fan or hatch beside a cap), returned in
+    `EMBELLISHMENT_ORDER`.
     """
     u = rng.random()
     count = max(0, min(MAX_EMBELLISHMENTS, math.floor(3.0 * (complexity - 0.2) / 0.8 + u)))
@@ -246,9 +247,13 @@ def pick_embellishments(entry: Dict, complexity: float, rng: random.Random) -> L
         name = rng.choice(pool)
         picked.append(name)
         pool.remove(name)
-        if name in INTERIOR_FILLS:
-            pool = [other for other in pool if other not in INTERIOR_FILLS]
+        pool = [other for other in pool if not excludes(name, other)]
     return [name for name in EMBELLISHMENT_ORDER if name in picked]
+
+
+def excludes(name: str, other: str) -> bool:
+    """Whether a node with embellishment `name` may not also take `other` (they share an `EXCLUSIVE_GROUPS` group)."""
+    return name != other and any(name in group and other in group for group in EXCLUSIVE_GROUPS)
 
 
 BOTH_MIN_CELL_WIDTH_PX = 2 * 14.0
@@ -338,14 +343,13 @@ class ComposerSettings:
 
 def force_embellishment_picks(entry: Dict, picked: List[str], forced: Sequence[str]) -> List[str]:
     """
-    `picked` with every name of `forced` that `entry` accepts added, in `EMBELLISHMENT_ORDER`. A forced
-    interior fill displaces a picked one, so a node keeps at most one. Draws nothing, so the streams and
-    every unforced pick stay as they were.
+    `picked` with every name of `forced` that `entry` accepts added, in `EMBELLISHMENT_ORDER`. A forced name
+    displaces a picked one it `excludes` (a forced interior fill a picked one, a forced border a picked one), so
+    a node keeps at most one of each group. Draws nothing, so the streams and every unforced pick stay as they were.
     """
     accepted = entry.get("embellishments", ())
     added = [name for name in forced if name in accepted]
-    if any(name in INTERIOR_FILLS for name in added):
-        picked = [name for name in picked if name not in INTERIOR_FILLS]
+    picked = [name for name in picked if not any(excludes(name, other) for other in added)]
     names = set(picked) | set(added)
     return [name for name in EMBELLISHMENT_ORDER if name in names]
 
@@ -381,6 +385,8 @@ class Composer:
             raise ValueError(f"forced embellishments repeat a name: {forced_names}")
         if sum(1 for name in forced_names if name in INTERIOR_FILLS) > 1:
             raise ValueError(f"at most one interior fill may be forced, got {forced_names}")
+        if any(excludes(a, b) for a in forced_names for b in forced_names):
+            raise ValueError(f"forced embellishments exclude each other: {forced_names}")
         counts = [settings.num_divisions, *(settings.ring_divisions or [])]
         for count in counts:
             if isinstance(count, bool) or not isinstance(count, int) or not MIN_DIVISIONS <= count <= MAX_DIVISIONS:
@@ -457,11 +463,16 @@ class Composer:
         self._style = value
         self._canonical_names.clear()
 
-    def _pick(self, candidates: List[Dict], rng: random.Random) -> Dict:
-        """Style biases the pick: motifs in a style category weigh 3, others 1."""
+    def _pick(self, candidates: List[Dict], rng: random.Random, weighted: bool = True) -> Dict:
+        """
+        Style biases the pick: motifs in a style category weigh 3, others 1. A base pick (`weighted`) also
+        multiplies in the entry's `pick_weight` (default 1), which keeps a busy trim from crowding the band out of
+        a seam ring and lifts a filler whose position is rare; a slot child's pick ignores it.
+        """
         ordered = sorted(candidates, key=lambda m: m["name"])
         favoured = self.style["categories"]
-        weights = [3 if m["category"] in favoured else 1 for m in ordered]
+        weights = [(3 if m["category"] in favoured else 1) * (m.get("pick_weight", 1) if weighted else 1)
+                   for m in ordered]
         return rng.choices(ordered, weights=weights)[0]
 
     def plan(self) -> DesignPlan:
@@ -600,12 +611,15 @@ class Composer:
 
     @staticmethod
     def _fill_allowed(node: CellRecipe, name: str) -> bool:
-        """Whether `node` may take `name`: it accepts and lacks it, keeps one interior fill and no fill beside a slot child."""
+        """
+        Whether `node` may take `name`: it accepts and lacks it, has nothing `name` excludes (one interior fill, one
+        border, no fan or hatch beside a cap), and gets no fill beside a slot child.
+        """
         if name not in Composer._registry_entry(node).get("embellishments", ()) or name in node.embellishments:
             return False
-        if name in INTERIOR_FILLS:
-            return node.slot_child is None and not set(node.embellishments) & set(INTERIOR_FILLS)
-        return True
+        if any(excludes(name, other) for other in node.embellishments):
+            return False
+        return name not in INTERIOR_FILLS or node.slot_child is None
 
     def add_embellishment(self, ring: RingPlan, position: str, node_path: Tuple[int, ...], on_back: bool,
                           name: str) -> bool:
@@ -1044,7 +1058,7 @@ class Composer:
         if not candidates:
             return
         child_rng = node_rng(ring_seed, ring_index, seq_pos, offset + depth + 1, position, "pick")
-        child_motif = self._pick(candidates, child_rng)
+        child_motif = self._pick(candidates, child_rng, weighted=False)
         node.slot_child = CellRecipe(child_motif["name"], child_motif["category"])
         self._nest(node.slot_child, child_motif, child_rng, ring_index, ring_seed, seq_pos,
                    position, cell_width, ring_depth, offset, depth + 1, width_fraction,

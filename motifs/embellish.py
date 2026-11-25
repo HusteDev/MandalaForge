@@ -15,19 +15,27 @@ import random
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import shapely
-from shapely.geometry import LineString, MultiPoint, Point, Polygon, box
-from shapely.ops import polygonize_full, unary_union
+from shapely.geometry import LineString, MultiPoint, MultiPolygon, Point, Polygon, box
+from shapely.ops import linemerge, polygonize_full, unary_union
 
 from motifs.contract import Anatomy, MotifError, inset_outline
 from motifs.geometry import (
     CellPoint, MotifContext, SmartVector, insert_vertex_on_outline, mirror_points, page_arc_points,
     page_circle_points, salted_seed,
 )
+from motifs.page_shapes import page_offsets
 from topology_validator import MIN_REGION_AREA_PX2, PEN_RADIUS_PX
 
-EMBELLISHMENT_ORDER = ("echo", "veins", "fan", "dot", "beads")
+EMBELLISHMENT_ORDER = ("echo", "cap", "veins", "fan", "hatch", "dotted_echo", "dot", "drop", "beads")
 # At most one of these per host; a host with one offers no slot.
-INTERIOR_FILLS = ("veins", "fan")
+INTERIOR_FILLS = ("veins", "fan", "hatch")
+# At most one border per host.
+BORDERS = ("echo", "dotted_echo")
+# A host takes at most one name from each group: one interior fill, one border, a cap only beside veins (veins
+# stop at the lowest cap arc; a fan's rays and hatch lines would cross it), and a dotted echo beside no interior
+# fill (every fill line runs out to the outline across the row of dots).
+EXCLUSIVE_GROUPS = (INTERIOR_FILLS, BORDERS, ("cap", "fan"), ("cap", "hatch"),
+                    *(("dotted_echo", fill) for fill in INTERIOR_FILLS))
 # At or above this complexity a host gets two echoes, below it one.
 ECHO_TWO_AT = 0.6
 
@@ -60,6 +68,33 @@ BEAD_DIAMETER_RANGE = (1.0, 2.0)
 # These draw from `context.ring_rng`, continuing the stream the host drew its seam ink from, so every cell of
 # the ring draws them alike; the rest draw from their own salted node stream.
 RING_STREAM_EMBELLISHMENTS = ("beads",)
+# Drop (roadmap Phase A): a teardrop hung from the host's tip vertex, in min_white_space units.
+DROP_LENGTH_RANGE = (2.0, 3.5)  # point to the far side of the bulb
+DROP_BULB_RANGE = (1.2, 2.0)  # the bulb's diameter
+DROP_BULB_FLOOR = 1.0  # the smallest bulb it is shrunk to before it is dropped
+DROP_POINT_ANGLE = 20.0  # degrees each side leaves the point at, from the axis
+DROP_SHRINK = 0.9
+DROP_SHORTEST = 1.3  # the shortest drop, as a multiple of its bulb
+DROP_SIDE_STEPS = 8
+# Cap (roadmap Phase B): 1 to 3 arcs at constant radials across the host near its tip. The first sits where the
+# tip face above it holds a pen with an outline-to-detail clearance across, found in steps of this many pixels;
+# the rest are a drawn multiple of the detail clearance below it, all in the outer half of the host's axis.
+CAP_ARCS_RANGE = (1, 3)
+CAP_SPACING_RANGE = (1.0, 1.5)
+CAP_SEARCH_STEP_PX = 0.5
+# Hatch: arcs at constant radials across the whole host, a drawn multiple of the detail clearance apart and
+# evenly spaced between its base and tip crossings; the longest run whose faces all hold a pen is kept, and
+# fewer than MIN_HATCH_LINES drops the hatch.
+HATCH_SPACING_RANGE = (1.2, 1.8)
+MIN_HATCH_LINES = 3
+# Dotted echo: a row of detail circles inside the outline, the diameter drawn in min_white_space units and the
+# gap between neighbours a drawn multiple of the detail clearance; fewer than MIN_DOTTED kept in each half drops it.
+DOTTED_DIAMETER_RANGE = (1.0, 1.4)
+DOTTED_GAP_RANGE = (1.0, 1.3)
+MIN_DOTTED = 2
+# The smallest dot whose inside the validator accepts as a face (area and pen), with a margin for its polygon.
+DOTTED_LEAST_RADIUS_PX = 3.0
+DOTTED_MARGIN_PX = 0.1  # added to the row's inset, so a dot's polygon keeps its clearance from the ring
 # Cell-space length of the probe used to find where a vein or ray meets the ring: far past any cell.
 _FAR = 50.0
 # Page half-size of the polygon standing for a half-plane when measuring areas: far past any cell.
@@ -81,6 +116,8 @@ class _State:
     slot_outline_weight: str
     # Index of the innermost closed ring of ink: the host outline, or the last echo drawn.
     innermost: int
+    # Index of the lowest cap arc, when a cap was drawn: veins stop on it.
+    cap: Optional[int] = None
 
 
 def embellishment_rng(context: MotifContext, name: str) -> random.Random:
@@ -198,6 +235,21 @@ def _land(ring: SmartVector, point: CellPoint) -> Tuple[SmartVector, Optional[Ce
     return landed, (placed if placed in landed.points else None)
 
 
+def _land_open(line: SmartVector, point: CellPoint) -> Tuple[SmartVector, Optional[CellPoint]]:
+    """The open `line` with `point` made one of its vertices, and that vertex; None when it is not on the line."""
+    points = insert_vertex_on_outline(list(line.points), False, point, tolerance=1e-7)
+    placed = next((p for p in points if abs(p.radial - point.radial) <= 1e-7
+                   and abs(p.angular - point.angular) <= 1e-7), None)
+    return SmartVector(points, closed=False, weight=line.weight, layer=line.layer), placed
+
+
+def _below(polygon: Polygon, radial: float) -> Optional[Polygon]:
+    """The largest part of the cell-space `polygon` at or below `radial`; None when nothing is left."""
+    kept = polygon.intersection(box(-_FAR, -_FAR, _FAR, radial))
+    parts = [part for part in getattr(kept, "geoms", [kept]) if isinstance(part, Polygon) and not part.is_empty]
+    return max(parts, key=lambda part: part.area) if parts else None
+
+
 def _veins(context: MotifContext, state: _State, anatomy: Anatomy, rng: random.Random) -> int:
     """
     A midrib along the axis across the innermost ring of ink, from its base crossing to its tip crossing,
@@ -216,19 +268,32 @@ def _veins(context: MotifContext, state: _State, anatomy: Anatomy, rng: random.R
     span = axis_span(ring.points)
     if span is None:
         return 1
-    ring, ends = end_on_outline(ring, span)
-    if any(end not in ring.points for end in ends):
-        return 1
-    base, tip = ends
+    cap = state.vectors[state.cap] if state.cap is not None else None
+    outline = Polygon(context.polyline(SmartVector(list(ring.points), closed=True))).buffer(0)
+    polygon = _cell_polygon(ring.points)
+    if cap is None:
+        ring, ends = end_on_outline(ring, span)
+        if any(end not in ring.points for end in ends):
+            return 1
+        base, tip = ends
+    else:
+        # Below a cap the veins stop at its lowest arc: the midrib ends on its axis vertex, and the host is cut there.
+        tip = next((p for p in cap.points if p.angular == 0.0), None)
+        ring, (base,) = end_on_outline(ring, span[:1])
+        if tip is None or base not in ring.points or tip.radial <= base.radial:
+            return 1
+        polygon = _below(polygon, tip.radial)
+        outline = outline.intersection(Point(context.center).buffer(context.radius_at(tip.radial), quad_segs=256))
+        if polygon is None or outline.is_empty:
+            return 1
     length_px = context.radial_to_px(tip.radial - base.radial)
     spacing = context.clearance_px("detail", "detail")
-    polygon = _cell_polygon(ring.points)
     lasts = (VEIN_LAST_SHARE,) + VEIN_LAST_SHARE_FALLBACKS
     spans = [(first, last) for last in lasts]
     if first > VEIN_FIRST_RANGE[0]:
         spans += [(VEIN_FIRST_RANGE[0], last) for last in lasts]
-    area_below = _vein_area_below(context, ring, polygon, base, tip, angle)
-    half_area = Polygon(context.polyline(SmartVector(list(ring.points), closed=True))).area / 2.0
+    area_below = _vein_area_below(context, outline, polygon, base, tip, angle)
+    half_area = outline.area / 2.0
     for pairs in range(MAX_VEIN_PAIRS, 0, -1):
         # Starts that split each half into equal areas first, then equal areas below a top vein that steps down,
         # then starts evenly along the midrib.
@@ -243,10 +308,12 @@ def _veins(context: MotifContext, state: _State, anatomy: Anatomy, rng: random.R
         for shares in candidates:
             if shares is None or any(b - a < spacing / length_px for a, b in zip(shares, shares[1:])):
                 continue
-            drawn = _vein_set(context, ring, polygon, base, tip, shares, angle)
+            drawn = _vein_set(context, ring, polygon, base, tip, shares, angle, cap)
             if drawn is not None:
                 state.vectors[state.innermost] = drawn[0]
-                state.vectors.extend(drawn[1])
+                if cap is not None:
+                    state.vectors[state.cap] = drawn[1]
+                state.vectors.extend(drawn[2])
                 return 0
     return 1
 
@@ -268,13 +335,13 @@ def _half_plane(a: Tuple[float, float], b: Tuple[float, float], inside: Point) -
                     (a[0] + ux + nx, a[1] + uy + ny), (a[0] - ux + nx, a[1] - uy + ny)])
 
 
-def _vein_area_below(context: MotifContext, ring: SmartVector, polygon: Polygon, base: CellPoint,
+def _vein_area_below(context: MotifContext, outline: Polygon, polygon: Polygon, base: CellPoint,
                      tip: CellPoint, angle: float) -> Callable[[float], Optional[float]]:
     """
-    For a share of the midrib, the page area of one half of the host between its base and a side vein starting
-    there; None where no vein fits. The host is symmetric about its axis, so one half stands for both.
+    For a share of the midrib, the page area of one half of the host (`outline`, on the page) between its base
+    and a side vein starting there; None where no vein fits. The host is symmetric about its axis, so one half
+    stands for both.
     """
-    outline = Polygon(context.polyline(SmartVector(list(ring.points), closed=True))).buffer(0)
     base_px = Point(context.to_cartesian(base))
     side_px = Point(context.to_cartesian(CellPoint((base.radial + tip.radial) / 2.0, 0.5)))
     half = outline.intersection(_half_plane(context.to_cartesian(base), context.to_cartesian(tip), side_px))
@@ -334,8 +401,12 @@ def _even_area_shares(area_below: Callable[[float], Optional[float]], half_area:
 
 
 def _vein_set(context: MotifContext, ring: SmartVector, polygon: Polygon, base: CellPoint, tip: CellPoint,
-              shares: Sequence[float], angle: float) -> Optional[Tuple[SmartVector, List[SmartVector]]]:
-    """The ring with the vein ends landed on it, then the midrib and side veins; None when they do not fit."""
+              shares: Sequence[float], angle: float, cap: Optional[SmartVector] = None,
+              ) -> Optional[Tuple[SmartVector, Optional[SmartVector], List[SmartVector]]]:
+    """
+    The ring and the cap arc (or None) with the vein ends landed on them, then the midrib and side veins; None
+    when they do not fit. Below a cap, a vein that reaches the cap's radial ends on the arc.
+    """
     starts, veins = [], []
     for share in shares:
         start = CellPoint(base.radial + (tip.radial - base.radial) * share, 0.0)
@@ -346,16 +417,20 @@ def _vein_set(context: MotifContext, ring: SmartVector, polygon: Polygon, base: 
             end = _first_hit(polygon, start, _toward(start, CellPoint(start.radial + rise, side * across)))
             if end is None or end.radial <= start.radial:
                 return None
-            ring, end = _land(ring, end)
+            if cap is not None and abs(end.radial - tip.radial) <= 1e-9:
+                cap, end = _land_open(cap, end)
+            else:
+                ring, end = _land(ring, end)
             if end is None:
                 return None
             veins.append(SmartVector([start, end], weight="detail"))
         starts.append(start)
     midrib = SmartVector([base] + starts + [tip], weight=ring.weight)
     # Each half and each face between veins keeps min_white_space of white across, as an echo does.
-    if not _faces_hold_pen(context, [ring, midrib] + veins, context.clearance_px(ring.weight, "detail")):
+    if not _faces_hold_pen(context, [ring, midrib] + veins + ([cap] if cap is not None else []),
+                           context.clearance_px(ring.weight, "detail")):
         return None
-    return ring, [midrib] + veins
+    return ring, cap, [midrib] + veins
 
 
 def _side_crossing(polygon: Polygon, radial: float, side: float) -> Optional[CellPoint]:
@@ -614,8 +689,273 @@ def _beads_keep_clear(context: MotifContext, vectors: Sequence[SmartVector],
 
 Handler = Callable[[MotifContext, _State, Anatomy, random.Random], int]
 
+def drop_outline(context: MotifContext, tip: CellPoint, length_px: float, bulb_px: float) -> List[CellPoint]:
+    """
+    A closed teardrop, round on the page, whose point is `tip` and whose bulb lies outward along the radius:
+    each side leaves the point at `DROP_POINT_ANGLE` from the axis, swells to the bulb's widest at
+    `length_px - bulb_px / 2`, and rounds over to the far end. The point is the first vertex.
+    """
+    radius = bulb_px / 2.0
+    widest = length_px - radius
+    angle = math.radians(DROP_POINT_ANGLE)
+    reach = widest * 0.6
+    side = _cubic_offsets((0.0, 0.0), (reach * math.cos(angle), reach * math.sin(angle)),
+                          (widest - radius * 1.3, radius), (widest, radius))
+    # A quarter circle, as a cubic, from the widest point to the far end of the bulb.
+    kappa = 0.5523 * radius
+    cap = _cubic_offsets((widest, radius), (widest + kappa, radius), (length_px, kappa), (length_px, 0.0))
+    right = side + cap[1:]
+    offsets = right + [(along, -across) for along, across in reversed(right[1:-1])]
+    points = page_offsets(context, tip, offsets)
+    points[0] = tip
+    return points
+
+
+def _cubic_offsets(p0, p1, p2, p3) -> List[Tuple[float, float]]:
+    out = []
+    for index in range(DROP_SIDE_STEPS + 1):
+        t = index / DROP_SIDE_STEPS
+        u = 1.0 - t
+        w = (u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t)
+        out.append((sum(wk * p[0] for wk, p in zip(w, (p0, p1, p2, p3))),
+                    sum(wk * p[1] for wk, p in zip(w, (p0, p1, p2, p3)))))
+    return out
+
+
+def _drop(context: MotifContext, state: _State, anatomy: Anatomy, rng: random.Random) -> int:
+    """
+    A closed outline-weight teardrop hung from the host's tip vertex, its bulb outward. Drawn at a length and
+    bulb from `DROP_LENGTH_RANGE` and `DROP_BULB_RANGE` (min_white_space units), both shrunk by the same factor
+    until it lies inside the radial ceiling and the angular budget and keeps a clearance from other ink away
+    from the tip, the bulb no smaller than `DROP_BULB_FLOOR`; dropped (returns 1) once it would be shorter
+    than `DROP_SHORTEST` bulbs.
+    """
+    white = context.min_white_space
+    length_px = rng.uniform(*DROP_LENGTH_RANGE) * white
+    bulb_px = rng.uniform(*DROP_BULB_RANGE) * white
+    tip = anatomy.tip
+    high = context.radial_limits[1]
+    keep = context.clearance_px()
+    disc = Point(context.to_cartesian(tip)).buffer(keep)
+    ink = unary_union([LineString(context.polyline(vector)) for vector in state.vectors]).difference(disc)
+    floor = DROP_BULB_FLOOR * white
+    bulb_px = max(bulb_px, floor)
+    while length_px >= bulb_px * DROP_SHORTEST:
+        points = drop_outline(context, tip, length_px, bulb_px)
+        inside = (max(p.radial for p in points) <= high
+                  and max(abs(p.angular) for p in points) <= context.angular_limits)
+        if inside and holds_pen(context, points):
+            line = LineString(context.polyline(SmartVector(points, closed=True))).difference(disc)
+            if ink.is_empty or line.distance(ink) >= keep:
+                state.vectors.append(SmartVector(points, closed=True))
+                return 0
+        # Both shrink together; a bulb at its floor stays there while the neck shortens.
+        length_px *= DROP_SHRINK
+        bulb_px = max(bulb_px * DROP_SHRINK, floor)
+    return 1
+
+
+
+def _page_outline(context: MotifContext, ring: SmartVector) -> Polygon:
+    return Polygon(context.polyline(SmartVector(list(ring.points), closed=True))).buffer(0)
+
+
+def _annulus_part(context: MotifContext, outline: Polygon, low: Optional[float], high: Optional[float]):
+    """The part of the page `outline` between the circles about the design's centre at radials `low` and `high`."""
+    part = outline
+    if high is not None:
+        part = part.intersection(Point(context.center).buffer(context.radius_at(high), quad_segs=256))
+    if low is not None:
+        part = part.difference(Point(context.center).buffer(context.radius_at(low), quad_segs=256))
+    return part
+
+
+def _band_holds_pen(context: MotifContext, outline: Polygon, low: Optional[float], high: Optional[float],
+                    keep: float) -> bool:
+    """Whether every face of `outline` between radials `low` and `high` holds a pen and is `keep` wide somewhere."""
+    part = _annulus_part(context, outline, low, high)
+    faces = [face for face in getattr(part, "geoms", [part]) if isinstance(face, Polygon) and not face.is_empty]
+    return bool(faces) and all(_face_holds_pen(face) and not face.buffer(-keep / 2.0).is_empty for face in faces)
+
+
+def _arcs_across(ring: SmartVector, polygon: Polygon, radials: Sequence[float]
+                 ) -> Optional[Tuple[SmartVector, List[SmartVector]]]:
+    """
+    The ring with both ends of a detail arc at each radial landed on it, and the arcs: each runs at its constant
+    radial from the ring's left crossing through a vertex on the axis to its right crossing. None when one misses.
+    """
+    arcs = []
+    for radial in radials:
+        left, right = _side_crossing(polygon, radial, -1.0), _side_crossing(polygon, radial, 1.0)
+        if left is None or right is None:
+            return None
+        ring, left = _land(ring, left)
+        ring, right = _land(ring, right)
+        if left is None or right is None:
+            return None
+        arcs.append(SmartVector([left, CellPoint(radial, 0.0), right], weight="detail"))
+    return ring, arcs
+
+
+def _cap(context: MotifContext, state: _State, anatomy: Anatomy, rng: random.Random) -> int:
+    """
+    `CAP_ARCS_RANGE` detail arcs at constant radials across the innermost ring near its tip, parallel to the
+    ring's edges: the first where the tip face above it holds a pen with an outline-to-detail clearance across,
+    the rest a drawn multiple of the detail clearance below, all in the outer half of the host's axis. Fewer are
+    tried when a face does not hold a pen; returns 1 when not even one arc fits. The slot outline is cut below
+    the lowest arc, and veins drawn later stop on it.
+    """
+    wanted = rng.randint(*CAP_ARCS_RANGE)
+    spacing = context.px_to_radial(rng.uniform(*CAP_SPACING_RANGE) * context.clearance_px("detail", "detail"))
+    ring = state.vectors[state.innermost]
+    span = axis_span(ring.points)
+    if span is None:
+        return 1
+    base, tip = span[0].radial, span[1].radial
+    middle = (base + tip) / 2.0
+    keep = context.clearance_px(ring.weight, "detail")
+    outline = _page_outline(context, ring)
+    step = context.px_to_radial(CAP_SEARCH_STEP_PX)
+    first = tip - context.px_to_radial(keep)
+    while first > middle and not _band_holds_pen(context, outline, first, None, keep):
+        first -= step
+    if first <= middle:
+        return 1
+    radials = [r for r in (first - k * spacing for k in range(wanted)) if r > middle]
+    polygon = _cell_polygon(ring.points)
+    for count in range(len(radials), 0, -1):
+        drawn = _arcs_across(ring, polygon, radials[:count])
+        if drawn is None:
+            continue
+        landed, arcs = drawn
+        if not _faces_hold_pen(context, [landed] + arcs, keep):
+            continue
+        state.vectors[state.innermost] = landed
+        state.vectors.extend(arcs)
+        state.cap = len(state.vectors) - 1
+        if state.slot_outline is not None:
+            state.slot_outline = _cut_above(state.slot_outline, radials[count - 1])
+        return 0
+    return 1
+
+
+def _cut_above(outline: List[CellPoint], radial: float) -> Optional[List[CellPoint]]:
+    """The part of the closed `outline` at or below `radial`, the largest piece; None when nothing is left."""
+    kept = _below(_cell_polygon(outline), radial)
+    return None if kept is None else [CellPoint(y, x) for x, y in list(kept.exterior.coords)[:-1]]
+
+
+def _hatch(context: MotifContext, state: _State, anatomy: Anatomy, rng: random.Random) -> int:
+    """
+    Detail arcs at constant radials across the whole innermost ring, a drawn `HATCH_SPACING_RANGE` multiple of the
+    detail clearance apart, evenly spaced between its base and tip crossings. The longest run of them whose faces
+    all hold a pen with the ring-to-detail clearance across is kept (the narrow ends of a host drop their lines);
+    returns 1 when it is shorter than `MIN_HATCH_LINES`.
+    """
+    spacing_px = rng.uniform(*HATCH_SPACING_RANGE) * context.clearance_px("detail", "detail")
+    ring = state.vectors[state.innermost]
+    span = axis_span(ring.points)
+    if span is None:
+        return 1
+    base, tip = span[0].radial, span[1].radial
+    count = int(math.floor(context.radial_to_px(tip - base) / spacing_px)) - 1
+    if count < MIN_HATCH_LINES:
+        return 1
+    radials = [base + (tip - base) * (k + 1) / (count + 1) for k in range(count)]
+    keep = context.clearance_px(ring.weight, "detail")
+    outline = _page_outline(context, ring)
+    below = [_band_holds_pen(context, outline, None, r, keep) for r in radials]
+    above = [_band_holds_pen(context, outline, r, None, keep) for r in radials]
+    between = [_band_holds_pen(context, outline, a, b, keep) for a, b in zip(radials, radials[1:])]
+    best = None
+    for i in range(count):
+        if not below[i]:
+            continue
+        for j in range(i, count):
+            if j > i and not between[j - 1]:
+                break
+            if above[j] and (best is None or j - i > best[1] - best[0]):
+                best = (i, j)
+    if best is None or best[1] - best[0] + 1 < MIN_HATCH_LINES:
+        return 1
+    drawn = _arcs_across(ring, _cell_polygon(ring.points), radials[best[0]:best[1] + 1])
+    if drawn is None or not _faces_hold_pen(context, [drawn[0]] + drawn[1], keep):
+        return 1
+    state.vectors[state.innermost] = drawn[0]
+    state.vectors.extend(drawn[1])
+    return 0
+
+
+def _dotted_echo(context: MotifContext, state: _State, anatomy: Anatomy, rng: random.Random) -> int:
+    """
+    A border of detail circles, round on the page, inside the innermost ring instead of a continuous echo: centred
+    on the ring inset by the clearance between its weight and a detail line plus the radius, evenly spaced along
+    each half of that inset from the tip to the base (half a pitch from the axis at either end) and mirrored. The
+    diameter is a drawn `DOTTED_DIAMETER_RANGE` multiple of `min_white_space` and the gap between neighbours a
+    drawn `DOTTED_GAP_RANGE` multiple of the detail clearance; no dot is smaller than `DOTTED_LEAST_RADIUS_PX`. It runs after the interior fill, so a circle too
+    close to other ink (a vein or cap end) is skipped; returns 1 when fewer than `MIN_DOTTED` are kept in a half.
+    The slot outline moves inside the row.
+    """
+    radius = max(rng.uniform(*DOTTED_DIAMETER_RANGE) * context.min_white_space / 2.0, DOTTED_LEAST_RADIUS_PX)
+    pitch = 2.0 * radius + rng.uniform(*DOTTED_GAP_RANGE) * context.clearance_px("detail", "detail")
+    ring = state.vectors[state.innermost]
+    keep = context.clearance_px(ring.weight, "detail")
+    path = _page_outline(context, ring).buffer(-(keep + radius + DOTTED_MARGIN_PX))
+    if path.is_empty or not isinstance(path, Polygon):
+        return 1
+    cx, cy = context.center
+    # The right half (positive angular) of the unturned cell lies on the side of the axis toward positive y.
+    half_plane = box(cx - _HALF_PLANE_PX, cy, cx + _HALF_PLANE_PX, cy + _HALF_PLANE_PX)
+    right = path.exterior.intersection(half_plane)
+    if not isinstance(right, LineString):
+        # The exterior's start may fall in this half, splitting it in two.
+        right = linemerge(right) if not right.is_empty else right
+    if not isinstance(right, LineString) or right.length < pitch:
+        return 1
+    count = int(math.floor(right.length / pitch))
+    centres = [right.interpolate((k + 0.5) * right.length / count) for k in range(count)]
+    # The ring itself is checked too: the inset is a polygon, a hair inside its true offset at curves.
+    others = [(LineString(context.polyline(v)), context.clearance_px(v.weight, "detail")) for v in state.vectors]
+    across = context.clearance_px("detail", "detail")
+    kept: List[List[CellPoint]] = []
+    placed: List[LineString] = []
+    for centre in centres:
+        circle = page_circle_points(context, context.to_cell((centre.x, centre.y)), radius)
+        pair = [LineString(context.polyline(SmartVector(points, closed=True)))
+                for points in (circle, mirror_points(circle))]
+        # Skip a dot too close to other ink, or (where the row turns sharply, at the tip and the base) to a dot
+        # already kept or to its own mirror.
+        if any(ink.distance(line) < keep_px - 1e-9 for ink, keep_px in others for line in pair):
+            continue
+        if pair[0].distance(pair[1]) < across - 1e-9 or any(
+                line.distance(other) < across - 1e-9 for line in pair for other in placed):
+            continue
+        if not holds_pen(context, circle):
+            return 1
+        kept.append(circle)
+        placed.extend(pair)
+    if len(kept) < MIN_DOTTED:
+        return 1
+    state.vectors.extend(SmartVector(c, closed=True, weight="detail") for c in kept)
+    state.vectors.extend(SmartVector(mirror_points(c), closed=True, weight="detail") for c in kept)
+    if state.slot_outline is not None:
+        # Inside the row, and still inside whatever an earlier embellishment (a cap) left of the slot.
+        inner = path.buffer(-radius).intersection(Polygon([context.to_cartesian(p) for p in state.slot_outline]))
+        if isinstance(inner, MultiPolygon):
+            inner = max(inner.geoms, key=lambda g: g.area)
+        if inner.is_empty or not isinstance(inner, Polygon):
+            state.slot_outline = None
+        else:
+            state.slot_outline = [context.to_cell(c) for c in list(inner.exterior.coords)[:-1]]
+            state.slot_outline_weight = "detail"
+    return 0
+
+
 # Implemented embellishments; a name in EMBELLISHMENT_ORDER missing here is dropped until it arrives.
-_HANDLERS: Dict[str, Handler] = {"echo": _echo, "veins": _veins, "fan": _fan, "dot": _dot, "beads": _beads}
+_HANDLERS: Dict[str, Handler] = {
+    "echo": _echo, "cap": _cap, "veins": _veins, "fan": _fan, "hatch": _hatch, "dotted_echo": _dotted_echo,
+    "dot": _dot, "drop": _drop, "beads": _beads,
+}
 
 
 def apply_embellishments(
@@ -637,16 +977,21 @@ def apply_embellishments(
         innermost=anatomy.outline if anatomy is not None else 0,
     )
     dropped = sum(1 for name in requested if name not in EMBELLISHMENT_ORDER)
+    drawn: List[str] = []
     for name in EMBELLISHMENT_ORDER:
         if name not in requested:
             continue
         handler = _HANDLERS.get(name)
-        if handler is None or anatomy is None:
+        # A name that shares a group with one already drawn would cross or crowd it; the picks never ask for both.
+        clash = any(name in group and other in group for group in EXCLUSIVE_GROUPS for other in drawn)
+        if handler is None or anatomy is None or clash:
             dropped += 1
             continue
         rng = context.ring_rng if name in RING_STREAM_EMBELLISHMENTS else embellishment_rng(context, name)
         missed = handler(context, state, anatomy, rng)
         dropped += missed
+        if not missed:
+            drawn.append(name)
         if name in INTERIOR_FILLS and not missed:
             state.slot_outline = None
     return EmbellishResult(state.vectors, state.slot_outline, state.slot_outline_weight, dropped)

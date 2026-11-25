@@ -1,7 +1,7 @@
 import random
 
 import pytest
-from composer import CellRecipe, Composer, ComposerSettings, pick_embellishments
+from composer import CellRecipe, Composer, ComposerSettings, excludes, pick_embellishments
 from motifs import find_motif
 from motifs.embellish import EMBELLISHMENT_ORDER, INTERIOR_FILLS
 
@@ -88,11 +88,11 @@ def test_force_motif_disables_fallback_but_keeps_the_stem_repair():
     assert node.motif == "petal" and len(node.attachments) == 1
 
 def test_style_weights_categories_instead_of_filtering_them():
-    # Ring 0 is always a seam ring, so ring 1 avoids band; ring 2 sits on a non-seam ring 1 (composer seed 2), so
-    # the variety filter leaves band allowed there.
-    c = Composer(2, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
+    # Ring 0 is always a seam ring, so ring 1 avoids band; ring 2 sits on a non-seam ring 1 and under a non-seam
+    # ring 3 (composer seed 3), so the variety filter leaves band allowed there.
+    c = Composer(3, GEOM, ComposerSettings(categories=["botanical", "geometric"]))
     c.style = {"categories": ["botanical"], "positions": "centre"}
-    assert not set(c._inward_base_names(2)) & SEAM_NAMES
+    assert not set(c._inward_base_names(2)) & SEAM_NAMES and not c._outward_has_seam(2)
     bases = set()
     for ring_seed in range(30):
         for e in c.plan_ring(2, ring_seed).sequence:
@@ -504,9 +504,10 @@ def test_floating_node_in_base_height_ring_tries_only_base_capable_bases():
             picked[height].add(ring.sequence[0].centre.motif)
             assert ring.contact_mode == "side" and ring.touch_height == height
     # Each pick touches at the ring's height: the base-only spike appears only at base height, the mid-only heart
-    # only at mid height (the curl's gates exclude it from this cell).
-    assert picked == {"base": {"leaf", "band", "teardrop", "rounded_petal", "spike"},
-                      "mid": {"leaf", "band", "teardrop", "rounded_petal", "heart"}}
+    # and kite only at mid height (the curl's and vesica chain's gates exclude them from this cell). The seam
+    # trims qualify at either height, as band does.
+    assert picked == {"base": {"leaf", "band", "teardrop", "rounded_petal", "spike", "sawtooth", "arcade"},
+                      "mid": {"leaf", "band", "teardrop", "rounded_petal", "heart", "kite", "sawtooth", "arcade"}}
     for height, names in picked.items():
         assert all(height in touch_heights_of(find_motif(name)) for name in names)
 
@@ -584,11 +585,12 @@ def test_replace_node_on_a_seam_node_replaces_every_entry():
 def test_replace_node_falls_back_in_every_entry_of_a_seam_position(monkeypatch):
     import composer as composer_module
     from composer import CellRecipe, CellEntry
-    # Geometric now has other bases (bead, spike); keep the registry of the original case, where the band has
-    # no substitute, so the repair has to fall back to the safe band.
+    # Geometric now has other bases (bead, spike, kite and the ring trims); keep the registry of the original
+    # case, where the band has no substitute, so the repair has to fall back to the safe band.
     real = composer_module.motifs_for_categories
+    others = ("bead", "spike", "kite", "sawtooth", "arcade", "vesica_chain")
     monkeypatch.setattr(composer_module, "motifs_for_categories",
-                        lambda cats: [m for m in real(cats) if m["name"] not in ("bead", "spike")])
+                        lambda cats: [m for m in real(cats) if m["name"] not in others])
     c = Composer(1, GEOM, ComposerSettings(categories=["geometric"]))
     seq = [CellEntry(CellRecipe("band", "geometric"), None) for _ in range(2)]
     ring = RingPlan(1, 12, 1.0, seq, 1, contact_mode="side", touch_height="mid")
@@ -656,8 +658,8 @@ def test_embellishment_picks_are_ordered_unique_and_accepted():
 
 
 def test_registry_embellishments():
-    assert find_motif("petal")["embellishments"] == ("echo", "veins", "fan", "dot")
-    assert find_motif("leaf")["embellishments"] == ("echo", "veins")
+    assert find_motif("petal")["embellishments"] == ("echo", "cap", "veins", "fan", "dotted_echo", "dot", "drop")
+    assert find_motif("leaf")["embellishments"] == ("echo", "veins", "hatch")
     assert find_motif("band")["embellishments"] == ("beads",)
 
 
@@ -807,9 +809,9 @@ def test_forced_embellishments_join_every_accepting_base(forced):
             assert len(fills) <= 1
             if fills:
                 assert node.slot_child is None
-            # Forcing only adds: picks that do not clash with a forced interior fill are kept, in order.
-            kept = [n for n in before.embellishments
-                    if not (n in INTERIOR_FILLS and any(f in INTERIOR_FILLS and f != n for f in forced))]
+            # Forcing only adds: picks that no forced name excludes (a second interior fill, a cap beside a forced
+            # fan) are kept, in order.
+            kept = [n for n in before.embellishments if not any(f != n and excludes(n, f) for f in forced)]
             assert set(kept) <= set(node.embellishments)
             assert node.embellishments == [n for n in EMBELLISHMENT_ORDER if n in node.embellishments]
 
