@@ -7,30 +7,34 @@
     <title>MandalaForge</title>
     <link rel="stylesheet" href="https://shared-public.web.app/styles.css">
     <link rel="stylesheet" href="../static/style.css">
+    <link rel="icon" type="image/svg+xml" href="../static/emblem.svg">
 </head>
 
 <body>
     <!-- Loading screen - shown while checking authentication -->
-    <div id="loading-screen" style="display: flex; justify-content: center; align-items: center; height: 100vh; background: #f4f4f4; font-family: sans-serif;">
-        <div style="text-align: center;">
-            <div style="font-size: 18px; margin-bottom: 20px;">Verifying authentication...</div>
-            <div style="border: 3px solid #f3f3f3; border-top: 3px solid #039BE5; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 0 auto;"></div>
+    <div id="loading-screen" class="loading-screen">
+        <div class="loading-inner">
+            <img class="loading-emblem" src="../static/emblem.svg" alt="">
+            <div class="loading-text">Verifying authentication...</div>
         </div>
     </div>
 
     <!-- Main content - hidden initially until authenticated -->
     <div id="main-content" style="display: none;">
         <!-- Authentication header -->
-        <div style="position: fixed; top: 0; right: 0; padding: 10px; background: rgba(255,255,255,0.9); border-bottom-left-radius: 8px; z-index: 1000;">
+        <div class="auth-bar">
             <span>Welcome, <strong id="user-email">...loading</strong>!</span>
-            <button id="signOutButton" style="margin-left: 10px; padding: 5px 10px; background: #039BE5; color: white; border: none; border-radius: 4px; cursor: pointer;">Sign Out</button>
+            <button id="signOutButton" type="button">Sign Out</button>
         </div>
 
         <div class="app-container">
         <div class="controls-container">
             <div class="sticky-actions">
                 <div class="title-row">
-                    <h1>MandalaForge</h1>
+                    <h1 class="brand">
+                        <img class="brand-emblem" src="../static/emblem.svg" alt="">
+                        <span><span class="brand-mandala">Mandala</span><span class="brand-forge">Forge</span></span>
+                    </h1>
                     <button id="help-btn" class="help-button" type="button" aria-haspopup="dialog" aria-controls="help-dialog" title="How to use MandalaForge">
                         <span class="help-button-icon" aria-hidden="true">?</span> How to use
                     </button>
