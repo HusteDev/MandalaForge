@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-50 -50 100 100" role="img" aria-label="MandalaForge">
+  <defs>
+    <radialGradient id="mf-mandala" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="48">
+      <stop offset="0" stop-color="#f7941d"/>
+      <stop offset="0.32" stop-color="#e8434f"/>
+      <stop offset="0.52" stop-color="#c13a9c"/>
+      <stop offset="0.72" stop-color="#5b5bd6"/>
+      <stop offset="1" stop-color="#16a58f"/>
+    </radialGradient>
+    <linearGradient id="mf-gold" x1="0" y1="-48" x2="0" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f7c65e"/>
+      <stop offset="0.5" stop-color="#dd8f22"/>
+      <stop offset="1" stop-color="#a95f10"/>
+    </linearGradient>
+    <clipPath id="mf-left"><rect x="-50" y="-50" width="50" height="100"/></clipPath>
+    <clipPath id="mf-right"><rect x="0" y="-50" width="50" height="100"/></clipPath>
+    <path id="mf-petal" d="M0,-47 C13,-37 12,-24 0,-14 C-12,-24 -13,-37 0,-47Z"/>
+    <path id="mf-petal-in" d="M0,-33 C9,-26 8,-17 0,-10 C-8,-17 -9,-26 0,-33Z"/>
+  </defs>
+  <g clip-path="url(#mf-left)" fill="url(#mf-mandala)" stroke="#fffaf0" stroke-width="2" stroke-linejoin="round">
+    <use href="#mf-petal"/>
+    <use href="#mf-petal" transform="rotate(-30)"/>
+    <use href="#mf-petal" transform="rotate(-60)"/>
+    <use href="#mf-petal" transform="rotate(-90)"/>
+    <use href="#mf-petal" transform="rotate(-120)"/>
+    <use href="#mf-petal" transform="rotate(-150)"/>
+    <use href="#mf-petal" transform="rotate(180)"/>
+    <use href="#mf-petal-in" transform="rotate(-15)"/>
+    <use href="#mf-petal-in" transform="rotate(-45)"/>
+    <use href="#mf-petal-in" transform="rotate(-75)"/>
+    <use href="#mf-petal-in" transform="rotate(-105)"/>
+    <use href="#mf-petal-in" transform="rotate(-135)"/>
+    <use href="#mf-petal-in" transform="rotate(-165)"/>
+    <circle r="10"/>
+  </g>
+  <g clip-path="url(#mf-right)" fill="url(#mf-gold)">
+    <path fill-rule="evenodd" d="M0,-38 A38,38 0 1 1 0,38 A38,38 0 1 1 0,-38Z M0,-22 A22,22 0 1 0 0,22 A22,22 0 1 0 0,-22Z"/>
+    <rect x="-7" y="-47" width="14" height="14" rx="2"/>
+    <rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(30)"/>
+    <rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(60)"/>
+    <rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(90)"/>
+    <rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(120)"/>
+    <rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(150)"/>
+    <rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(180)"/>
+  </g>
+  <line x1="0" y1="-48" x2="0" y2="48" stroke="#f7c65e" stroke-width="1.5"/>
+</svg>

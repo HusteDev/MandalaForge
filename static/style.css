@@ -1,9 +1,42 @@
+/* --- MandalaForge theme ---
+   Light "parchment and forge" palette taken from the logo: the mandala's
+   orange -> red -> magenta -> violet -> blue -> teal gradient for accents,
+   burnished gold from the gear for primary actions, and warm off-white
+   surfaces instead of the logo's black background. Coloring pages stay
+   black line art on white paper. */
 :root {
-    --bg-color: #f0f2f5;
-    --panel-color: #ffffff;
-    --text-color: #333;
-    --primary-color: #007bff;
-    --border-color: #ddd;
+    --bg-color: #f7f1e6;
+    --panel-color: #fffcf6;
+    --surface-sunken: #fbf6ec;
+    --surface-hover: #fdf1dc;
+    --text-color: #2b2230;
+    --text-muted: #6e6168;
+    --border-color: #e6d9c3;
+    --border-soft: #efe5d4;
+
+    /* forge gold: buttons, links, active states */
+    --primary-color: #a8580c;
+    --primary-hover: #87450a;
+    --gold-light: #f8c96a;
+    --gold-mid: #e29a2e;
+    --gold-deep: #b8690f;
+    --on-gold: #2e1a05;
+    --gold-gradient: linear-gradient(180deg, var(--gold-light) 0%, var(--gold-mid) 100%);
+    --gold-gradient-hover: linear-gradient(180deg, #f5bb4c 0%, #cf8418 100%);
+    --gold-text-gradient: linear-gradient(180deg, #d9891c 0%, #a65a0d 100%);
+
+    /* mandala spectrum: headings, rules, highlights */
+    --m-orange: #f08519;
+    --m-red: #e0404d;
+    --m-magenta: #c03a9b;
+    --m-violet: #6a4fd3;
+    --m-blue: #2f74d8;
+    --m-teal: #12998a;
+    --mandala-gradient: linear-gradient(90deg, var(--m-orange), var(--m-red), var(--m-magenta), var(--m-violet), var(--m-blue), var(--m-teal));
+    --mandala-conic: conic-gradient(from 180deg, var(--m-orange), var(--m-red), var(--m-magenta), var(--m-violet), var(--m-blue), var(--m-teal), var(--m-orange));
+
+    --focus-ring: 0 0 0 3px rgba(226, 154, 46, 0.35);
+    --shadow-panel: 0 1px 2px rgba(74, 46, 12, 0.06), 0 6px 18px rgba(74, 46, 12, 0.08);
 }
 
 body {
@@ -15,6 +48,19 @@ body {
     justify-content: center;
     align-items: flex-start;
     min-height: 100vh;
+    accent-color: var(--gold-deep);
+}
+
+/* thin mandala-spectrum band across the top of the app */
+body::before {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: var(--mandala-gradient);
+    z-index: 1001;
 }
 
 /* body is a flex row, so without an explicit width #main-content shrinks to
@@ -41,8 +87,9 @@ body {
     max-width: 350px;
     background-color: var(--panel-color);
     padding: 1rem;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    border-radius: 12px;
+    border: 1px solid var(--border-soft);
+    box-shadow: var(--shadow-panel);
     align-self: flex-start;
     height: 90vh;
     overflow-y: auto;
@@ -51,7 +98,7 @@ body {
 h1 {
     margin-top: 0;
     font-size: 1.8rem;
-    color: var(--primary-color);
+    color: var(--text-color);
     border-bottom: 2px solid var(--border-color);
     padding-bottom: 0.5rem;
     margin-bottom: 1.5rem;
@@ -60,7 +107,7 @@ h1 {
 .control-group {
     margin-bottom: 0.6rem;
     padding-bottom: 0.45rem;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid var(--border-soft);
 }
 
 .control-group:last-child {
@@ -70,23 +117,29 @@ h1 {
 .control-section {
     margin-bottom: 0.9rem;
     padding: 0.55rem 0.65rem;
-    background-color: #fafafa;
-    border-radius: 6px;
-    border: 1px solid #eee;
+    background-color: var(--surface-sunken);
+    border-radius: 8px;
+    border: 1px solid var(--border-soft);
 }
 
 .control-section h3 {
     margin: 0 0 0.45rem 0;
     font-size: 1rem;
-    color: var(--primary-color);
+    color: var(--text-color);
     display: flex;
     align-items: center;
     gap: 0.5rem;
 }
 
+/* small mandala-spectrum disc in place of the old gear emoji */
 .control-section h3::before {
-    content: "⚙️";
-    font-size: 0.9rem;
+    content: "";
+    flex: none;
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 50%;
+    background: var(--mandala-conic);
+    box-shadow: inset 0 0 0 2px var(--surface-sunken);
 }
 
 .control-group label {
@@ -106,17 +159,28 @@ select {
     width: 100%;
     padding: 0.5rem;
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 6px;
     box-sizing: border-box;
+    background-color: #fff;
+    color: var(--text-color);
+}
+
+input[type="text"]:focus,
+select:focus {
+    outline: none;
+    border-color: var(--gold-mid);
+    box-shadow: var(--focus-ring);
 }
 
 button {
     width: 100%;
     padding: 0.75rem;
-    border: none;
-    border-radius: 4px;
-    background-color: var(--primary-color);
-    color: white;
+    border: 1px solid #c98219;
+    border-radius: 8px;
+    background-color: var(--gold-mid);
+    background-image: var(--gold-gradient);
+    color: var(--on-gold);
+    font-weight: 600;
     font-size: 1rem;
     cursor: pointer;
     transition: all 0.2s;
@@ -169,17 +233,18 @@ button {
 .ring-select-btn {
     margin-bottom: 0;
     padding: 0.45rem 0.35rem;
-    background-color: #f8f9fa;
+    background: #fff;
     color: var(--text-color);
     border: 1px solid var(--border-color);
     font-size: 0.85rem;
+    font-weight: 500;
 }
 
 .ring-select-btn:hover,
 .ring-select-btn.active {
-    background-color: var(--primary-color);
-    border-color: var(--primary-color);
-    color: white;
+    background: var(--gold-gradient);
+    border-color: #c98219;
+    color: var(--on-gold);
 }
 
 .preset-buttons {
@@ -192,25 +257,22 @@ button {
 .preset-btn {
     padding: 0.5rem;
     font-size: 0.9rem;
-    background-color: #f8f9fa;
+    background: #fff;
     color: var(--text-color);
     border: 1px solid var(--border-color);
     margin-bottom: 0;
 }
 
-.preset-btn:hover {
-    background-color: var(--primary-color);
-    color: white;
-}
-
+.preset-btn:hover,
 .preset-btn.active {
-    background-color: var(--primary-color);
-    color: white;
+    background: var(--gold-gradient);
+    border-color: #c98219;
+    color: var(--on-gold);
 }
 
 .help-text {
     font-size: 0.75rem;
-    color: #666;
+    color: var(--text-muted);
     margin-top: 0.15rem;
     font-style: italic;
 }
@@ -220,7 +282,7 @@ button {
     top: 0;
     background-color: var(--panel-color);
     padding: 1rem 0;
-    border-bottom: 2px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
     margin-bottom: 1rem;
     z-index: 10;
 }
@@ -228,14 +290,15 @@ button {
 .gallery {
     margin-top: 1rem;
     padding: 0.75rem;
-    background-color: #fafafa;
-    border-radius: 6px;
+    background-color: var(--surface-sunken);
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
 }
 
 .gallery h3 {
     margin: 0 0 0.75rem 0;
     font-size: 1rem;
-    color: var(--primary-color);
+    color: var(--text-color);
 }
 
 .gallery-grid {
@@ -248,19 +311,19 @@ button {
 
 .gallery-item {
     aspect-ratio: 1;
-    border: 2px solid #e0e0e0;
+    border: 2px solid var(--border-soft);
     border-radius: 6px;
     cursor: pointer;
     transition: all 0.2s;
     overflow: hidden;
     background-color: white;
     padding: 2px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 3px rgba(74, 46, 12, 0.1);
 }
 
 .gallery-item:hover {
-    border-color: var(--primary-color);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    border-color: var(--gold-mid);
+    box-shadow: 0 2px 8px rgba(74, 46, 12, 0.18);
     transform: translateY(-1px);
 }
 
@@ -280,17 +343,47 @@ button {
     grid-column: 1 / -1;
     text-align: center;
     padding: 2rem 1rem;
-    color: #666;
+    color: var(--text-muted);
     font-style: italic;
 }
 
 button:hover {
-    background-color: #0056b3;
+    background-image: var(--gold-gradient-hover);
 }
 
-button:disabled {
-    background-color: #9aa5b1;
+button:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+button:disabled,
+button:disabled:hover {
+    background: #ece4d6;
+    border-color: #ddd1bd;
+    color: #9a8d82;
     cursor: not-allowed;
+}
+
+/* Secondary actions: same shape as the gold primary buttons, but quiet, so
+   Generate stays the one obvious action */
+#save-btn,
+#print-btn,
+#regenerate-ring-btn,
+#fit-to-page,
+.debug-bar button {
+    background: #fff;
+    border: 1px solid var(--border-color);
+    color: var(--primary-color);
+}
+
+#save-btn:hover,
+#print-btn:hover,
+#regenerate-ring-btn:not(:disabled):hover,
+#fit-to-page:hover,
+.debug-bar button:hover {
+    background: var(--surface-hover);
+    border-color: var(--gold-mid);
+    color: var(--primary-hover);
 }
 
 .control-group label.checkbox-inline {
@@ -328,21 +421,21 @@ button:disabled {
 
 .category-checkboxes .checkbox-group {
     padding: 0.5rem;
-    background-color: white;
-    border-radius: 4px;
-    border: 1px solid #eee;
+    background-color: #fff;
+    border-radius: 6px;
+    border: 1px solid var(--border-soft);
     margin-top: 0;
 }
 
 .category-checkboxes .checkbox-group:hover {
-    background-color: #f0f8ff;
-    border-color: var(--primary-color);
+    background-color: var(--surface-hover);
+    border-color: var(--gold-mid);
 }
 
 .category-checkboxes .checkbox-group.is-unavailable,
 .category-checkboxes .checkbox-group.is-unavailable:hover {
-    background-color: #f5f5f5;
-    border-color: #eee;
+    background-color: var(--surface-sunken);
+    border-color: var(--border-soft);
     opacity: 0.6;
 }
 
@@ -352,17 +445,17 @@ button:disabled {
 
 .category-desc {
     font-size: 0.75rem;
-    color: #666;
+    color: var(--text-muted);
     margin-left: auto;
     font-style: italic;
 }
 
 .warning-text {
-    color: #dc3545;
+    color: #b3263a;
     font-size: 0.85rem;
     padding: 0.5rem;
-    background-color: #fff3f3;
-    border: 1px solid #ffcccc;
+    background-color: #fdf0f0;
+    border: 1px solid #f2c2c6;
     border-radius: 4px;
     margin-top: 0.5rem;
 }
@@ -374,9 +467,10 @@ button:disabled {
     max-height: 90vh;
     display: flex;
     flex-direction: column;
-    background-color: #f5f5f5;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    background-color: var(--surface-sunken);
+    border-radius: 12px;
+    border: 1px solid var(--border-soft);
+    box-shadow: var(--shadow-panel);
     overflow: hidden;
 }
 
@@ -391,9 +485,9 @@ button:disabled {
 }
 
 .zoom-controls button {
-    padding: 0.25rem 0.5rem;
+    padding: 0.25rem 0.6rem;
     margin: 0 0.25rem;
-    background-color: #f8f9fa;
+    background: #fff;
     color: var(--text-color);
     border: 1px solid var(--border-color);
     border-radius: 4px;
@@ -403,13 +497,14 @@ button:disabled {
 }
 
 .zoom-controls button:hover {
-    background-color: var(--primary-color);
-    color: white;
+    background: var(--gold-gradient);
+    border-color: #c98219;
+    color: var(--on-gold);
 }
 
 .zoom-level {
     font-size: 0.9rem;
-    color: #666;
+    color: var(--text-muted);
     min-width: 60px;
     text-align: center;
 }
@@ -421,17 +516,18 @@ button:disabled {
     align-items: center;
     padding: 2rem;
     overflow: auto;
-    background: linear-gradient(45deg, #f0f0f0 25%, transparent 25%), 
-                linear-gradient(-45deg, #f0f0f0 25%, transparent 25%), 
-                linear-gradient(45deg, transparent 75%, #f0f0f0 75%), 
-                linear-gradient(-45deg, transparent 75%, #f0f0f0 75%);
+    background-color: var(--surface-sunken);
+    background-image: linear-gradient(45deg, #f2eadc 25%, transparent 25%),
+                linear-gradient(-45deg, #f2eadc 25%, transparent 25%),
+                linear-gradient(45deg, transparent 75%, #f2eadc 75%),
+                linear-gradient(-45deg, transparent 75%, #f2eadc 75%);
     background-size: 20px 20px;
     background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
 }
 
 .paper-sheet {
     background-color: white;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 4px 16px rgba(74, 46, 12, 0.16);
     border-radius: 4px;
     display: flex;
     justify-content: center;
@@ -492,13 +588,13 @@ button:disabled {
 }
 
 .selected-ring {
-    filter: drop-shadow(0 0 4px #007bff);
+    filter: drop-shadow(0 0 4px var(--m-magenta));
 }
 
 .loader,
 .error {
     font-size: 1.5rem;
-    color: #888;
+    color: var(--text-muted);
 }
 
 .print-root {
@@ -524,7 +620,7 @@ button:disabled {
 
     #loading-screen,
     #main-content > .app-container,
-    #main-content > div[style*="position: fixed"] {
+    #main-content > .auth-bar {
         display: none !important;
     }
 
@@ -636,12 +732,12 @@ button:disabled {
     gap: 10px;
     margin: 0 0 6px;
     padding: 6px 10px;
-    background: #eef1f6;
-    border: 1px solid #d4dae6;
+    background: var(--panel-color);
+    border: 1px solid var(--border-soft);
     border-radius: 6px;
     font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
     font-size: 0.72rem;
-    color: #33415c;
+    color: #4a3d47;
 }
 
 .debug-bar.is-invalid {
@@ -684,9 +780,52 @@ button:disabled {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    border-bottom: 2px solid var(--border-color);
-    padding-bottom: 0.5rem;
-    margin-bottom: 1.5rem;
+    padding-bottom: 0.75rem;
+    margin-bottom: 1rem;
+    position: relative;
+}
+
+/* mandala-spectrum rule under the wordmark */
+.title-row::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--mandala-gradient);
+    opacity: 0.85;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+}
+
+.brand-emblem {
+    width: 2.1rem;
+    height: 2.1rem;
+    flex: none;
+}
+
+.brand-mandala,
+.brand-forge {
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+}
+
+.brand-mandala {
+    background-image: linear-gradient(90deg, var(--m-orange) 0%, var(--m-red) 30%, var(--m-magenta) 60%, var(--m-violet) 85%, var(--m-blue) 100%);
+}
+
+.brand-forge {
+    background-image: var(--gold-text-gradient);
 }
 
 .title-row h1 {
@@ -701,9 +840,9 @@ button:disabled {
     margin: 0;
     padding: 0.35rem 0.6rem;
     font-size: 0.85rem;
-    background-color: transparent;
+    background: transparent;
     color: var(--primary-color);
-    border: 1px solid var(--primary-color);
+    border: 1px solid var(--border-color);
     border-radius: 999px;
     white-space: nowrap;
     display: inline-flex;
@@ -712,8 +851,9 @@ button:disabled {
 }
 
 .help-button:hover {
-    background-color: var(--primary-color);
-    color: white;
+    background: var(--surface-hover);
+    border-color: var(--gold-mid);
+    color: var(--primary-hover);
 }
 
 .help-button-icon {
@@ -723,15 +863,10 @@ button:disabled {
     width: 1.1rem;
     height: 1.1rem;
     border-radius: 50%;
-    background-color: var(--primary-color);
-    color: white;
+    background: var(--gold-gradient);
+    color: var(--on-gold);
     font-weight: 700;
     font-size: 0.75rem;
-}
-
-.help-button:hover .help-button-icon {
-    background-color: white;
-    color: var(--primary-color);
 }
 
 .help-dialog {
@@ -740,14 +875,14 @@ button:disabled {
     padding: 0;
     border: none;
     border-radius: 10px;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 12px 40px rgba(46, 26, 5, 0.3);
     color: var(--text-color);
     background-color: var(--panel-color);
     overflow: auto;
 }
 
 .help-dialog::backdrop {
-    background-color: rgba(20, 24, 32, 0.6);
+    background-color: rgba(43, 34, 48, 0.55);
 }
 
 .help-header {
@@ -761,7 +896,7 @@ button:disabled {
 .help-header h2 {
     margin: 0;
     font-size: 1.2rem;
-    color: var(--primary-color);
+    color: var(--text-color);
 }
 
 .help-close {
@@ -771,12 +906,13 @@ button:disabled {
     font-size: 1.8rem;
     line-height: 1;
     background: none;
-    color: #666;
+    border: none;
+    color: var(--text-muted);
 }
 
 .help-close:hover {
     background: none;
-    color: #000;
+    color: var(--text-color);
 }
 
 .help-stage {
@@ -812,7 +948,7 @@ button:disabled {
     font-size: 0.8rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #777;
+    color: var(--text-muted);
 }
 
 .help-slide h3 {
@@ -855,16 +991,17 @@ button:disabled {
     height: 0.65rem;
     margin: 0;
     padding: 0;
+    border: none;
     border-radius: 50%;
-    background-color: #ccc;
+    background: #ddd0bb;
 }
 
 .help-dot:hover {
-    background-color: #999;
+    background: #bfae93;
 }
 
 .help-dot.active {
-    background-color: var(--primary-color);
+    background: var(--mandala-conic);
 }
 
 @media (max-width: 600px) {
@@ -883,4 +1020,97 @@ button:disabled {
     .help-dialog {
         display: none !important;
     }
+}
+
+/* --- Auth bar and loading screen (moved out of inline styles) --- */
+.auth-bar {
+    position: fixed;
+    top: 4px;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.45rem 0.75rem;
+    background: rgba(255, 252, 246, 0.92);
+    border: 1px solid var(--border-soft);
+    border-top: none;
+    border-right: none;
+    border-bottom-left-radius: 10px;
+    font-size: 0.9rem;
+    z-index: 1000;
+}
+
+.auth-bar button {
+    width: auto;
+    margin: 0;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.85rem;
+    background: #fff;
+    border: 1px solid var(--border-color);
+    color: var(--primary-color);
+}
+
+.auth-bar button:hover {
+    background: var(--surface-hover);
+    border-color: var(--gold-mid);
+}
+
+.loading-screen {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    width: 100%;
+    background: var(--bg-color);
+    color: var(--text-color);
+}
+
+.loading-inner {
+    text-align: center;
+}
+
+.loading-emblem {
+    width: 64px;
+    height: 64px;
+    display: block;
+    margin: 0 auto 1rem;
+    animation: mf-spin 2.4s linear infinite;
+}
+
+.loading-text {
+    font-size: 1rem;
+    color: var(--text-muted);
+}
+
+@keyframes mf-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .loading-emblem { animation: none; }
+}
+
+@media print {
+    body::before,
+    .auth-bar {
+        display: none !important;
+    }
+}
+
+/* Preview toolbar: keep zoom and Fit to Page compact on one line */
+.zoom-controls {
+    display: flex;
+    align-items: center;
+}
+
+.preview-controls #fit-to-page {
+    width: auto;
+    margin: 0;
+    padding: 0.3rem 0.9rem;
+    font-size: 0.9rem;
+}
+
+.title-row h1.brand {
+    font-size: 1.55rem;
+    min-width: 0;
 }
