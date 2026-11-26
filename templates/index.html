@@ -29,7 +29,12 @@
         <div class="app-container">
         <div class="controls-container">
             <div class="sticky-actions">
-                <h1>MandalaForge</h1>
+                <div class="title-row">
+                    <h1>MandalaForge</h1>
+                    <button id="help-btn" class="help-button" type="button" aria-haspopup="dialog" aria-controls="help-dialog" title="How to use MandalaForge">
+                        <span class="help-button-icon" aria-hidden="true">?</span> How to use
+                    </button>
+                </div>
 
                 <div class="action-row">
                     <button id="randomize-btn" class="dice-button" type="button" aria-label="Randomize all settings" title="Randomize all settings">
@@ -175,7 +180,28 @@
         </section>
     </div>
 
+    <dialog class="help-dialog" id="help-dialog" aria-labelledby="help-title">
+        <div class="help-header">
+            <h2 id="help-title">How to use MandalaForge</h2>
+            <button type="button" class="help-close" id="help-close" aria-label="Close help">&times;</button>
+        </div>
+        <div class="help-stage">
+            <button type="button" class="help-nav help-prev" id="help-prev" aria-label="Previous step">&#8249;</button>
+            <figure class="help-slide" aria-live="polite">
+                <img id="help-image" alt="">
+                <figcaption>
+                    <div class="help-step-count" id="help-step-count"></div>
+                    <h3 id="help-step-title"></h3>
+                    <p id="help-step-text"></p>
+                </figcaption>
+            </figure>
+            <button type="button" class="help-nav help-next" id="help-next" aria-label="Next step">&#8250;</button>
+        </div>
+        <div class="help-dots" id="help-dots" role="tablist" aria-label="Steps"></div>
+    </dialog>
+
     <script src="../static/script.js"></script>
+    <script src="../static/help.js"></script>
     </div> <!-- End main-content -->
 
     <!-- Firebase scripts -->
