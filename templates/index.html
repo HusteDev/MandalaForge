@@ -27,6 +27,10 @@
             <button id="signOutButton" type="button">Sign Out</button>
         </div>
 
+        <!-- embed:app:start
+             Everything from here to the matching end marker is the app itself. coloring.husted.dev copies this
+             block verbatim into its own sign-in shell (sites/coloring in husted-dot-dev), rewriting
+             ../static/ to /static/, so keep it free of anything specific to this local page. -->
         <div class="app-container">
         <div class="controls-container">
             <div class="sticky-actions">
@@ -203,6 +207,7 @@
         </div>
         <div class="help-dots" id="help-dots" role="tablist" aria-label="Steps"></div>
     </dialog>
+    <!-- embed:app:end -->
 
     <script src="../static/script.js"></script>
     <script src="../static/help.js"></script>

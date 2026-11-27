@@ -4,7 +4,7 @@
  * Arrow keys or the arrow buttons move between steps; Esc or the close button
  * (or a click on the backdrop) closes it.
  */
-document.addEventListener('DOMContentLoaded', () => {
+function initColoringHelp() {
     const HELP_STEPS = [
         {
             image: 'step-1-overview.jpg',
@@ -121,4 +121,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     dialog.addEventListener('close', () => helpBtn.focus());
-});
+}
+
+// Start once the DOM is ready. A page that adds this script after load (coloring.husted.dev does, once
+// sign-in is confirmed) has already passed DOMContentLoaded, so in that case it starts at once.
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initColoringHelp);
+} else {
+    initColoringHelp();
+}

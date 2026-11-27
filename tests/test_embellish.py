@@ -392,8 +392,10 @@ def test_beads_are_mirrored_rows_in_each_half_cell(cell_kwargs):
         assert len(rights) == len(lefts) == len(beads) // 2 and 1 <= len(rights) <= 3
         seen.add(len(rights))
         for right, left in zip(rights, lefts):
-            assert sorted((p.radial, -p.angular) for p in left.points) == pytest.approx(
-                sorted((p.radial, p.angular) for p in right.points))
+            # pytest.approx rejects nested sequences, so the sorted (radial, angular) pairs are flattened.
+            mirrored = [v for pair in sorted((p.radial, -p.angular) for p in left.points) for v in pair]
+            original = [v for pair in sorted((p.radial, p.angular) for p in right.points) for v in pair]
+            assert mirrored == pytest.approx(original)
             assert _centre(right).radial == pytest.approx((r1 + r2) / 2.0)
             assert lens_edge < min(p.angular for p in right.points) and max(p.angular for p in right.points) < 1.0
         centres = [_centre(b).angular for b in rights]
