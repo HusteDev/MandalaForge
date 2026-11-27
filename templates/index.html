@@ -5,6 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MandalaForge</title>
+    <!-- Sets light or dark before anything paints; see static/theme.js -->
+    <script src="../static/theme.js"></script>
     <link rel="stylesheet" href="https://shared-public.web.app/styles.css">
     <link rel="stylesheet" href="../static/style.css">
     <link rel="icon" type="image/svg+xml" href="../static/emblem.svg">
@@ -165,6 +167,17 @@
                     <button id="zoom-in">+</button>
                 </div>
                 <button id="fit-to-page">Fit to Page</button>
+                <button id="theme-toggle" class="theme-toggle" type="button" data-theme-toggle aria-label="Switch theme" title="Switch theme">
+                    <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" fill="currentColor"/>
+                    </svg>
+                    <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <circle cx="12" cy="12" r="4.5" fill="currentColor"/>
+                        <g stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                            <path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/>
+                        </g>
+                    </svg>
+                </button>
             </div>
             <div class="debug-bar" id="debug-bar" hidden>
                 <div class="debug-bar-values" id="debug-bar-values"></div>
