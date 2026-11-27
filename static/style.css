@@ -3,7 +3,14 @@
    orange -> red -> magenta -> violet -> blue -> teal gradient for accents,
    burnished gold from the gear for primary actions, and warm off-white
    surfaces instead of the logo's black background. Coloring pages stay
-   black line art on white paper. */
+   black line art on white paper.
+
+   Dark theme: <html data-theme="dark">, set by static/theme.js from the
+   visitor's saved choice or the OS preference. It echoes the logo's black
+   background: near-black violet-tinted surfaces, the same gold for primary
+   actions, and a slightly brighter mandala spectrum. Only the tokens change;
+   the coloring page itself (.paper-sheet, gallery thumbnails, print) stays
+   white paper in both themes. */
 :root {
     --bg-color: #f7f1e6;
     --panel-color: #fffcf6;
@@ -37,6 +44,108 @@
 
     --focus-ring: 0 0 0 3px rgba(226, 154, 46, 0.35);
     --shadow-panel: 0 1px 2px rgba(74, 46, 12, 0.06), 0 6px 18px rgba(74, 46, 12, 0.08);
+    --shadow-thumb: 0 1px 3px rgba(74, 46, 12, 0.1);
+    --shadow-thumb-hover: 0 2px 8px rgba(74, 46, 12, 0.18);
+    --shadow-paper: 0 4px 16px rgba(74, 46, 12, 0.16);
+    --shadow-dialog: 0 12px 40px rgba(46, 26, 5, 0.3);
+    --backdrop: rgba(43, 34, 48, 0.55);
+
+    /* raised controls: inputs, secondary buttons, category rows */
+    --surface-raised: #fff;
+    --auth-bar-bg: rgba(255, 252, 246, 0.92);
+    --gold-border: #c98219;
+    --checker: #f2eadc;
+    --text-code: #4a3d47;
+
+    --disabled-bg: #ece4d6;
+    --disabled-border: #ddd1bd;
+    --disabled-text: #9a8d82;
+
+    --danger-text: #b3263a;
+    --danger-bg: #fdf0f0;
+    --danger-border: #f2c2c6;
+    --danger-strong: #b71c1c;
+    --danger-strong-bg: #ffebee;
+    --danger-strong-border: #ef9a9a;
+    --debug-invalid-bg: #fff4f4;
+    --debug-invalid-border: #efb4b4;
+    --debug-invalid-text: #8a2020;
+    --ok-text: #1b5e20;
+    --ok-bg: #e8f5e9;
+    --ok-border: #a5d6a7;
+
+    --pending-edge: #b7791f;
+    --pending-text: #8a5a10;
+    --pending-label-border: #f0c36a;
+    --pending-label-bg: #fff8e1;
+    --pending-label-text: #7a4f01;
+
+    --dot: #ddd0bb;
+    --dot-hover: #bfae93;
+
+    /* the coloring page is printable paper in every theme */
+    --paper: #fff;
+}
+
+:root[data-theme="dark"] {
+    --bg-color: #0d0b10;
+    --panel-color: #17141b;
+    --surface-sunken: #121015;
+    --surface-hover: #2b2117;
+    --surface-raised: #211d26;
+    --text-color: #f2eadf;
+    --text-muted: #a99ca6;
+    --text-code: #cfc3cc;
+    --border-color: #3a3341;
+    --border-soft: #2a2430;
+
+    --primary-color: #f0b04a;
+    --primary-hover: #f8c96a;
+    --gold-border: #b8690f;
+    --gold-text-gradient: linear-gradient(180deg, #f8c96a 0%, #e29a2e 100%);
+
+    --m-orange: #ff9a3c;
+    --m-red: #f25a6b;
+    --m-magenta: #de58b9;
+    --m-violet: #8d76f2;
+    --m-blue: #5094f2;
+    --m-teal: #26bba8;
+
+    --focus-ring: 0 0 0 3px rgba(248, 201, 106, 0.4);
+    --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.5), 0 6px 18px rgba(0, 0, 0, 0.45);
+    --shadow-thumb: 0 1px 3px rgba(0, 0, 0, 0.5);
+    --shadow-thumb-hover: 0 2px 8px rgba(0, 0, 0, 0.6);
+    --shadow-paper: 0 4px 20px rgba(0, 0, 0, 0.6);
+    --shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.7);
+    --backdrop: rgba(0, 0, 0, 0.7);
+    --auth-bar-bg: rgba(23, 20, 27, 0.92);
+    --checker: #18151c;
+
+    --disabled-bg: #221e26;
+    --disabled-border: #2f2a35;
+    --disabled-text: #6f6570;
+
+    --danger-text: #ff8d99;
+    --danger-bg: #2e1419;
+    --danger-border: #6a2a33;
+    --danger-strong: #ff8d99;
+    --danger-strong-bg: #2e1419;
+    --danger-strong-border: #6a2a33;
+    --debug-invalid-bg: #2a1317;
+    --debug-invalid-border: #6a2a33;
+    --debug-invalid-text: #ffb3bb;
+    --ok-text: #8fd694;
+    --ok-bg: #12261a;
+    --ok-border: #2e5a37;
+
+    --pending-edge: #e29a2e;
+    --pending-text: #f8c96a;
+    --pending-label-border: #8a5a10;
+    --pending-label-bg: #2e2110;
+    --pending-label-text: #f8c96a;
+
+    --dot: #3a3341;
+    --dot-hover: #5a5063;
 }
 
 body {
@@ -161,8 +270,12 @@ select {
     border: 1px solid var(--border-color);
     border-radius: 6px;
     box-sizing: border-box;
-    background-color: #fff;
+    background-color: var(--surface-raised);
     color: var(--text-color);
+}
+
+input[type="text"]::placeholder {
+    color: var(--text-muted);
 }
 
 input[type="text"]:focus,
@@ -175,7 +288,7 @@ select:focus {
 button {
     width: 100%;
     padding: 0.75rem;
-    border: 1px solid #c98219;
+    border: 1px solid var(--gold-border);
     border-radius: 8px;
     background-color: var(--gold-mid);
     background-image: var(--gold-gradient);
@@ -233,7 +346,7 @@ button {
 .ring-select-btn {
     margin-bottom: 0;
     padding: 0.45rem 0.35rem;
-    background: #fff;
+    background: var(--surface-raised);
     color: var(--text-color);
     border: 1px solid var(--border-color);
     font-size: 0.85rem;
@@ -243,7 +356,7 @@ button {
 .ring-select-btn:hover,
 .ring-select-btn.active {
     background: var(--gold-gradient);
-    border-color: #c98219;
+    border-color: var(--gold-border);
     color: var(--on-gold);
 }
 
@@ -257,7 +370,7 @@ button {
 .preset-btn {
     padding: 0.5rem;
     font-size: 0.9rem;
-    background: #fff;
+    background: var(--surface-raised);
     color: var(--text-color);
     border: 1px solid var(--border-color);
     margin-bottom: 0;
@@ -266,7 +379,7 @@ button {
 .preset-btn:hover,
 .preset-btn.active {
     background: var(--gold-gradient);
-    border-color: #c98219;
+    border-color: var(--gold-border);
     color: var(--on-gold);
 }
 
@@ -316,14 +429,14 @@ button {
     cursor: pointer;
     transition: all 0.2s;
     overflow: hidden;
-    background-color: white;
+    background-color: var(--paper);
     padding: 2px;
-    box-shadow: 0 1px 3px rgba(74, 46, 12, 0.1);
+    box-shadow: var(--shadow-thumb);
 }
 
 .gallery-item:hover {
     border-color: var(--gold-mid);
-    box-shadow: 0 2px 8px rgba(74, 46, 12, 0.18);
+    box-shadow: var(--shadow-thumb-hover);
     transform: translateY(-1px);
 }
 
@@ -358,9 +471,9 @@ button:focus-visible {
 
 button:disabled,
 button:disabled:hover {
-    background: #ece4d6;
-    border-color: #ddd1bd;
-    color: #9a8d82;
+    background: var(--disabled-bg);
+    border-color: var(--disabled-border);
+    color: var(--disabled-text);
     cursor: not-allowed;
 }
 
@@ -371,7 +484,7 @@ button:disabled:hover {
 #regenerate-ring-btn,
 #fit-to-page,
 .debug-bar button {
-    background: #fff;
+    background: var(--surface-raised);
     border: 1px solid var(--border-color);
     color: var(--primary-color);
 }
@@ -421,7 +534,7 @@ button:disabled:hover {
 
 .category-checkboxes .checkbox-group {
     padding: 0.5rem;
-    background-color: #fff;
+    background-color: var(--surface-raised);
     border-radius: 6px;
     border: 1px solid var(--border-soft);
     margin-top: 0;
@@ -451,11 +564,11 @@ button:disabled:hover {
 }
 
 .warning-text {
-    color: #b3263a;
+    color: var(--danger-text);
     font-size: 0.85rem;
     padding: 0.5rem;
-    background-color: #fdf0f0;
-    border: 1px solid #f2c2c6;
+    background-color: var(--danger-bg);
+    border: 1px solid var(--danger-border);
     border-radius: 4px;
     margin-top: 0.5rem;
 }
@@ -487,7 +600,7 @@ button:disabled:hover {
 .zoom-controls button {
     padding: 0.25rem 0.6rem;
     margin: 0 0.25rem;
-    background: #fff;
+    background: var(--surface-raised);
     color: var(--text-color);
     border: 1px solid var(--border-color);
     border-radius: 4px;
@@ -498,7 +611,7 @@ button:disabled:hover {
 
 .zoom-controls button:hover {
     background: var(--gold-gradient);
-    border-color: #c98219;
+    border-color: var(--gold-border);
     color: var(--on-gold);
 }
 
@@ -517,17 +630,17 @@ button:disabled:hover {
     padding: 2rem;
     overflow: auto;
     background-color: var(--surface-sunken);
-    background-image: linear-gradient(45deg, #f2eadc 25%, transparent 25%),
-                linear-gradient(-45deg, #f2eadc 25%, transparent 25%),
-                linear-gradient(45deg, transparent 75%, #f2eadc 75%),
-                linear-gradient(-45deg, transparent 75%, #f2eadc 75%);
+    background-image: linear-gradient(45deg, var(--checker) 25%, transparent 25%),
+                linear-gradient(-45deg, var(--checker) 25%, transparent 25%),
+                linear-gradient(45deg, transparent 75%, var(--checker) 75%),
+                linear-gradient(-45deg, transparent 75%, var(--checker) 75%);
     background-size: 20px 20px;
     background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
 }
 
 .paper-sheet {
-    background-color: white;
-    box-shadow: 0 4px 16px rgba(74, 46, 12, 0.16);
+    background-color: var(--paper);
+    box-shadow: var(--shadow-paper);
     border-radius: 4px;
     display: flex;
     justify-content: center;
@@ -557,22 +670,22 @@ button:disabled:hover {
 }
 
 .control-group.pending-value {
-    border-left: 3px solid #b7791f;
+    border-left: 3px solid var(--pending-edge);
     padding-left: 0.45rem;
 }
 
 .pending-value-display {
-    color: #8a5a10;
+    color: var(--pending-text);
 }
 
 .pending-label {
     display: inline-flex;
     align-items: center;
     padding: 0.08rem 0.3rem;
-    border: 1px solid #f0c36a;
+    border: 1px solid var(--pending-label-border);
     border-radius: 999px;
-    background-color: #fff8e1;
-    color: #7a4f01;
+    background-color: var(--pending-label-bg);
+    color: var(--pending-label-text);
     font-size: 0.65rem;
     font-weight: 700;
     line-height: 1;
@@ -612,6 +725,7 @@ button:disabled:hover {
     html,
     body {
         background-color: white;
+        color: #000;
         margin: 0;
         padding: 0;
         width: 100%;
@@ -706,15 +820,15 @@ button:disabled:hover {
 }
 
 .validation-status.is-valid {
-    color: #1b5e20;
-    background: #e8f5e9;
-    border-color: #a5d6a7;
+    color: var(--ok-text);
+    background: var(--ok-bg);
+    border-color: var(--ok-border);
 }
 
 .validation-status.is-invalid {
-    color: #b71c1c;
-    background: #ffebee;
-    border-color: #ef9a9a;
+    color: var(--danger-strong);
+    background: var(--danger-strong-bg);
+    border-color: var(--danger-strong-border);
 }
 
 .ring-pattern-name {
@@ -737,13 +851,13 @@ button:disabled:hover {
     border-radius: 6px;
     font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
     font-size: 0.72rem;
-    color: #4a3d47;
+    color: var(--text-code);
 }
 
 .debug-bar.is-invalid {
-    background: #fff4f4;
-    border-color: #efb4b4;
-    color: #8a2020;
+    background: var(--debug-invalid-bg);
+    border-color: var(--debug-invalid-border);
+    color: var(--debug-invalid-text);
 }
 
 .debug-bar-values {
@@ -875,14 +989,14 @@ button:disabled:hover {
     padding: 0;
     border: none;
     border-radius: 10px;
-    box-shadow: 0 12px 40px rgba(46, 26, 5, 0.3);
+    box-shadow: var(--shadow-dialog);
     color: var(--text-color);
     background-color: var(--panel-color);
     overflow: auto;
 }
 
 .help-dialog::backdrop {
-    background-color: rgba(43, 34, 48, 0.55);
+    background-color: var(--backdrop);
 }
 
 .help-header {
@@ -993,11 +1107,11 @@ button:disabled:hover {
     padding: 0;
     border: none;
     border-radius: 50%;
-    background: #ddd0bb;
+    background: var(--dot);
 }
 
 .help-dot:hover {
-    background: #bfae93;
+    background: var(--dot-hover);
 }
 
 .help-dot.active {
@@ -1031,7 +1145,7 @@ button:disabled:hover {
     align-items: center;
     gap: 0.6rem;
     padding: 0.45rem 0.75rem;
-    background: rgba(255, 252, 246, 0.92);
+    background: var(--auth-bar-bg);
     border: 1px solid var(--border-soft);
     border-top: none;
     border-right: none;
@@ -1045,7 +1159,7 @@ button:disabled:hover {
     margin: 0;
     padding: 0.3rem 0.8rem;
     font-size: 0.85rem;
-    background: #fff;
+    background: var(--surface-raised);
     border: 1px solid var(--border-color);
     color: var(--primary-color);
 }
@@ -1113,4 +1227,60 @@ button:disabled:hover {
 .title-row h1.brand {
     font-size: 1.55rem;
     min-width: 0;
+}
+
+/* --- Theme toggle (light / dark), left end of the preview toolbar (the
+   fixed sign-out bar covers the right end) --- */
+.preview-controls {
+    position: relative;
+}
+
+.preview-controls .theme-toggle {
+    position: absolute;
+    left: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.theme-toggle {
+    flex: none;
+    width: 2rem;
+    height: 2rem;
+    margin: 0;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: var(--primary-color);
+    border: 1px solid var(--border-color);
+    border-radius: 50%;
+}
+
+.theme-toggle:hover {
+    background: var(--surface-hover);
+    border-color: var(--gold-mid);
+    color: var(--primary-hover);
+}
+
+.theme-icon {
+    width: 1.05rem;
+    height: 1.05rem;
+    display: block;
+}
+
+/* the icon shows the theme a click switches to */
+.theme-icon-sun,
+:root[data-theme="dark"] .theme-icon-moon {
+    display: none;
+}
+
+:root[data-theme="dark"] .theme-icon-sun {
+    display: block;
+}
+
+@media print {
+    .theme-toggle {
+        display: none !important;
+    }
 }

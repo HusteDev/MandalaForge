@@ -923,6 +923,31 @@ function initColoringApp() {
     initialize();
 }
 
+// The theme toggle needs static/theme.js. Pages load it in <head> so the right theme paints first; a
+// page that does not (an older sign-in shell) gets it here, from the same folder as this script, so
+// the toggle still works there, just after a brief flash of the default theme.
+const COLORING_SCRIPT_SRC = document.currentScript ? document.currentScript.src : '';
+
+function ensureThemeScript() {
+    if (window.MandalaForgeTheme) {
+        console.log('LOGGING: [theme] theme.js already loaded by the page');
+        window.MandalaForgeTheme.sync();
+        return;
+    }
+    if (!COLORING_SCRIPT_SRC) {
+        console.warn('LOGGING: [theme] cannot locate theme.js: script.js has no src');
+        return;
+    }
+    const themeSrc = new URL('theme.js', COLORING_SCRIPT_SRC).href;
+    console.log('LOGGING: [theme] page did not load theme.js, loading', themeSrc);
+    const script = document.createElement('script');
+    script.src = themeSrc;
+    script.addEventListener('error', () => console.error('LOGGING: [theme] failed to load', themeSrc));
+    document.head.appendChild(script);
+}
+
+ensureThemeScript();
+
 // Start once the DOM is ready. A page that adds this script after load (coloring.husted.dev does, once
 // sign-in is confirmed) has already passed DOMContentLoaded, so in that case it starts at once.
 if (document.readyState === 'loading') {

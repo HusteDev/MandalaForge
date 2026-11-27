@@ -5,6 +5,8 @@
     <title>Sign in · MandalaForge</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/svg+xml" href="static/emblem.svg">
+    <!-- Sets light or dark before anything paints; see static/theme.js -->
+    <script src="static/theme.js"></script>
     <style>
         :root {
             --bg-color: #f7f1e6;
@@ -18,6 +20,34 @@
             --gold-gradient: linear-gradient(180deg, #f8c96a 0%, #e29a2e 100%);
             --gold-gradient-hover: linear-gradient(180deg, #f5bb4c 0%, #cf8418 100%);
             --mandala-gradient: linear-gradient(90deg, #f08519, #e0404d, #c03a9b, #6a4fd3, #2f74d8, #12998a);
+            --brand-mandala-gradient: linear-gradient(90deg, #f08519 0%, #e0404d 30%, #c03a9b 60%, #6a4fd3 85%, #2f74d8 100%);
+            --brand-forge-gradient: linear-gradient(180deg, #d9891c 0%, #a65a0d 100%);
+            --surface-raised: #fff;
+            --surface-hover: #fdf1dc;
+            --gold-border: #c98219;
+            --danger-text: #b3263a;
+            --shadow-card: 0 1px 2px rgba(74, 46, 12, 0.06), 0 10px 30px rgba(74, 46, 12, 0.1);
+            --shadow-raised: 0 1px 2px rgba(74, 46, 12, 0.08);
+        }
+
+        /* dark theme, echoing the logo's black background; matches static/style.css */
+        :root[data-theme="dark"] {
+            --bg-color: #0d0b10;
+            --panel-color: #17141b;
+            --text-color: #f2eadf;
+            --text-muted: #a99ca6;
+            --border-color: #3a3341;
+            --border-soft: #2a2430;
+            --primary-color: #f0b04a;
+            --mandala-gradient: linear-gradient(90deg, #ff9a3c, #f25a6b, #de58b9, #8d76f2, #5094f2, #26bba8);
+            --brand-mandala-gradient: linear-gradient(90deg, #ff9a3c 0%, #f25a6b 30%, #de58b9 60%, #8d76f2 85%, #5094f2 100%);
+            --brand-forge-gradient: linear-gradient(180deg, #f8c96a 0%, #e29a2e 100%);
+            --surface-raised: #211d26;
+            --surface-hover: #2b2117;
+            --gold-border: #b8690f;
+            --danger-text: #ff8d99;
+            --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 30px rgba(0, 0, 0, 0.5);
+            --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.5);
         }
 
         body {
@@ -48,7 +78,7 @@
             padding: 2rem 2.25rem;
             border-radius: 14px;
             border: 1px solid var(--border-soft);
-            box-shadow: 0 1px 2px rgba(74, 46, 12, 0.06), 0 10px 30px rgba(74, 46, 12, 0.1);
+            box-shadow: var(--shadow-card);
             text-align: center;
             width: 100%;
             max-width: 340px;
@@ -78,11 +108,11 @@
         }
 
         .brand-mandala {
-            background-image: linear-gradient(90deg, #f08519 0%, #e0404d 30%, #c03a9b 60%, #6a4fd3 85%, #2f74d8 100%);
+            background-image: var(--brand-mandala-gradient);
         }
 
         .brand-forge {
-            background-image: linear-gradient(180deg, #d9891c 0%, #a65a0d 100%);
+            background-image: var(--brand-forge-gradient);
         }
 
         .tagline {
@@ -99,7 +129,7 @@
             margin: 10px 0;
             border: 1px solid var(--border-color);
             border-radius: 8px;
-            background: #fff;
+            background: var(--surface-raised);
             color: var(--text-color);
             font-size: 0.95rem;
         }
@@ -113,7 +143,7 @@
         button {
             width: 100%;
             padding: 11px 20px;
-            border: 1px solid #c98219;
+            border: 1px solid var(--gold-border);
             background-color: #e29a2e;
             background-image: var(--gold-gradient);
             color: var(--on-gold);
@@ -139,7 +169,7 @@
         }
 
         #error-message {
-            color: #b3263a;
+            color: var(--danger-text);
             min-height: 1em;
             margin: 0.75rem 0 0;
         }
@@ -148,16 +178,53 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            background: #fff;
+            background: var(--surface-raised);
             color: var(--text-color);
             border: 1px solid var(--border-color);
-            box-shadow: 0 1px 2px rgba(74, 46, 12, 0.08);
+            box-shadow: var(--shadow-raised);
             font-weight: 500;
         }
 
         .google-btn:hover {
-            background: #fdf1dc;
+            background: var(--surface-hover);
             border-color: #e29a2e;
+        }
+
+        /* light / dark toggle, top right */
+        .theme-toggle {
+            position: fixed;
+            top: 14px;
+            right: 14px;
+            width: 2.25rem;
+            height: 2.25rem;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--panel-color);
+            color: var(--primary-color);
+            border: 1px solid var(--border-color);
+            border-radius: 50%;
+        }
+
+        .theme-toggle:hover {
+            background: var(--surface-hover);
+            border-color: #e29a2e;
+        }
+
+        .theme-icon {
+            width: 1.1rem;
+            height: 1.1rem;
+            display: block;
+        }
+
+        .theme-icon-sun,
+        :root[data-theme="dark"] .theme-icon-moon {
+            display: none;
+        }
+
+        :root[data-theme="dark"] .theme-icon-sun {
+            display: block;
         }
 
         .google-btn .google-icon {
@@ -169,6 +236,18 @@
 </head>
 
 <body>
+
+    <button id="theme-toggle" class="theme-toggle" type="button" data-theme-toggle aria-label="Switch theme" title="Switch theme">
+        <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" fill="currentColor"/>
+        </svg>
+        <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="4.5" fill="currentColor"/>
+            <g stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/>
+            </g>
+        </svg>
+    </button>
 
     <div class="login-container">
         <img class="login-emblem" src="static/emblem.svg" alt="">
