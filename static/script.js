@@ -8,7 +8,7 @@
  * - Zoom and print functionality
  */
 
-document.addEventListener('DOMContentLoaded', () => {
+function initColoringApp() {
     // Buttons
     const generateBtn = document.getElementById('generate-btn');
     const randomizeBtn = document.getElementById('randomize-btn');
@@ -921,4 +921,12 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     initialize();
-});
+}
+
+// Start once the DOM is ready. A page that adds this script after load (coloring.husted.dev does, once
+// sign-in is confirmed) has already passed DOMContentLoaded, so in that case it starts at once.
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initColoringApp);
+} else {
+    initColoringApp();
+}

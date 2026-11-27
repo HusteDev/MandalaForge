@@ -103,6 +103,18 @@ Before measuring, the pipeline nodes the arrangement, prunes overshoot whiskers 
 
 All of these exit non-zero on failure. `qa_report.py` and `qa_check.py` can write a **visual QA overlay**: every detected region filled with a random pastel, defects in red (floating base motifs in dashed boxes), and reaches traced in green.
 
+## Live site: coloring.husted.dev
+
+coloring.husted.dev serves this repository's `main` behind a sign-in page. The husted-dot-dev repository keeps only that sign-in shell and copies the rest from here at build time, so nothing is synced by hand:
+
+- `static/` as is;
+- the app markup in `templates/index.html` between the `embed:app:start` and `embed:app:end` comments (with `../static/` rewritten to `/static/`), so keep anything specific to the local page, such as its own sign-in bar, outside those markers;
+- every top-level `*.py` except `app.py` and `qa_*.py`, plus `motifs/`, as the engine behind its Cloud Functions. `coloring_api.py` holds the request handling for `/generate` and `/regenerate-ring`; `app.py` and the Cloud Functions both call it, so change request parsing there.
+
+`static/script.js` and `static/help.js` start on `DOMContentLoaded`, or at once if the page has already loaded, because the live site adds them only after sign-in.
+
+Every push to `main` runs the tests (`.github/workflows/deploy-coloring-site.yml`); when they pass, husted-dot-dev builds and deploys the site. If the engine starts needing a new Python package, add it to husted-dot-dev's `functions/requirements.txt` as well, or that deploy stops at its smoke test.
+
 ## Documentation
 
 - `docs/motifs.md`: the motif authoring guide

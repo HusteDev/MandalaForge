@@ -1,0 +1,89 @@
+# Tests every pull request, and deploys coloring.husted.dev whenever MandalaForge main changes.
+#
+# coloring.husted.dev (the husted-dot-dev repository) does not keep its own copy of the engine or the
+# page: it copies them from MandalaForge main at build time. This workflow runs the tests on every push
+# to main and, when they pass, asks husted-dot-dev to rebuild and deploy that site by sending it a
+# repository_dispatch event. The deploy itself (and the Firebase credentials) live in husted-dot-dev,
+# in .github/workflows/deploy-coloring.yml.
+#
+# Needs one repository secret here: HUSTED_DOT_DEV_DISPATCH_TOKEN, a fine-grained personal access token
+# limited to HusteDev/husted-dot-dev with "Contents: Read and write" (the permission GitHub requires to
+# send a repository_dispatch event).
+name: Deploy coloring.husted.dev
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '*.py'
+      - 'motifs/**'
+      - 'static/**'
+      - 'templates/index.html'
+      - 'requirements.txt'
+      - '.github/workflows/deploy-coloring-site.yml'
+  pull_request:
+    paths:
+      - '*.py'
+      - 'motifs/**'
+      - 'static/**'
+      - 'templates/index.html'
+      - 'requirements.txt'
+      - '.github/workflows/deploy-coloring-site.yml'
+  workflow_dispatch:
+
+# A newer push supersedes an older one that has not finished testing yet. Pull requests only run the
+# tests and never trigger a deploy.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('coloring-site-pr-{0}', github.event.number) || 'deploy-coloring-site' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          echo "[deploy-coloring-site] installing requirements.txt"
+          pip install -r requirements.txt
+      - name: Run tests
+        run: |
+          echo "[deploy-coloring-site] running the test suite for ${GITHUB_SHA}"
+          python -m pytest -q
+
+  trigger-deploy:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ask husted-dot-dev to deploy coloring.husted.dev
+        env:
+          DISPATCH_TOKEN: ${{ secrets.HUSTED_DOT_DEV_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "${DISPATCH_TOKEN}" ]; then
+            echo "::error::The HUSTED_DOT_DEV_DISPATCH_TOKEN secret is not set, so coloring.husted.dev was not deployed. See the comment at the top of this workflow."
+            exit 1
+          fi
+          echo "[deploy-coloring-site] sending mandalaforge-updated for ${GITHUB_SHA} to HusteDev/husted-dot-dev"
+          status=$(curl -sS -o response.txt -w '%{http_code}' -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${DISPATCH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/HusteDev/husted-dot-dev/dispatches \
+            -d "{\"event_type\":\"mandalaforge-updated\",\"client_payload\":{\"sha\":\"${GITHUB_SHA}\"}}")
+          echo "[deploy-coloring-site] GitHub answered HTTP ${status}"
+          cat response.txt
+          if [ "${status}" != "204" ]; then
+            echo "::error::repository_dispatch to husted-dot-dev failed with HTTP ${status}"
+            exit 1
+          fi
+          echo "[deploy-coloring-site] deploy requested; follow it in husted-dot-dev's Actions tab"
