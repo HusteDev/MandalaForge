@@ -1363,7 +1363,10 @@ button:disabled:hover {
 /* the ring highlight sits inside the inverted SVG, so give it the inverse
    of the magenta it should show */
 :root[data-theme="dark"] .selected-ring {
-    filter: drop-shadow(0 0 4px #21a746);
+    /* #00952a inverts to a bright pink (#ff6ad5). A single soft shadow
+       barely shows as white-on-black once inverted, so stack three for a
+       glow as strong as the light theme's. */
+    filter: drop-shadow(0 0 1.5px #00952a) drop-shadow(0 0 4px #00952a) drop-shadow(0 0 8px #00952a);
 }
 
 :root[data-theme="dark"] .paper-sheet {
