@@ -1344,3 +1344,41 @@ button:disabled:hover {
     white-space: nowrap;
     border: 0;
 }
+
+/* --- Dark theme preview: a black page with white lines ---
+   Display only. The SVG itself is never changed: the preview and gallery
+   thumbnails are inverted with a CSS filter, so saved files, downloads and
+   print (which renders its own copy in .print-root) stay black lines on
+   white paper. */
+:root[data-theme="dark"] {
+    --paper: #000;
+}
+
+:root[data-theme="dark"] #mandala-design > svg,
+:root[data-theme="dark"] .gallery-item > img,
+:root[data-theme="dark"] .gallery-item > svg {
+    filter: invert(1);
+}
+
+/* the ring highlight sits inside the inverted SVG, so give it the inverse
+   of the magenta it should show */
+:root[data-theme="dark"] .selected-ring {
+    filter: drop-shadow(0 0 4px #21a746);
+}
+
+:root[data-theme="dark"] .paper-sheet {
+    box-shadow: 0 0 0 1px var(--border-color), var(--shadow-paper);
+}
+
+:root[data-theme="dark"] .mandala-design .error {
+    color: var(--text-muted);
+}
+
+@media print {
+    :root[data-theme="dark"] #mandala-design > svg,
+    :root[data-theme="dark"] .gallery-item > img,
+    :root[data-theme="dark"] .gallery-item > svg,
+    :root[data-theme="dark"] .print-design svg {
+        filter: none !important;
+    }
+}
