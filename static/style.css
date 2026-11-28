@@ -892,8 +892,9 @@ button:disabled:hover {
 /* --- HOW TO USE SLIDESHOW --- */
 .title-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem 0.5rem;
     padding-bottom: 0.75rem;
     margin-bottom: 1rem;
     position: relative;
@@ -1224,9 +1225,38 @@ button:disabled:hover {
     font-size: 0.9rem;
 }
 
+/* The wordmark never shrinks under its own width (it used to, and How to
+   use then sat on top of it). When the sidebar is too narrow for both, How
+   to use wraps onto its own line, right-aligned; in a very narrow sidebar it
+   drops to just the "?" icon. */
 .title-row h1.brand {
     font-size: 1.55rem;
-    min-width: 0;
+    flex: 1 0 auto;
+    min-width: max-content;
+}
+
+.title-row .help-button {
+    margin-left: auto;
+}
+
+.controls-container {
+    container-type: inline-size;
+}
+
+@container (max-width: 300px) {
+    .help-button-label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+    }
+
+    .title-row .help-button {
+        padding: 0.35rem;
+    }
 }
 
 /* --- Theme toggle (light / dark), left end of the preview toolbar (the
@@ -1313,4 +1343,42 @@ button:disabled:hover {
     clip: rect(0 0 0 0);
     white-space: nowrap;
     border: 0;
+}
+
+/* --- Dark theme preview: a black page with white lines ---
+   Display only. The SVG itself is never changed: the preview and gallery
+   thumbnails are inverted with a CSS filter, so saved files, downloads and
+   print (which renders its own copy in .print-root) stay black lines on
+   white paper. */
+:root[data-theme="dark"] {
+    --paper: #000;
+}
+
+:root[data-theme="dark"] #mandala-design > svg,
+:root[data-theme="dark"] .gallery-item > img,
+:root[data-theme="dark"] .gallery-item > svg {
+    filter: invert(1);
+}
+
+/* the ring highlight sits inside the inverted SVG, so give it the inverse
+   of the magenta it should show */
+:root[data-theme="dark"] .selected-ring {
+    filter: drop-shadow(0 0 4px #21a746);
+}
+
+:root[data-theme="dark"] .paper-sheet {
+    box-shadow: 0 0 0 1px var(--border-color), var(--shadow-paper);
+}
+
+:root[data-theme="dark"] .mandala-design .error {
+    color: var(--text-muted);
+}
+
+@media print {
+    :root[data-theme="dark"] #mandala-design > svg,
+    :root[data-theme="dark"] .gallery-item > img,
+    :root[data-theme="dark"] .gallery-item > svg,
+    :root[data-theme="dark"] .print-design svg {
+        filter: none !important;
+    }
 }
