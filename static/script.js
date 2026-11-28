@@ -8,6 +8,22 @@
  * - Zoom and print functionality
  */
 
+// Shown in the preview while a design is generating: the gold gear from the logo, spinning (still
+// when the visitor prefers reduced motion). The text is for screen readers only.
+const GENERATING_LOADER_HTML =
+    '<div class="loader generating-loader" role="status">' +
+        '<svg class="generating-gear" viewBox="-50 -50 100 100" width="64" height="64" aria-hidden="true" focusable="false">' +
+            '<defs><linearGradient id="mf-generating-gold" x1="0" y1="-48" x2="0" y2="48" gradientUnits="userSpaceOnUse">' +
+                '<stop offset="0" stop-color="#f7c65e"/><stop offset="0.5" stop-color="#dd8f22"/><stop offset="1" stop-color="#a95f10"/>' +
+            '</linearGradient></defs>' +
+            '<g fill="url(#mf-generating-gold)">' +
+                '<path fill-rule="evenodd" d="M0,-38 A38,38 0 1 1 0,38 A38,38 0 1 1 0,-38Z M0,-22 A22,22 0 1 0 0,22 A22,22 0 1 0 0,-22Z"/>' +
+                '<rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(0)"/><rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(30)"/><rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(60)"/><rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(90)"/><rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(120)"/><rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(150)"/><rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(180)"/><rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(210)"/><rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(240)"/><rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(270)"/><rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(300)"/><rect x="-7" y="-47" width="14" height="14" rx="2" transform="rotate(330)"/>' +
+            '</g>' +
+        '</svg>' +
+        '<span class="visually-hidden">Generating...</span>' +
+    '</div>';
+
 function initColoringApp() {
     // Buttons
     const generateBtn = document.getElementById('generate-btn');
@@ -448,7 +464,7 @@ function initColoringApp() {
 
         console.log('Sending payload:', requestBody);
         resetRingSelection();
-        mandalaDesign.innerHTML = '<div class="loader">Generating...</div>';
+        mandalaDesign.innerHTML = GENERATING_LOADER_HTML;
 
         try {
             const response = await fetch('/generate', {
