@@ -72,7 +72,7 @@ After the aesthetics project, comparing the engine's vocabulary with `examples/`
 
 These turn on two disabled categories with the fewest motifs that can carry a whole design. Each category needs at least one `spans_cell` seam motif (for ring 0) and one side-touching base.
 
-- **art_deco:** `sunburst` (rays from a hub arc to an outer arc, the fan generator at ring scale, seam), `stepped` (a ziggurat silhouette, side-touching base), `shell` (3.3), `chevron` (nested V bands, side-touching base), `keystone` (a tapered arch, base), and `faceted_kite` (a long diamond on the axis with an inset diamond, `examples/geometic01.png`). The category follows the definition in 3.7.
+- **art_deco:** `sunburst` (rays from a hub arc to an outer arc, the fan generator at ring scale, seam), `stepped` (a ziggurat silhouette, side-touching base), `shell` (3.3), `chevron` (nested V bands, side-touching base), `keystone` (a tapered arch, base), and `faceted_kite` (a long diamond on the axis with an inset diamond, `examples/deco-rays-diamonds-16.png`). The category follows the definition in 3.7.
 - **abstract:** `wave` (3.2), `ripple` (concentric arcs inside a closed host, as an embellishment on a `blob`), `blob` (a smooth closed shape with seeded control points, side-touching), and `orbit` (two offset circles sharing a tangent vertex).
 
 ### 3.6 Chirality note
@@ -81,7 +81,7 @@ These turn on two disabled categories with the fewest motifs that can carry a wh
 
 ### 3.7 What art deco means in this engine
 
-Art deco is defined by construction rules, not by a list of shapes, so any motif in the category can be checked against them. `examples/geometic01.png` is the reference.
+Art deco is defined by construction rules, not by a list of shapes, so any motif in the category can be checked against them. `examples/deco-rays-diamonds-16.png` is the reference.
 
 1. **Line vocabulary.** Outlines are built from straight segments and true circular arcs only. No cubic S-curves, no spirals, no free-form curves. This is the opposite of the botanical rule (curves everywhere, corners only at tips).
 2. **Corners are deliberate.** Every corner is a sharp vertex, with a turn of at least 30 degrees. A near-straight kink reads as a drawing error.
@@ -159,5 +159,5 @@ Celtic runs on its own track (see its plan) and shares only the `chiral` flag an
 
 1. The designed centre is one option alongside the seam-ring centre (5.1).
 2. Three weights are available for any line, not only the outer silhouette; per-ring emphasis decides where they go (5.2).
-3. Art deco follows the formal definition in 3.7, with `examples/geometic01.png` as its reference.
+3. Art deco follows the formal definition in 3.7, with `examples/deco-rays-diamonds-16.png` as its reference.
 4. Phases run in the order of section 7, fillers first.

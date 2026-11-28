@@ -19,12 +19,12 @@ Interlace is different in four ways:
 
 ### 1.1 What the references show
 
-`examples/celtic01.png` to `celtic11.png` and `celtic-mandala-knotwork-vector-39422106.avif` were added on 2026-10-12. Four things stand out:
+Twelve Celtic references were added to `examples/` on 2026-10-12 (originally `celtic01.png` to `celtic11.png` and `celtic-mandala-knotwork-vector-39422106.avif`; renamed on 2026-11-27 to their visual-library names: `woven-star-shield-8` (celtic01), `stained-knot-lobes-8` (celtic02), `knot-cross-4` (celtic03), `knot-medallion-8` (celtic04), `knot-square-frame-4` (celtic05), `knot-hexagram-6` (celtic06), `knot-triangles-6` (celtic07), `jewel-knot-medallion-8` (celtic08), `vesica-knot-cross-4` (celtic09), `spike-knot-star-8` (celtic10), `knot-bloom-8` (celtic11), and `triskele-spiral-rim`). Four things stand out:
 
-1. **Large woven loops are the commonest structure.** `celtic01`, `celtic02`, `celtic06`, `celtic10` and `celtic11` are built mostly from big closed loops (pointed ovals, petals, circles), repeated round the centre, each one weaving over and under its neighbours and spanning two to four rings. Grid knotwork (plaits with breaks) is the second structure, used for bands and panels (`celtic03`, `celtic04`, `celtic05`, `celtic07`).
-2. **Rails are everywhere.** Knot bands sit between thin border circles in `celtic03`, `celtic04`, `celtic05`, `celtic09` and `celtic10`.
-3. **Mixing is normal.** `celtic09` and `celtic10` combine knot panels with leaves, petals, bead rows and dots, which matches the decision to allow mixed designs.
-4. **Ribbon style varies.** Single ribbons in `celtic01`, `celtic02`, `celtic07` and `celtic11`; double-line ribbons in `celtic03`, `celtic04` and `celtic06`. Single is the default; double stays an option.
+1. **Large woven loops are the commonest structure.** `woven-star-shield-8`, `stained-knot-lobes-8`, `knot-hexagram-6`, `spike-knot-star-8` and `knot-bloom-8` are built mostly from big closed loops (pointed ovals, petals, circles), repeated round the centre, each one weaving over and under its neighbours and spanning two to four rings. Grid knotwork (plaits with breaks) is the second structure, used for bands and panels (`knot-cross-4`, `knot-medallion-8`, `knot-square-frame-4`, `knot-triangles-6`).
+2. **Rails are everywhere.** Knot bands sit between thin border circles in `knot-cross-4`, `knot-medallion-8`, `knot-square-frame-4`, `vesica-knot-cross-4` and `spike-knot-star-8`.
+3. **Mixing is normal.** `vesica-knot-cross-4` and `spike-knot-star-8` combine knot panels with leaves, petals, bead rows and dots, which matches the decision to allow mixed designs.
+4. **Ribbon style varies.** Single ribbons in `woven-star-shield-8`, `stained-knot-lobes-8`, `knot-triangles-6` and `knot-bloom-8`; double-line ribbons in `knot-cross-4`, `knot-medallion-8` and `knot-hexagram-6`. Single is the default; double stays an option.
 
 ## 2. Core idea
 
@@ -81,9 +81,9 @@ Celtic motifs set the registry flag `chiral: True` (shared with the roadmap, sec
 The weave pipeline takes any set of closed centrelines in page space. It needs only three things from them: every pair of curves crosses transversally (no tangencies), no three curves meet at one point, and every crossing angle is within the XANG range. Two sources produce such sets:
 
 - **Grid knotwork** (section 4): crossings on a conformal polar grid, breaks to make knots. Best for bands and panels.
-- **Woven loops:** `n` copies of one closed loop rotated round the centre, `n` a multiple of `B`. The loop shape comes from the existing outline generators drawn as a centreline at full design scale: a pointed oval (vesica), a lotus petal, a circle offset from the centre, a teardrop. Each loop spans the rings between its base radius and its tip radius, so a loop zone is always multi-ring. Crossings are found by curve intersection, not from a grid. Parameters (loop shape, length, width, offset angle, and a second loop set at half a wedge with a different length, as in `celtic01`) come from the zone stream.
+- **Woven loops:** `n` copies of one closed loop rotated round the centre, `n` a multiple of `B`. The loop shape comes from the existing outline generators drawn as a centreline at full design scale: a pointed oval (vesica), a lotus petal, a circle offset from the centre, a teardrop. Each loop spans the rings between its base radius and its tip radius, so a loop zone is always multi-ring. Crossings are found by curve intersection, not from a grid. Parameters (loop shape, length, width, offset angle, and a second loop set at half a wedge with a different length, as in `woven-star-shield-8`) come from the zone stream.
 
-Woven loops have their own constraints. Loop width must keep neighbouring crossings far enough apart for the ribbon and the gap between ribbons to hold a pen. The number of crossings a loop makes with its neighbours must be even, or alternation flips under rotation (rule P1 restated for loops: the crossings per wedge are even). A circle round the centre (the woven circle in `celtic02`) can join a loop set, adding two crossings with each loop it cuts.
+Woven loops have their own constraints. Loop width must keep neighbouring crossings far enough apart for the ribbon and the gap between ribbons to hold a pen. The number of crossings a loop makes with its neighbours must be even, or alternation flips under rotation (rule P1 restated for loops: the crossings per wedge are even). A circle round the centre (the woven circle in `stained-knot-lobes-8`) can join a loop set, adding two crossings with each loop it cuts.
 
 The **woven layered ring** of section 7.4 is the one-ring special case: front and back petals as two loop sets.
 
