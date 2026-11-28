@@ -64,100 +64,122 @@
                     </button>
                     <button id="generate-btn" class="generate-action" type="button">Generate</button>
                 </div>
-                <button id="save-btn">Save Design</button>
-                <div id="validation-status" class="validation-status" hidden></div>
-                    <div class="ring-selector" id="ring-selector" aria-label="Select ring to regenerate"></div>
-                <button id="regenerate-ring-btn" disabled>Regenerate Ring</button>
-                <button id="print-btn">Print</button>
-
-                <div class="control-group checkbox-group">
+                <div class="secondary-actions">
+                    <button id="save-btn" type="button">Save Design</button>
+                    <button id="print-btn" type="button">Print</button>
+                </div>
+                <div class="control-group checkbox-group print-params-option">
                     <input type="checkbox" id="include-params-check">
                     <label for="include-params-check">Include parameters on print</label>
                 </div>
             </div>
 
-            <div class="control-section">
-                <h3>Size & Structure</h3>
-                <div class="control-group">
-                    <label for="num-rings">Rings: <span id="num-rings-value">4</span> <span id="num-rings-pending" class="pending-label" hidden>not applied</span></label>
-                    <input type="range" id="num-rings" min="2" max="7" step="1" value="4">
+            <!-- Every section below the pinned actions collapses. Which ones are open is a saved
+                 preference (see the PREFERENCES block in static/script.js), keyed by data-section. -->
+            <details class="control-section collapsible-section" data-section="rings" open>
+                <summary><h3>Rings</h3></summary>
+                <div class="section-body">
+                    <div class="help-text section-intro">Pick a ring here or in the preview, then regenerate just that ring</div>
+                    <div class="ring-selector" id="ring-selector" aria-label="Select ring to regenerate"></div>
+                    <button id="regenerate-ring-btn" type="button" disabled>Regenerate Ring</button>
                 </div>
+            </details>
 
-                <div class="control-group">
-                    <label for="num-divisions">Divisions: <span id="num-divisions-value">12</span> <span id="num-divisions-pending" class="pending-label" hidden>not applied</span></label>
-                    <input type="range" id="num-divisions" min="6" max="24" step="2" value="12">
-                    <div class="help-text">Number of repeating sections around the center</div>
-                    <label class="checkbox-inline"><input type="checkbox" id="vary-divisions"> Vary divisions per ring</label>
-                    <label class="checkbox-inline"><input type="checkbox" id="max-region-cap"> Limit large regions (slower)</label>
-                </div>
-
-                <div class="control-group">
-                    <label for="min-pattern-size">Min Pattern Size: <span id="min-pattern-size-value">10px</span> <span id="min-pattern-size-pending" class="pending-label" hidden>not applied</span></label>
-                    <input type="range" id="min-pattern-size" min="5" max="50" step="1" value="10">
-                </div>
-            </div>
-
-            <div class="control-section">
-                <h3>Complexity</h3>
-                <div class="control-group">
-                    <label for="complexity">Detail Level: <span id="complexity-value">0.5</span> <span id="complexity-pending" class="pending-label" hidden>not applied</span></label>
-                    <input type="range" id="complexity" min="0" max="1" step="0.1" value="0.5">
-                    <div class="help-text">Higher = more intricate patterns</div>
-                </div>
-            </div>
-
-            <div class="control-section">
-                <h3>Pattern Categories</h3>
-                <div class="help-text" style="margin-bottom: 10px;">Select at least one category</div>
-
-                <div class="category-checkboxes">
-                    <div class="control-group checkbox-group">
-                        <input type="checkbox" id="cat-botanical" checked>
-                        <label for="cat-botanical">Botanical</label>
-                        <span class="category-desc">Petals, leaves, vines, scallops</span>
+            <details class="control-section collapsible-section" data-section="size" open>
+                <summary><h3>Size &amp; Structure</h3></summary>
+                <div class="section-body">
+                    <div class="control-group">
+                        <label for="num-rings">Rings: <span id="num-rings-value">4</span> <span id="num-rings-pending" class="pending-label" hidden>not applied</span></label>
+                        <input type="range" id="num-rings" min="2" max="7" step="1" value="4">
                     </div>
 
-                    <div class="control-group checkbox-group">
-                        <input type="checkbox" id="cat-geometric">
-                        <label for="cat-geometric">Geometric</label>
-                        <span class="category-desc">Triangles, diamonds, stars, chevrons</span>
+                    <div class="control-group">
+                        <label for="num-divisions">Divisions: <span id="num-divisions-value">12</span> <span id="num-divisions-pending" class="pending-label" hidden>not applied</span></label>
+                        <input type="range" id="num-divisions" min="6" max="24" step="2" value="12">
+                        <div class="help-text">Number of repeating sections around the center</div>
+                        <label class="checkbox-inline"><input type="checkbox" id="vary-divisions"> Vary divisions per ring</label>
+                        <label class="checkbox-inline"><input type="checkbox" id="max-region-cap"> Limit large regions (slower)</label>
                     </div>
 
-                    <div class="control-group checkbox-group is-unavailable">
-                        <input type="checkbox" id="cat-celtic" disabled aria-describedby="category-coming-soon">
-                        <label for="cat-celtic">Celtic</label>
-                        <span class="category-desc">Knots, braids, Greek keys, twists</span>
-                    </div>
-
-                    <div class="control-group checkbox-group is-unavailable">
-                        <input type="checkbox" id="cat-art-deco" disabled aria-describedby="category-coming-soon">
-                        <label for="cat-art-deco">Art Deco</label>
-                        <span class="category-desc">Fans, sunbursts, shells, skylines</span>
-                    </div>
-
-                    <div class="control-group checkbox-group is-unavailable">
-                        <input type="checkbox" id="cat-abstract" disabled aria-describedby="category-coming-soon">
-                        <label for="cat-abstract">Abstract</label>
-                        <span class="category-desc">Waves, ripples, flames, ladders</span>
+                    <div class="control-group">
+                        <label for="min-pattern-size">Min Pattern Size: <span id="min-pattern-size-value">10px</span> <span id="min-pattern-size-pending" class="pending-label" hidden>not applied</span></label>
+                        <input type="range" id="min-pattern-size" min="5" max="50" step="1" value="10">
                     </div>
                 </div>
-                <div id="category-coming-soon" class="help-text">Celtic, Art Deco and Abstract are coming soon: no motifs yet</div>
+            </details>
 
-                <div id="category-warning" class="warning-text" style="display: none;">
-                    Please select at least one category
+            <details class="control-section collapsible-section" data-section="complexity" open>
+                <summary><h3>Complexity</h3></summary>
+                <div class="section-body">
+                    <div class="control-group">
+                        <label for="complexity">Detail Level: <span id="complexity-value">0.5</span> <span id="complexity-pending" class="pending-label" hidden>not applied</span></label>
+                        <input type="range" id="complexity" min="0" max="1" step="0.1" value="0.5">
+                        <div class="help-text">Higher = more intricate patterns</div>
+                    </div>
                 </div>
-            </div>
+            </details>
 
-            <div class="control-group">
-                <label for="seed">Seed (optional)</label>
-                <input type="text" id="seed" placeholder="e.g., 2025">
-                <div class="help-text">Same seed = same design</div>
-            </div>
+            <details class="control-section collapsible-section" data-section="categories" open>
+                <summary><h3>Pattern Categories</h3></summary>
+                <div class="section-body">
+                    <div class="help-text section-intro">Select at least one category</div>
 
-            <div class="gallery">
-                <h3>Previous Designs</h3>
-                <div class="gallery-grid" id="gallery-grid"></div>
-            </div>
+                    <div class="category-checkboxes">
+                        <div class="control-group checkbox-group">
+                            <input type="checkbox" id="cat-botanical" checked>
+                            <label for="cat-botanical">Botanical</label>
+                            <span class="category-desc">Petals, leaves, vines, scallops</span>
+                        </div>
+
+                        <div class="control-group checkbox-group">
+                            <input type="checkbox" id="cat-geometric">
+                            <label for="cat-geometric">Geometric</label>
+                            <span class="category-desc">Triangles, diamonds, stars, chevrons</span>
+                        </div>
+
+                        <div class="control-group checkbox-group is-unavailable">
+                            <input type="checkbox" id="cat-celtic" disabled aria-describedby="category-coming-soon">
+                            <label for="cat-celtic">Celtic</label>
+                            <span class="category-desc">Knots, braids, Greek keys, twists</span>
+                        </div>
+
+                        <div class="control-group checkbox-group is-unavailable">
+                            <input type="checkbox" id="cat-art-deco" disabled aria-describedby="category-coming-soon">
+                            <label for="cat-art-deco">Art Deco</label>
+                            <span class="category-desc">Fans, sunbursts, shells, skylines</span>
+                        </div>
+
+                        <div class="control-group checkbox-group is-unavailable">
+                            <input type="checkbox" id="cat-abstract" disabled aria-describedby="category-coming-soon">
+                            <label for="cat-abstract">Abstract</label>
+                            <span class="category-desc">Waves, ripples, flames, ladders</span>
+                        </div>
+                    </div>
+                    <div id="category-coming-soon" class="help-text">Celtic, Art Deco and Abstract are coming soon: no motifs yet</div>
+
+                    <div id="category-warning" class="warning-text" style="display: none;">
+                        Please select at least one category
+                    </div>
+                </div>
+            </details>
+
+            <details class="control-section collapsible-section" data-section="seed" open>
+                <summary><h3>Seed</h3></summary>
+                <div class="section-body">
+                    <div class="control-group">
+                        <label for="seed">Seed (optional)</label>
+                        <input type="text" id="seed" placeholder="e.g., 2025">
+                        <div class="help-text">Same seed = same design</div>
+                    </div>
+                </div>
+            </details>
+
+            <details class="control-section collapsible-section gallery" data-section="saved" open>
+                <summary><h3>Saved Designs</h3></summary>
+                <div class="section-body">
+                    <div class="gallery-grid" id="gallery-grid"></div>
+                </div>
+            </details>
         </div>
         <div class="mandala-container" id="mandala-container">
             <div class="preview-controls">
@@ -179,10 +201,8 @@
                     </svg>
                 </button>
             </div>
-            <div class="debug-bar" id="debug-bar" hidden>
-                <div class="debug-bar-values" id="debug-bar-values"></div>
-                <button type="button" id="debug-copy" title="Copy these settings">Copy</button>
-            </div>
+            <!-- Brief result of the colourability check, shown for a moment after each design finishes -->
+            <div class="design-toast" id="design-toast" role="status" aria-live="polite" hidden></div>
             <div class="page-preview" id="page-preview">
                 <div class="paper-sheet" id="paper-sheet">
                     <div class="mandala-design" id="mandala-design"></div>
@@ -220,6 +240,16 @@
         </div>
         <div class="help-dots" id="help-dots" role="tablist" aria-label="Steps"></div>
     </dialog>
+
+    <dialog class="confirm-dialog" id="delete-design-dialog" aria-labelledby="delete-design-title">
+        <h2 id="delete-design-title">Delete this saved design?</h2>
+        <div class="confirm-dialog-preview" id="delete-design-preview"></div>
+        <p>It is removed from your saved designs. This cannot be undone.</p>
+        <div class="confirm-dialog-actions">
+            <button type="button" id="delete-design-cancel" class="confirm-cancel">Cancel</button>
+            <button type="button" id="delete-design-confirm" class="confirm-danger">Delete</button>
+        </div>
+    </dialog>
     <!-- embed:app:end -->
 
     <script src="../static/script.js"></script>
@@ -229,6 +259,7 @@
     <!-- Firebase scripts -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-check-compat.js"></script>
 
     <script>

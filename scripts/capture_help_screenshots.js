@@ -23,7 +23,8 @@ const STUB = `window.firebase={initializeApp(){},auth(){return{onAuthStateChange
 
   const first = gen();
   await p.goto(URL);
-  await first; await p.waitForTimeout(800);
+  // Wait out the check-result note that pops up over the preview after each design
+  await first; await p.waitForTimeout(2400);
 
   // Draw an orange outline around each element (selector strings or handles)
   const box = (targets) => p.evaluate((targets) => {
@@ -51,23 +52,22 @@ const STUB = `window.firebase={initializeApp(){},auth(){return{onAuthStateChange
 
   await box([]); await shot('step-1-overview.jpg');
 
-  const secs = await p.$$('.control-section');
   await setRings(5);
-  await scrollTo('.control-section');
-  await box([secs[0]]); await shot('step-2-settings.jpg');
+  await scrollTo('[data-section="size"]');
+  await box(['[data-section="size"]']); await shot('step-2-settings.jpg');
 
   await setRings(4);
   await p.check('#cat-geometric');
-  await scrollTo('.control-section:has(.category-checkboxes)');
-  await box([secs[2]]); await shot('step-3-categories.jpg');
+  await scrollTo('[data-section="categories"]');
+  await box(['[data-section="categories"]']); await shot('step-3-categories.jpg');
 
   await scrollCtl(0); await box([]);
-  const g = gen(); await p.click('#generate-btn'); await g; await p.waitForTimeout(800);
+  const g = gen(); await p.click('#generate-btn'); await g; await p.waitForTimeout(400);
   await box(['.action-row']); await shot('step-4-generate.jpg');
 
   await box([]);
   await p.click('.ring-select-btn:nth-child(2)'); await p.waitForTimeout(300);
-  await box(['#ring-selector', '#regenerate-ring-btn']); await shot('step-5-ring.jpg');
+  await box(['[data-section="rings"]']); await shot('step-5-ring.jpg');
 
   await box([]);
   await p.click('#zoom-in'); await p.click('#zoom-in'); await p.waitForTimeout(300);
@@ -76,6 +76,7 @@ const STUB = `window.firebase={initializeApp(){},auth(){return{onAuthStateChange
   await box([]); await p.click('#fit-to-page');
   await p.click('#save-btn'); await p.waitForTimeout(1300);
   await p.evaluate(() => { const c = document.querySelector('.controls-container'); c.scrollTop = c.scrollHeight; });
+  await p.hover('.gallery-item');
   await box(['#save-btn', '.gallery']); await shot('step-7-save.jpg');
 
   await scrollCtl(0); await p.check('#include-params-check');

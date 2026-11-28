@@ -34,7 +34,7 @@ The authoring guide `docs/motifs.md` explains the motif contract in full; `docs/
 | `qa_patterns.py` | Per-motif coverage harness |
 | `qa_report.py` | Whole-design QA over a pinned corpus |
 | `qa_check.py` | Topology QA for any standalone SVG |
-| `templates/index.html`, `static/script.js` | Controls, preview, ring selector, debug bar, gallery and print |
+| `templates/index.html`, `static/script.js` | Controls (pinned actions, collapsible sections), preview, ring selector, check-result toast, saved designs and preferences, print |
 
 ## The motif catalog
 
