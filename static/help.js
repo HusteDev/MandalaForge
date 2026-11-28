@@ -9,7 +9,7 @@ function initColoringHelp() {
         {
             image: 'step-1-overview.jpg',
             title: 'Welcome to MandalaForge',
-            text: 'Settings are on the left, your coloring page preview is on the right. A design is generated as soon as the page opens.'
+            text: 'The main buttons stay at the top of the left panel; the settings sit below them in sections you can open or close with a click on their title. MandalaForge remembers which sections you left open, and your light or dark choice. Your coloring page preview is on the right, and a design is generated as soon as the page opens.'
         },
         {
             image: 'step-2-settings.jpg',
@@ -24,12 +24,12 @@ function initColoringHelp() {
         {
             image: 'step-4-generate.jpg',
             title: 'Generate a design',
-            text: 'Click Generate for a new design using your settings. Click the dice to shuffle every setting and generate something completely random.'
+            text: 'Click Generate for a new design using your settings. Click the dice to shuffle every setting and generate something completely random. When a design finishes, a short note pops up to confirm every space can be colored.'
         },
         {
             image: 'step-5-ring.jpg',
             title: 'Re-roll a single ring',
-            text: 'Choose a ring with the Ring buttons, or click a ring in the preview, then click Regenerate Ring to replace just that ring and keep the rest.'
+            text: 'In the Rings section, choose a ring with the Ring buttons, or click a ring in the preview, then click Regenerate Ring to replace just that ring and keep the rest.'
         },
         {
             image: 'step-6-zoom.jpg',
@@ -39,12 +39,12 @@ function initColoringHelp() {
         {
             image: 'step-7-save.jpg',
             title: 'Save designs you like',
-            text: 'Click Save Design to keep the current design. Saved designs appear under Previous Designs at the bottom of the settings; click one to open it again.'
+            text: 'Click Save Design to keep the current design. Saved designs appear in the Saved Designs section at the bottom of the panel; click one to open it again, or click the x in its corner to delete it.'
         },
         {
             image: 'step-8-print.jpg',
             title: 'Print your coloring page',
-            text: 'Click Print to print the design on its own page. Tick "Include parameters on print" to add a second page listing the settings used.'
+            text: 'Click Print to print the design on its own page. Tick "Include parameters on print" to add a second page listing the settings to enter to make the same design again.'
         }
     ];
 

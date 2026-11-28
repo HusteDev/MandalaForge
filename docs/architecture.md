@@ -29,7 +29,7 @@ MandalaForge is a Flask app that generates SVG mandala colouring pages. A design
 - `region_repair.py`: the region-size repair pass. `classify_faces` and `face_sets` tie each oversized face to the plan entry behind it (host interior, background or centre, symmetric copies grouped), and `RegionRepair` climbs the repair ladder over `Trial`s (a plan, its assembly and its report), through the composer's plan-repair methods (`add_embellishment`, `add_slot_child`, `switch_to_both`, `raise_size_floor`, `reroll_ring`) and `DesignGenerator._trial`.
 - `topology_validator.py`: exact planar topology QA, also used by the resolver to judge faces before it draws a reach or keeps a touch. It also holds the print-size cap (`PX_PER_INCH`, `max_region_in2`, `max_region_px2`).
 - `templates/index.html`: controls and preview layout.
-- `static/script.js`: parameter collection, API calls, preview rendering, ring selector, debug bar, gallery and print controls.
+- `static/script.js`: parameter collection, API calls, preview rendering, ring selector, check-result toast, saved designs (with delete) and per-user preferences (Firestore `coloring-users/{email}` when signed in, localStorage otherwise), collapsible sections, and print controls.
 
 ## Generation Model
 

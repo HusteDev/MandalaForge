@@ -4,7 +4,9 @@
  * Handles:
  * - Parameter controls (rings, divisions, complexity, categories)
  * - Live preview generation
- * - Gallery management
+ * - Saved designs (open, save, delete) and per-user preferences, kept in Firestore
+ *   (coloring-users/{email}) for a signed-in user and in localStorage otherwise
+ * - Collapsible sidebar sections
  * - Zoom and print functionality
  */
 
@@ -23,6 +25,239 @@ const GENERATING_LOADER_HTML =
         '</svg>' +
         '<span class="visually-hidden">Generating...</span>' +
     '</div>';
+
+// =============================================================================
+// USER STORE: saved designs and preferences
+// =============================================================================
+//
+// A signed-in visitor's saved designs and preferences live in Firestore, so they follow the account
+// from browser to browser:
+//
+//     coloring-users/{email}                 { preferences: { theme, expandedSections }, updatedAt }
+//     coloring-users/{email}/designs/{id}    { id, thumbnail, params, ring_seeds, timestamp, svg? }
+//
+// preferences is an open map: add new settings to it as they come along. firestore.rules in
+// husted-dot-dev lets only that user, while on coloring-allowed-users, read and write their own
+// document. With no signed-in user (local development), no Firestore SDK on the page, or Firestore
+// refusing access, the store falls back to this browser's localStorage, which is where saved designs
+// lived before. The first time an account connects, designs saved in this browser are copied into it.
+function createUserStore() {
+    const LOCAL_GALLERY_KEY = 'mandalaGallery';
+    const LOCAL_PREFS_KEY = 'mandalaforge-prefs';
+    const LOCAL_MIGRATED_PREFIX = 'mandalaforge-gallery-migrated:';
+    // localStorage holds about 5 MB per site, so the browser copy keeps only the newest designs.
+    const LOCAL_GALLERY_LIMIT = 12;
+    const USERS_COLLECTION = 'coloring-users';
+    const AUTH_WAIT_MS = 8000;
+    const PREFS_WRITE_DELAY_MS = 400;
+
+    let mode = 'local';
+    let userDoc = null;
+    let userEmail = null;
+    let designs = [];
+    let prefs = {};
+    let prefsTimer = null;
+    let connectPromise = null;
+
+    const readLocalJson = (key, fallback) => {
+        try {
+            const raw = window.localStorage.getItem(key);
+            return raw ? JSON.parse(raw) : fallback;
+        } catch (error) {
+            console.warn('LOGGING: [store] could not read', key, 'from localStorage', error);
+            return fallback;
+        }
+    };
+
+    const writeLocal = (key, value) => {
+        try {
+            window.localStorage.setItem(key, value);
+            return true;
+        } catch (error) {
+            console.warn('LOGGING: [store] could not write', key, 'to localStorage', error);
+            return false;
+        }
+    };
+
+    const newestFirst = (a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || ''));
+
+    // Write the browser's gallery, dropping the oldest entries if storage is full.
+    const persistLocalGallery = () => {
+        let items = designs.slice(0, LOCAL_GALLERY_LIMIT);
+        while (items.length) {
+            if (writeLocal(LOCAL_GALLERY_KEY, JSON.stringify(items))) {
+                designs = items;
+                return;
+            }
+            items = items.slice(0, -1);
+        }
+        writeLocal(LOCAL_GALLERY_KEY, '[]');
+        designs = [];
+    };
+
+    prefs = readLocalJson(LOCAL_PREFS_KEY, {}) || {};
+    designs = readLocalJson(LOCAL_GALLERY_KEY, []) || [];
+
+    // Resolve with the signed-in user, or null when there is none or Firebase is not on the page.
+    const waitForUser = () => new Promise((resolve) => {
+        const fb = window.firebase;
+        if (!fb || typeof fb.auth !== 'function' || typeof fb.firestore !== 'function') {
+            console.log('LOGGING: [store] Firebase Auth or Firestore not on this page, using this browser only');
+            resolve(null);
+            return;
+        }
+        let auth;
+        try {
+            auth = fb.auth();
+        } catch (error) {
+            console.warn('LOGGING: [store] Firebase is not initialised, using this browser only', error);
+            resolve(null);
+            return;
+        }
+        if (auth.currentUser) {
+            resolve(auth.currentUser);
+            return;
+        }
+        let settled = false;
+        let unsubscribe = null;
+        const finish = (user) => {
+            if (settled) return;
+            settled = true;
+            if (unsubscribe) unsubscribe();
+            resolve(user);
+        };
+        setTimeout(() => {
+            console.warn('LOGGING: [store] sign-in state did not arrive in time, using this browser only');
+            finish(null);
+        }, AUTH_WAIT_MS);
+        unsubscribe = auth.onAuthStateChanged(user => finish(user || null));
+        if (settled && unsubscribe) unsubscribe();
+    });
+
+    const connect = () => {
+        if (connectPromise) return connectPromise;
+        connectPromise = (async () => {
+            const user = await waitForUser();
+            if (!user || !user.email) {
+                console.log('LOGGING: [store] no signed-in account, saved designs and preferences stay in this browser');
+                return mode;
+            }
+            try {
+                const doc = window.firebase.firestore().collection(USERS_COLLECTION).doc(user.email);
+                const snapshot = await doc.get();
+                userDoc = doc;
+                userEmail = user.email;
+                mode = 'firestore';
+                const data = snapshot.exists ? snapshot.data() : {};
+                if (data && data.preferences && typeof data.preferences === 'object') {
+                    prefs = { ...prefs, ...data.preferences };
+                    writeLocal(LOCAL_PREFS_KEY, JSON.stringify(prefs));
+                }
+                console.log('LOGGING: [store] using account storage for', user.email, snapshot.exists ? '(existing)' : '(new)');
+            } catch (error) {
+                console.error('LOGGING: [store] account storage unavailable, using this browser only', error);
+                mode = 'local';
+                userDoc = null;
+            }
+            return mode;
+        })();
+        return connectPromise;
+    };
+
+    // Copy designs saved in this browser into the account, once per account per browser.
+    const migrateLocalDesigns = async (accountDesigns) => {
+        const flagKey = LOCAL_MIGRATED_PREFIX + userEmail;
+        if (readLocalJson(flagKey, false)) return accountDesigns;
+        const localDesigns = (readLocalJson(LOCAL_GALLERY_KEY, []) || []).filter(item => item && item.id);
+        const known = new Set(accountDesigns.map(item => String(item.id)));
+        const toCopy = localDesigns.filter(item => !known.has(String(item.id)));
+        console.log(`LOGGING: [store] copying ${toCopy.length} design(s) saved in this browser into the account`);
+        for (const item of toCopy) {
+            await userDoc.collection('designs').doc(String(item.id)).set(item);
+        }
+        writeLocal(flagKey, 'true');
+        return accountDesigns.concat(toCopy).sort(newestFirst);
+    };
+
+    const loadDesigns = async () => {
+        if (mode !== 'firestore') {
+            designs = (readLocalJson(LOCAL_GALLERY_KEY, []) || []).sort(newestFirst);
+            console.log(`LOGGING: [store] loaded ${designs.length} saved design(s) from this browser`);
+            return designs.slice();
+        }
+        const snapshot = await userDoc.collection('designs').get();
+        let loaded = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.data().id || doc.id })).sort(newestFirst);
+        try {
+            loaded = await migrateLocalDesigns(loaded);
+        } catch (error) {
+            console.error('LOGGING: [store] could not copy this browser\'s designs into the account', error);
+        }
+        designs = loaded;
+        console.log(`LOGGING: [store] loaded ${designs.length} saved design(s) from the account`);
+        return designs.slice();
+    };
+
+    const addDesign = async (item) => {
+        if (mode === 'firestore') {
+            await userDoc.collection('designs').doc(String(item.id)).set(item);
+            designs = [item].concat(designs);
+            console.log('LOGGING: [store] saved design', item.id, 'to the account');
+        } else {
+            designs = [item].concat(designs);
+            persistLocalGallery();
+            console.log('LOGGING: [store] saved design', item.id, 'in this browser');
+        }
+        return designs.slice();
+    };
+
+    const deleteDesign = async (id) => {
+        if (mode === 'firestore') {
+            await userDoc.collection('designs').doc(String(id)).delete();
+            designs = designs.filter(item => String(item.id) !== String(id));
+            console.log('LOGGING: [store] deleted design', id, 'from the account');
+        } else {
+            designs = designs.filter(item => String(item.id) !== String(id));
+            persistLocalGallery();
+            console.log('LOGGING: [store] deleted design', id, 'from this browser');
+        }
+        return designs.slice();
+    };
+
+    const flushPrefs = () => {
+        prefsTimer = null;
+        if (mode !== 'firestore') return;
+        userDoc.set({
+            preferences: prefs,
+            updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true })
+            .then(() => console.log('LOGGING: [store] preferences saved to the account', prefs))
+            .catch(error => console.error('LOGGING: [store] could not save preferences to the account', error));
+    };
+
+    // Merge a change into the preferences. This browser's copy is written at once; the account copy
+    // shortly after, so a burst of changes (several sections toggled) is one write.
+    const savePrefs = (patch) => {
+        prefs = { ...prefs, ...patch };
+        writeLocal(LOCAL_PREFS_KEY, JSON.stringify(prefs));
+        if (mode !== 'firestore') {
+            console.log('LOGGING: [store] preferences saved in this browser', prefs);
+            return;
+        }
+        if (prefsTimer) clearTimeout(prefsTimer);
+        prefsTimer = setTimeout(flushPrefs, PREFS_WRITE_DELAY_MS);
+    };
+
+    return {
+        connect,
+        loadDesigns,
+        addDesign,
+        deleteDesign,
+        savePrefs,
+        prefs: () => ({ ...prefs }),
+        designs: () => designs.slice(),
+        mode: () => mode
+    };
+}
 
 function initColoringApp() {
     // Buttons
@@ -77,9 +312,12 @@ function initColoringApp() {
     const fitToPageBtn = document.getElementById('fit-to-page');
     const zoomLevelSpan = document.getElementById('zoom-level');
 
+    // Saved designs and preferences (see createUserStore below)
+    const userStore = createUserStore();
+
     // State
     let activeSeed = null;
-    let galleryItems = JSON.parse(localStorage.getItem('mandalaGallery') || '[]');
+    let galleryItems = [];
     let currentZoom = 1;
     let isDragging = false;
     let dragStart = { x: 0, y: 0 };
@@ -186,11 +424,8 @@ function initColoringApp() {
         selectRingByIndex(parseInt(ringGroup.id.replace('ring-', ''), 10));
     };
 
-    const validationStatus = document.getElementById('validation-status');
-    const debugBar = document.getElementById('debug-bar');
-    const debugBarValues = document.getElementById('debug-bar-values');
-    const debugCopy = document.getElementById('debug-copy');
-    let lastDebugText = '';
+    const designToast = document.getElementById('design-toast');
+    let designToastTimer = null;
 
     // Base motif of a sequence entry: the centre recipe if present, else the divider.
     const entryRecipe = (entry) => (entry && (entry.centre || entry.divider)) || null;
@@ -209,10 +444,10 @@ function initColoringApp() {
     // "petal/scallop": the ring's sequence entries joined by '/'.
     const ringEntriesSummary = (ring) => (ring.sequence || []).map(entryChainSummary).join('/');
 
-    // Every value needed to reproduce the design on screen. Without this a
-    // report of "this one looks wrong" cannot be turned back into a test case.
-    const renderDebugBar = (payload, data) => {
-        if (!debugBar || !debugBarValues) return;
+    // Every value needed to reproduce the design on screen, ring regenerations and motif choices
+    // included. It is no longer shown on the page; it goes to the console so a report of "this one
+    // looks wrong" can still be turned back into a test case.
+    const logReproduction = (payload, data) => {
         const rings = ((data.plan && data.plan.rings) || []).map((ring, i) => (
             `R${i + 1}=${ring.divisions}:${ringEntriesSummary(ring)}`
         ));
@@ -237,45 +472,51 @@ function initColoringApp() {
             parts.push(`valid=${data.validation.is_valid}`);
             if (!data.validation.is_valid) parts.push(`issues=${data.validation.issue_count}`);
         }
-        lastDebugText = parts.concat(rings).join('  ');
-        debugBarValues.textContent = lastDebugText;
-        debugBar.hidden = false;
-        debugBar.classList.toggle('is-invalid', !!data.validation && !data.validation.is_valid);
+        console.log('LOGGING: [design] reproduction:', parts.concat(rings).join('  '));
     };
-
-    if (debugCopy) {
-        debugCopy.addEventListener('click', async () => {
-            if (!lastDebugText) return;
-            try {
-                await navigator.clipboard.writeText(lastDebugText);
-                debugCopy.textContent = 'Copied';
-            } catch (err) {
-                debugCopy.textContent = 'Copy failed';
-            }
-            setTimeout(() => { debugCopy.textContent = 'Copy'; }, 1200);
-        });
-    }
 
     let currentPlan = null;
     let currentRingSeeds = {};
 
-    // The QA pipeline decides whether a design is actually colourable, so show
-    // the verdict instead of leaving it in a print-only field.
-    const renderValidationStatus = (validation) => {
-        if (!validationStatus) return;
+    // The QA pipeline decides whether a design is actually colourable. Its verdict pops up over the
+    // preview for a moment once a design finishes: briefly when it passed, a little longer when it
+    // found problems, so there is time to read the count.
+    const TOAST_VALID_MS = 1600;
+    const TOAST_INVALID_MS = 4500;
+
+    const showDesignToast = (validation) => {
+        if (!designToast) return;
+        if (designToastTimer) {
+            clearTimeout(designToastTimer);
+            designToastTimer = null;
+        }
         if (!validation) {
-            validationStatus.hidden = true;
+            designToast.hidden = true;
+            designToast.classList.remove('is-showing');
             return;
         }
-        validationStatus.hidden = false;
-        validationStatus.classList.toggle('is-valid', validation.is_valid);
-        validationStatus.classList.toggle('is-invalid', !validation.is_valid);
-        validationStatus.textContent = validation.is_valid
+        designToast.classList.toggle('is-valid', validation.is_valid);
+        designToast.classList.toggle('is-invalid', !validation.is_valid);
+        designToast.textContent = validation.is_valid
             ? 'Checked: all lines connect, every space is colourable'
             : `Check found ${validation.issue_count} issue${validation.issue_count === 1 ? '' : 's'}`;
-        validationStatus.title = validation.is_valid
+        designToast.title = validation.is_valid
             ? ''
             : (validation.issues || []).slice(0, 8).join('\n');
+        designToast.hidden = false;
+        // Restart the fade-in when a toast is already up
+        designToast.classList.remove('is-showing');
+        void designToast.offsetWidth;
+        designToast.classList.add('is-showing');
+        console.log('LOGGING: [design] check result toast:', designToast.textContent);
+
+        designToastTimer = setTimeout(() => {
+            designToast.classList.remove('is-showing');
+            designToastTimer = setTimeout(() => {
+                designToast.hidden = true;
+                designToastTimer = null;
+            }, 250);
+        }, validation.is_valid ? TOAST_VALID_MS : TOAST_INVALID_MS);
     };
 
     const renderRingSelector = () => {
@@ -433,6 +674,37 @@ function initColoringApp() {
     });
 
     // ==========================================================================
+    // PRINTED PARAMETERS
+    // ==========================================================================
+
+    const CATEGORY_LABELS = {
+        botanical: 'Botanical',
+        geometric: 'Geometric',
+        celtic: 'Celtic',
+        art_deco: 'Art Deco',
+        abstract: 'Abstract'
+    };
+
+    // The second print page: only the settings a person can enter in the sidebar, labelled as they
+    // are there, so the design can be made again by typing them back in.
+    const buildPrintableParams = (params) => {
+        if (!params) return '';
+        const yesNo = value => (value ? 'Yes' : 'No');
+        const categories = (params.categories || []).map(category => CATEGORY_LABELS[category] || category);
+        const lines = [
+            `Seed: ${params.seed}`,
+            `Rings: ${params.num_rings}`,
+            `Divisions: ${params.num_divisions}`,
+            `Vary divisions per ring: ${yesNo(params.vary_divisions)}`,
+            `Limit large regions: ${yesNo(params.max_region_cap)}`,
+            `Min Pattern Size: ${params.min_pattern_size}px`,
+            `Detail Level: ${parseFloat(params.complexity).toFixed(1)}`,
+            `Pattern Categories: ${categories.join(', ')}`
+        ];
+        return lines.join('\n');
+    };
+
+    // ==========================================================================
     // GENERATE MANDALA
     // ==========================================================================
 
@@ -487,20 +759,17 @@ function initColoringApp() {
             currentRingSeeds = data.ring_seeds || {};
             syncPendingParameterIndicators();
             prepareRingSelection();
-            let validationText = '';
-            if (data.validation) {
-                validationText = `\nValidation: ${data.validation.is_valid ? 'passed' : 'failed'} (${data.validation.issue_count} issues)`;
-                if (!data.validation.is_valid) {
-                    console.warn('Mandala validation issues:', data.validation.issues);
-                }
+            if (data.validation && !data.validation.is_valid) {
+                console.warn('Mandala validation issues:', data.validation.issues);
             }
-            renderValidationStatus(data.validation);
-            renderDebugBar(payload, data);
-            paramsText.textContent = data.params_string + validationText;
+            showDesignToast(data.validation);
+            logReproduction(payload, data);
+            paramsText.textContent = buildPrintableParams(currentDesignParams);
 
         } catch (error) {
             console.error("Error generating mandala:", error);
             resetRingSelection();
+            showDesignToast(null);
             mandalaDesign.innerHTML = `<div class="error">Failed to generate mandala: ${error.message}</div>`;
         }
     };
@@ -540,15 +809,11 @@ function initColoringApp() {
             selectRingByIndex(ringIndex);
             syncPendingParameterIndicators();
 
-            if (data.validation) {
-                const validationText = `\nValidation: ${data.validation.is_valid ? 'passed' : 'failed'} (${data.validation.issue_count} issues)`;
-                paramsText.textContent = paramsText.textContent.replace(/\nValidation:.*$/s, '') + validationText;
-                if (!data.validation.is_valid) {
-                    console.warn('Ring validation issues:', data.validation.issues);
-                }
+            if (data.validation && !data.validation.is_valid) {
+                console.warn('Ring validation issues:', data.validation.issues);
             }
-            renderValidationStatus(data.validation);
-            renderDebugBar(currentDesignParams, { ...data, used_seed: activeSeed });
+            showDesignToast(data.validation);
+            logReproduction(currentDesignParams, { ...data, used_seed: activeSeed });
         } catch (error) {
             console.error('Error regenerating ring:', error);
             regenerateRingBtn.textContent = 'Regenerate Ring Failed';
@@ -662,22 +927,6 @@ function initColoringApp() {
         image.src = url;
     });
 
-    // Write the gallery, dropping the oldest entries if the browser's storage is full.
-    const persistGallery = () => {
-        while (true) {
-            try {
-                localStorage.setItem('mandalaGallery', JSON.stringify(galleryItems));
-                return;
-            } catch (err) {
-                if (galleryItems.length <= 1) {
-                    console.error('Could not store the saved designs:', err);
-                    return;
-                }
-                galleryItems = galleryItems.slice(0, -1);
-            }
-        }
-    };
-
     // A saved design is its seed specs (params and ring_seeds) plus a JPEG thumbnail.
     // The design itself is regenerated from the specs when it is opened again.
     const saveToGallery = async (params, ringSeeds) => {
@@ -692,10 +941,7 @@ function initColoringApp() {
         // Without a thumbnail keep the SVG so the entry still has a preview
         if (!thumbnail) item.svg = getCleanCurrentSvgMarkup();
 
-        galleryItems.unshift(item);
-        if (galleryItems.length > 12) galleryItems = galleryItems.slice(0, 12);
-
-        persistGallery();
+        galleryItems = await userStore.addDesign(item);
         renderGallery();
     };
 
@@ -749,13 +995,17 @@ function initColoringApp() {
         generateMandala({ params, ringSeeds: item.ring_seeds || {} });
     };
 
+    let galleryLoading = true;
+
     const renderGallery = () => {
         galleryGrid.innerHTML = '';
 
         if (galleryItems.length === 0) {
             const emptyMessage = document.createElement('div');
             emptyMessage.className = 'gallery-empty';
-            emptyMessage.textContent = 'No saved designs yet. Click "Save Design" to add one!';
+            emptyMessage.textContent = galleryLoading
+                ? 'Loading saved designs...'
+                : 'No saved designs yet. Click "Save Design" to add one!';
             galleryGrid.appendChild(emptyMessage);
             return;
         }
@@ -763,25 +1013,117 @@ function initColoringApp() {
         galleryItems.forEach(item => {
             const galleryItem = document.createElement('div');
             galleryItem.className = 'gallery-item';
+            galleryItem.tabIndex = 0;
+            galleryItem.setAttribute('role', 'button');
             if (item.thumbnail) {
                 const image = document.createElement('img');
                 image.src = item.thumbnail;
-                image.alt = item.params ? `Saved design, seed ${item.params.seed}` : 'Saved design';
+                image.alt = '';
                 galleryItem.appendChild(image);
             } else {
                 // Entries saved before thumbnails existed carry the full SVG
                 galleryItem.innerHTML = item.svg || '';
             }
+            const savedAt = new Date(item.timestamp).toLocaleString();
             const seedNote = item.params ? `Seed ${item.params.seed}. ` : '';
-            galleryItem.title = `${seedNote}Saved: ${new Date(item.timestamp).toLocaleString()}`;
+            galleryItem.title = `${seedNote}Saved: ${savedAt}`;
+            galleryItem.setAttribute('aria-label', `Open saved design${item.params ? `, seed ${item.params.seed}` : ''}, saved ${savedAt}`);
             galleryItem.addEventListener('click', () => openSavedDesign(item));
+            galleryItem.addEventListener('keydown', (event) => {
+                if (event.target !== galleryItem) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openSavedDesign(item);
+                }
+            });
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'gallery-delete';
+            deleteBtn.setAttribute('aria-label', 'Delete this saved design');
+            deleteBtn.title = 'Delete this saved design';
+            deleteBtn.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">' +
+                '<path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+            deleteBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                confirmDeleteDesign(item);
+            });
+            deleteBtn.addEventListener('keydown', event => event.stopPropagation());
+            galleryItem.appendChild(deleteBtn);
+
             galleryGrid.appendChild(galleryItem);
         });
     };
 
-    saveBtn.addEventListener('click', () => {
-        if (mandalaDesign.querySelector('svg')) {
-            saveToGallery(currentDesignParams || {
+    // ==========================================================================
+    // DELETE SAVED DESIGNS
+    // ==========================================================================
+
+    const deleteDialog = document.getElementById('delete-design-dialog');
+    const deletePreview = document.getElementById('delete-design-preview');
+    const deleteConfirmBtn = document.getElementById('delete-design-confirm');
+    const deleteCancelBtn = document.getElementById('delete-design-cancel');
+    let pendingDeleteItem = null;
+
+    const deleteDesign = async (item) => {
+        console.log('LOGGING: [gallery] deleting saved design', item.id);
+        try {
+            galleryItems = await userStore.deleteDesign(item.id);
+        } catch (error) {
+            console.error('LOGGING: [gallery] could not delete saved design', item.id, error);
+            window.alert('That design could not be deleted. Please try again.');
+            return;
+        }
+        renderGallery();
+    };
+
+    // Deleting cannot be undone, so it always asks first, showing the design in question.
+    const confirmDeleteDesign = (item) => {
+        if (!deleteDialog || typeof deleteDialog.showModal !== 'function') {
+            if (window.confirm('Delete this saved design? This cannot be undone.')) deleteDesign(item);
+            return;
+        }
+        pendingDeleteItem = item;
+        deletePreview.innerHTML = '';
+        if (item.thumbnail) {
+            const image = document.createElement('img');
+            image.src = item.thumbnail;
+            image.alt = '';
+            deletePreview.appendChild(image);
+        } else if (item.svg) {
+            deletePreview.innerHTML = item.svg;
+        }
+        console.log('LOGGING: [gallery] asking to confirm delete of', item.id);
+        deleteDialog.showModal();
+        deleteCancelBtn.focus();
+    };
+
+    if (deleteDialog && typeof deleteDialog.showModal === 'function') {
+        deleteCancelBtn.addEventListener('click', () => deleteDialog.close('cancel'));
+        deleteConfirmBtn.addEventListener('click', () => deleteDialog.close('delete'));
+        // A click on the backdrop (the dialog element itself, outside its content) cancels
+        deleteDialog.addEventListener('click', (event) => {
+            if (event.target === deleteDialog) deleteDialog.close('cancel');
+        });
+        deleteDialog.addEventListener('close', () => {
+            const item = pendingDeleteItem;
+            pendingDeleteItem = null;
+            deletePreview.innerHTML = '';
+            if (deleteDialog.returnValue === 'delete' && item) {
+                deleteDesign(item);
+            } else {
+                console.log('LOGGING: [gallery] delete cancelled');
+            }
+        });
+    }
+
+    saveBtn.addEventListener('click', async () => {
+        if (!mandalaDesign.querySelector('svg')) return;
+        const originalText = 'Save Design';
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+        try {
+            await saveToGallery(currentDesignParams || {
                 seed: activeSeed,
                 num_rings: numRingsSlider.value,
                 num_divisions: numDivisionsSlider.value,
@@ -791,17 +1133,92 @@ function initColoringApp() {
                 vary_divisions: varyDivisionsCheck.checked,
                 max_region_cap: maxRegionCapCheck.checked
             }, currentRingSeeds);
-
-            // Visual feedback
-            const originalText = saveBtn.textContent;
             saveBtn.textContent = 'Saved!';
-            saveBtn.style.backgroundColor = '#28a745';
-            setTimeout(() => {
-                saveBtn.textContent = originalText;
-                saveBtn.style.backgroundColor = '';
-            }, 1000);
+            saveBtn.classList.add('is-saved');
+        } catch (error) {
+            console.error('LOGGING: [gallery] could not save design', error);
+            saveBtn.textContent = 'Save failed';
         }
+        saveBtn.disabled = false;
+        setTimeout(() => {
+            saveBtn.textContent = originalText;
+            saveBtn.classList.remove('is-saved');
+        }, 1000);
     });
+
+    // ==========================================================================
+    // PREFERENCES: collapsible sections and theme
+    // ==========================================================================
+
+    const collapsibleSections = Array.from(document.querySelectorAll('details.collapsible-section[data-section]'));
+
+    const readExpandedSections = () => {
+        const expanded = {};
+        collapsibleSections.forEach(section => {
+            expanded[section.dataset.section] = section.open;
+        });
+        return expanded;
+    };
+
+    const applyExpandedSections = (expanded) => {
+        if (!expanded || typeof expanded !== 'object') return;
+        collapsibleSections.forEach(section => {
+            const key = section.dataset.section;
+            if (Object.prototype.hasOwnProperty.call(expanded, key)) {
+                section.open = !!expanded[key];
+            }
+        });
+        console.log('LOGGING: [prefs] applied expanded sections', expanded);
+    };
+
+    const sameExpanded = (a, b) => {
+        const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+        for (const key of keys) {
+            if (!!(a || {})[key] !== !!(b || {})[key]) return false;
+        }
+        return true;
+    };
+
+    collapsibleSections.forEach(section => {
+        // toggle also fires when a saved preference opens or closes a section; the comparison
+        // keeps that from writing the same preference straight back.
+        section.addEventListener('toggle', () => {
+            const expanded = readExpandedSections();
+            if (sameExpanded(expanded, userStore.prefs().expandedSections)) return;
+            console.log(`LOGGING: [prefs] section "${section.dataset.section}" ${section.open ? 'expanded' : 'collapsed'}`);
+            userStore.savePrefs({ expandedSections: expanded });
+        });
+    });
+
+    document.addEventListener('mandalaforge:themechange', (event) => {
+        const theme = event.detail && event.detail.theme;
+        if (!theme || userStore.prefs().theme === theme) return;
+        console.log('LOGGING: [prefs] theme changed to', theme);
+        userStore.savePrefs({ theme });
+    });
+
+    // Bring the page in line with preferences loaded from the account.
+    const applyPrefs = (prefs) => {
+        applyExpandedSections(prefs.expandedSections);
+        const themeApi = window.MandalaForgeTheme;
+        if (!themeApi) return;
+        if (prefs.theme && prefs.theme !== themeApi.current()) {
+            console.log('LOGGING: [prefs] applying saved theme', prefs.theme);
+            themeApi.set(prefs.theme);
+        } else if (!prefs.theme) {
+            // A theme picked on this browser before preferences were saved to the account
+            let localChoice = null;
+            try {
+                localChoice = window.localStorage.getItem(themeApi.STORAGE_KEY);
+            } catch (error) {
+                localChoice = null;
+            }
+            if (localChoice === 'light' || localChoice === 'dark') {
+                console.log('LOGGING: [prefs] carrying this browser\'s theme choice into preferences', localChoice);
+                userStore.savePrefs({ theme: localChoice });
+            }
+        }
+    };
 
     // ==========================================================================
     // ZOOM FUNCTIONALITY
@@ -929,11 +1346,31 @@ function initColoringApp() {
         // Set initial display values
         sliderControls.forEach(updateSliderDisplay);
 
-        // Render saved gallery
+        // Sections as they were last left on this browser, before the account copy arrives
+        applyExpandedSections(userStore.prefs().expandedSections);
+
+        // Saved designs load in the background; the gallery says so meanwhile
         renderGallery();
 
         // Generate initial mandala
         generateMandala();
+
+        userStore.connect()
+            .then(() => {
+                applyPrefs(userStore.prefs());
+                return userStore.loadDesigns();
+            })
+            .then((designs) => {
+                galleryItems = designs;
+            })
+            .catch((error) => {
+                console.error('LOGGING: [store] could not load saved designs', error);
+                galleryItems = userStore.designs();
+            })
+            .then(() => {
+                galleryLoading = false;
+                renderGallery();
+            });
     };
 
     initialize();

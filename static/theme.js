@@ -6,7 +6,9 @@
  *
  * The theme is stored on <html data-theme="light|dark">; static/style.css keys its dark tokens off
  * that attribute. The visitor's explicit choice is kept in localStorage under STORAGE_KEY. With no
- * stored choice the page follows the operating system's prefers-color-scheme, live.
+ * stored choice the page follows the operating system's prefers-color-scheme, live. set() also fires a
+ * "mandalaforge:themechange" event on document; static/script.js saves the choice with the signed-in
+ * account's preferences and calls set() with the account's choice when it loads.
  *
  * Any element with a data-theme-toggle attribute flips the theme when clicked. Clicks are handled by
  * one delegated listener on document, so toggles that are added later (coloring.husted.dev stamps the
@@ -81,6 +83,8 @@
         }
         writeStored(theme);
         apply(theme, 'chosen by visitor');
+        // script.js listens for this to keep the choice in the visitor's saved preferences
+        document.dispatchEvent(new CustomEvent('mandalaforge:themechange', { detail: { theme } }));
     }
 
     function toggle() {
